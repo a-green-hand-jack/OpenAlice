@@ -233,8 +233,8 @@ the item when done — git log is the history.
       a new `news.ingested` event, judges relevance against the user's
       holdings, and pushes an alert. Mechanically straightforward
       (heartbeat is the closest existing pattern, modulo heartbeat being
-      OpenClaw-era legacy that should not be used as a template — see
-      memory `project_heartbeat_legacy.md`).
+      a pre-workspace-era template that should not be cloned wholesale —
+      see memory `project_heartbeat_legacy.md`).
 
       **Why this can't ship as just a Listener.** Two compounding
       problems:
