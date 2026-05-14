@@ -11,6 +11,7 @@ import { z } from 'zod'
 import Decimal from 'decimal.js'
 import { Contract, UNSET_DECIMAL, coerceSecType } from '@traderalice/ibkr'
 import type { UTAManager } from '@/domain/trading/uta-manager.js'
+import { UnifiedTradingAccount } from '@/domain/trading/UnifiedTradingAccount.js'
 import { BrokerError, type OpenOrder } from '@/domain/trading/brokers/types.js'
 import type { FxService } from '@/domain/trading/fx-service.js'
 import { normalizeBrokerSearchPattern } from '@/domain/trading/contract-search-rules.js'
@@ -154,9 +155,16 @@ hitting the broker, which otherwise expects the bare base ticker.`,
       }),
       execute: async ({ source, symbol, aliceId, secType, currency }) => {
         const uta = manager.resolveOne(source)
-        const query = new Contract()
+        // When aliceId is provided, expand it via the broker's native-key
+        // resolver so the broker actually sees `localSymbol`/`symbol` —
+        // bare `query.aliceId = aliceId` is invisible to broker resolution.
+        let query: Contract
+        try {
+          query = aliceId ? uta.contractFromAliceId(aliceId) : new Contract()
+        } catch (err) {
+          return handleBrokerError(err)
+        }
         if (symbol) query.symbol = symbol
-        if (aliceId) query.aliceId = aliceId
         if (secType) query.secType = coerceSecType(secType)
         if (currency) query.currency = currency
         const details = await uta.getContractDetails(query)
@@ -289,16 +297,20 @@ If this tool returns an error with transient=true, wait a few seconds and retry 
         source: z.string().optional().describe(sourceDesc(false)),
       }),
       execute: async ({ aliceId, source }) => {
-        const targets = manager.resolve(source)
-        if (targets.length === 0) return { error: 'No accounts available.' }
-        const query = new Contract()
-        query.aliceId = aliceId
-        const results: Array<Record<string, unknown>> = []
-        for (const uta of targets) {
-          try { results.push({ source: uta.id, ...await uta.getQuote(query) }) } catch { /* skip */ }
+        // aliceId is UTA-scoped (`{utaId}|{nativeKey}`); route directly to the
+        // owning UTA. Fall back to caller-supplied `source` if given (allows
+        // overrides / sanity-check). `contractFromAliceId` cross-validates.
+        const parsed = UnifiedTradingAccount.parseAliceId(aliceId)
+        if (!parsed) {
+          return { error: `Invalid aliceId "${aliceId}". Expected format: "accountId|nativeKey".` }
         }
-        if (results.length === 0) return { error: `No account could quote aliceId "${aliceId}".` }
-        return results.length === 1 ? results[0] : results
+        try {
+          const uta = manager.resolveOne(source ?? parsed.utaId)
+          const contract = uta.contractFromAliceId(aliceId)
+          return { source: uta.id, ...await uta.getQuote(contract) }
+        } catch (err) {
+          return handleBrokerError(err)
+        }
       },
     }),
 

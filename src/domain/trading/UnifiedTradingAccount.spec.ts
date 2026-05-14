@@ -447,6 +447,34 @@ describe('UTA — stageClosePosition', () => {
   })
 })
 
+// ==================== contractFromAliceId ====================
+
+describe('UTA — contractFromAliceId', () => {
+  let uta: UnifiedTradingAccount
+
+  beforeEach(() => {
+    ({ uta } = createUTA())
+  })
+
+  it('resolves a valid aliceId to a Contract with native fields filled', () => {
+    const contract = uta.contractFromAliceId('mock-paper|AAPL')
+    expect(contract.aliceId).toBe('mock-paper|AAPL')
+    // MockBroker.resolveNativeKey produces a stamped Contract with the
+    // ticker on `symbol` — anything more concrete is broker-specific, but
+    // we at minimum want a non-empty handle that downstream broker APIs
+    // can resolve back to the same market.
+    expect(contract.symbol || contract.localSymbol).toBeTruthy()
+  })
+
+  it('throws on malformed aliceId (no separator)', () => {
+    expect(() => uta.contractFromAliceId('mock-paper-AAPL')).toThrow(/Invalid aliceId/)
+  })
+
+  it('throws when aliceId belongs to a different UTA', () => {
+    expect(() => uta.contractFromAliceId('alpaca-paper|AAPL')).toThrow(/belongs to UTA "alpaca-paper"/)
+  })
+})
+
 // ==================== stageCancelOrder ====================
 
 describe('UTA — stageCancelOrder', () => {

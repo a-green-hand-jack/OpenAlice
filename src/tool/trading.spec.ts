@@ -252,6 +252,76 @@ describe('createTradingTools — getOrders summarization', () => {
   })
 })
 
+// ==================== getQuote (aliceId resolution) ====================
+
+describe('createTradingTools — getQuote', () => {
+  it('resolves aliceId via UTA so broker sees a contract with native fields', async () => {
+    const broker = new MockBroker({ id: 'mock-paper' })
+    const spy = vi.spyOn(broker, 'getQuote')
+    const tools = createTradingTools(makeManager(broker))
+
+    const result = await (tools.getQuote.execute as Function)({ aliceId: 'mock-paper|AAPL' })
+
+    expect(spy).toHaveBeenCalledTimes(1)
+    const [passedContract] = spy.mock.calls[0]
+    // Without contractFromAliceId, this would be empty and broker resolution
+    // would fail. With the fix, MockBroker.resolveNativeKey populates symbol.
+    expect(passedContract.symbol || passedContract.localSymbol).toBeTruthy()
+    expect(passedContract.aliceId).toBe('mock-paper|AAPL')
+    expect(result.source).toBe('mock-paper')
+  })
+
+  it('returns error on malformed aliceId', async () => {
+    const broker = new MockBroker({ id: 'mock-paper' })
+    const tools = createTradingTools(makeManager(broker))
+    const result = await (tools.getQuote.execute as Function)({ aliceId: 'no-separator-here' })
+    expect(result.error).toMatch(/Invalid aliceId/)
+  })
+
+  it('routes to the UTA encoded in the aliceId without an explicit source', async () => {
+    const a1 = new MockBroker({ id: 'alpaca-paper' })
+    const a2 = new MockBroker({ id: 'bybit-main' })
+    const spy1 = vi.spyOn(a1, 'getQuote')
+    const spy2 = vi.spyOn(a2, 'getQuote')
+    const tools = createTradingTools(makeManager(a1, a2))
+
+    await (tools.getQuote.execute as Function)({ aliceId: 'bybit-main|BTC' })
+
+    expect(spy2).toHaveBeenCalledTimes(1)
+    expect(spy1).not.toHaveBeenCalled()
+  })
+})
+
+// ==================== getContractDetails (aliceId resolution) ====================
+
+describe('createTradingTools — getContractDetails', () => {
+  it('expands aliceId via UTA before calling broker.getContractDetails', async () => {
+    const broker = new MockBroker({ id: 'mock-paper' })
+    const spy = vi.spyOn(broker, 'getContractDetails')
+    const tools = createTradingTools(makeManager(broker))
+
+    await (tools.getContractDetails.execute as Function)({
+      source: 'mock-paper',
+      aliceId: 'mock-paper|AAPL',
+    })
+
+    expect(spy).toHaveBeenCalledTimes(1)
+    const [passedQuery] = spy.mock.calls[0]
+    expect(passedQuery.symbol || passedQuery.localSymbol).toBeTruthy()
+    expect(passedQuery.aliceId).toBe('mock-paper|AAPL')
+  })
+
+  it('returns error on cross-UTA aliceId mismatch', async () => {
+    const broker = new MockBroker({ id: 'mock-paper' })
+    const tools = createTradingTools(makeManager(broker))
+    const result = await (tools.getContractDetails.execute as Function)({
+      source: 'mock-paper',
+      aliceId: 'other-account|AAPL',
+    })
+    expect(result.error).toMatch(/belongs to UTA "other-account"/)
+  })
+})
+
 // ==================== placeOrder schema (AI ergonomics) ====================
 
 describe('placeOrder inputSchema', () => {

@@ -11,6 +11,8 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
 import { getTestAccounts, filterByProvider } from './setup.js'
 import { UnifiedTradingAccount } from '../../UnifiedTradingAccount.js'
+import { UTAManager } from '../../uta-manager.js'
+import { createTradingTools } from '../../../../tool/trading.js'
 import type { IBroker } from '../../brokers/types.js'
 import '../../contract-ext.js'
 
@@ -72,6 +74,57 @@ describe('UTA — Alpaca order lifecycle', () => {
 
     // Verify log has 2 commits
     expect(uta!.log().length).toBeGreaterThanOrEqual(2)
+  }, 30_000)
+})
+
+// ==================== AI read tools — aliceId resolution ====================
+
+// Regression guard for the 2026-05 bug: `getQuote` / `getContractDetails`
+// stamped raw aliceId onto a fresh Contract; Alpaca's `resolveSymbol`
+// only reads `contract.symbol`, so the broker silently failed to find
+// anything. This block exercises the AI tool path end-to-end.
+
+describe('UTA — Alpaca AI tool aliceId resolution', () => {
+  beforeEach(({ skip }) => { if (!uta) skip('no Alpaca paper account') })
+
+  it('searchContracts → getQuote round-trips with a real aliceId', async () => {
+    const mgr = new UTAManager()
+    mgr.add(uta!)
+    const tools = createTradingTools(mgr)
+
+    const searchResult = await (tools.searchContracts.execute as Function)({
+      pattern: 'AAPL',
+      source: uta!.id,
+    })
+    expect(Array.isArray(searchResult)).toBe(true)
+    const aapl = (searchResult as Array<Record<string, unknown>>)[0]
+    expect(aapl).toBeDefined()
+    const realAliceId = (aapl as any).contract.aliceId
+    expect(realAliceId).toMatch(/^.+\|.+/)
+    console.log(`  AI tools: Alpaca aliceId=${realAliceId}`)
+
+    const quote = await (tools.getQuote.execute as Function)({ aliceId: realAliceId })
+    expect(quote.error).toBeUndefined()
+    expect(quote.source).toBe(uta!.id)
+    expect(quote.last).toBeDefined()
+    console.log(`  AI tools: AAPL quote last=${quote.last}, bid=${quote.bid}, ask=${quote.ask}`)
+  }, 30_000)
+
+  it('getContractDetails with aliceId returns spec', async () => {
+    const mgr = new UTAManager()
+    mgr.add(uta!)
+    const tools = createTradingTools(mgr)
+    const nativeKey = broker!.getNativeKey({ symbol: 'AAPL' } as any)
+    const aliceId = `${uta!.id}|${nativeKey}`
+
+    const result = await (tools.getContractDetails.execute as Function)({
+      source: uta!.id,
+      aliceId,
+    })
+    expect(result.error).toBeUndefined()
+    expect(result.contract).toBeDefined()
+    expect(result.contract.symbol).toBe('AAPL')
+    console.log(`  AI tools: AAPL contractDetails secType=${result.contract.secType}`)
   }, 30_000)
 })
 

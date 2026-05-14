@@ -10,6 +10,9 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
 import { getTestAccounts, filterByProvider } from './setup.js'
 import { UnifiedTradingAccount } from '../../UnifiedTradingAccount.js'
+import { UTAManager } from '../../uta-manager.js'
+import { createTradingTools } from '../../../../tool/trading.js'
+import { createCcxtProviderTools } from '../../brokers/ccxt/ccxt-tools.js'
 import type { IBroker } from '../../brokers/types.js'
 import '../../contract-ext.js'
 
@@ -117,6 +120,85 @@ describe('UTA — Bybit lifecycle (ETH perp)', () => {
     console.log(`  log: ${history.length} commits — [${history.map(h => h.message).join(', ')}]`)
     expect(history.length).toBeGreaterThanOrEqual(2)
   }, 60_000)
+
+  // ==================== AI read tools — aliceId resolution ====================
+
+  // Regression guard for the 2026-05 bug: ccxt-tools `getOrderBook` /
+  // `getFundingRate` and the generic `getQuote` / `getContractDetails`
+  // were stamping the raw aliceId onto a fresh Contract without resolving
+  // it through `broker.resolveNativeKey`. The broker's `contractToCcxt`
+  // only reads `localSymbol`/`symbol`, so every read returned an error.
+  // These tests exercise the same path AI tool calls take end-to-end.
+
+  it('AI tools: searchContracts → getQuote round-trips with a real aliceId', async () => {
+    const mgr = new UTAManager()
+    mgr.add(uta!)
+    const tools = createTradingTools(mgr)
+
+    // Step 1: search → get the canonical aliceId the AI would receive.
+    const searchResult = await (tools.searchContracts.execute as Function)({
+      pattern: 'ETH',
+      assetClass: 'crypto',
+      source: uta!.id,
+    })
+    expect(Array.isArray(searchResult)).toBe(true)
+    const perp = (searchResult as Array<Record<string, unknown>>).find(
+      (r) => (r as any).contract?.secType === 'CRYPTO_PERP',
+    )
+    expect(perp).toBeDefined()
+    const realAliceId = (perp as any).contract.aliceId
+    expect(realAliceId).toMatch(/^.+\|.+/)
+    console.log(`  AI tools: aliceId=${realAliceId}`)
+
+    // Step 2: getQuote — would have errored on the legacy code path.
+    const quote = await (tools.getQuote.execute as Function)({ aliceId: realAliceId })
+    expect(quote.error).toBeUndefined()
+    expect(quote.source).toBe(uta!.id)
+    expect(quote.last).toBeDefined()
+    expect(parseFloat(quote.last)).toBeGreaterThan(0)
+    console.log(`  AI tools: quote last=${quote.last}, bid=${quote.bid}, ask=${quote.ask}`)
+  }, 30_000)
+
+  it('AI tools: getOrderBook + getFundingRate via createCcxtProviderTools', async () => {
+    const mgr = new UTAManager()
+    mgr.add(uta!)
+    const ccxtTools = createCcxtProviderTools(mgr)
+
+    const ob = await (ccxtTools.getOrderBook.execute as Function)({
+      aliceId: ethAliceId,
+      limit: 5,
+    })
+    expect(ob.error).toBeUndefined()
+    expect(Array.isArray(ob.bids)).toBe(true)
+    expect(Array.isArray(ob.asks)).toBe(true)
+    expect(ob.bids.length).toBeGreaterThan(0)
+    expect(ob.asks.length).toBeGreaterThan(0)
+    console.log(`  AI tools: orderbook bids=${ob.bids.length}, asks=${ob.asks.length}`)
+
+    const fr = await (ccxtTools.getFundingRate.execute as Function)({
+      aliceId: ethAliceId,
+    })
+    expect(fr.error).toBeUndefined()
+    expect(typeof fr.fundingRate).toBe('number')
+    console.log(`  AI tools: fundingRate=${fr.fundingRate}`)
+  }, 30_000)
+
+  it('AI tools: getContractDetails with aliceId returns spec', async () => {
+    const mgr = new UTAManager()
+    mgr.add(uta!)
+    const tools = createTradingTools(mgr)
+
+    const result = await (tools.getContractDetails.execute as Function)({
+      source: uta!.id,
+      aliceId: ethAliceId,
+    })
+    expect(result.error).toBeUndefined()
+    expect(result.contract).toBeDefined()
+    expect(result.contract.aliceId).toBe(ethAliceId)
+    console.log(`  AI tools: contractDetails secType=${result.contract.secType}`)
+  }, 30_000)
+
+  // ============================================================================
 
   it('buy with TPSL → tpsl visible on fetched order', async () => {
     const quote = await broker!.getQuote(broker!.resolveNativeKey(ethAliceId.split('|')[1]))

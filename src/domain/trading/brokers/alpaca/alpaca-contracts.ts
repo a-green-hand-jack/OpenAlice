@@ -19,13 +19,6 @@ export function makeContract(ticker: string): Contract {
   })
 }
 
-/** Extract native symbol from aliceId, or null if not ours. */
-export function parseAliceId(aliceId: string, provider: string): string | null {
-  const prefix = `${provider}-`
-  if (!aliceId.startsWith(prefix)) return null
-  return aliceId.slice(prefix.length)
-}
-
 /**
  * Resolve a Contract to an Alpaca ticker symbol.
  * Uses symbol directly. aliceId is managed by UTA layer, not broker.

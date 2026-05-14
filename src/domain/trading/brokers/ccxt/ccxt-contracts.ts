@@ -2,11 +2,8 @@
  * Contract resolution helpers for CCXT exchanges.
  *
  * Pure functions parameterized by (markets, exchangeName) —
- * no dependency on the CcxtBroker instance.
- *
- * aliceId format: "{exchange}-{encodedSymbol}"
- * where encodedSymbol = market.symbol with / → _ and : → .
- * e.g. "bybit-ETH_USDT.USDT" for "ETH/USDT:USDT"
+ * no dependency on the CcxtBroker instance. aliceId is owned by
+ * UnifiedTradingAccount, not this layer — see `UTA.stampAliceId`.
  */
 
 import { Contract, OrderState } from '@traderalice/ibkr'
@@ -14,18 +11,6 @@ import '../../contract-ext.js'
 import type { CcxtMarket } from './ccxt-types.js'
 import { buildContract } from '../contract-builder.js'
 import type { SecType } from '../../contract-discipline.js'
-
-// ---- Symbol encoding for aliceId ----
-
-/** CCXT symbol → aliceId suffix (escape / and :) */
-export function encodeSymbol(symbol: string): string {
-  return symbol.replace(/\//g, '_').replace(/:/g, '.')
-}
-
-/** aliceId suffix → CCXT symbol (unescape) */
-export function decodeSymbol(encoded: string): string {
-  return encoded.replace(/_/g, '/').replace(/\./g, ':')
-}
 
 // ---- Type mapping ----
 
@@ -114,13 +99,6 @@ export function marketToContract(market: CcxtMarket, exchangeName: string): Cont
   }
 
   return buildContract(params)
-}
-
-/** Parse aliceId → CCXT unified symbol. */
-export function aliceIdToCcxt(aliceId: string, exchangeName: string): string | null {
-  const prefix = `${exchangeName}-`
-  if (!aliceId.startsWith(prefix)) return null
-  return decodeSymbol(aliceId.slice(prefix.length))
 }
 
 /**
