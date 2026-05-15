@@ -2,18 +2,33 @@ import { fetchJson } from './client'
 
 export type InboxKind = 'status' | 'done' | 'blocked' | 'question'
 
+export interface InboxDoc {
+  path: string
+}
+
 export interface InboxEntry {
   id: string
   ts: number
   workspaceId: string
   workspaceLabel?: string
-  text: string
+  /** Pointers to workspace files. Rendered live (no snapshot). */
+  docs?: InboxDoc[]
+  /** Agent's message body (markdown). Renders below docs. */
+  comments?: string
   kind?: InboxKind
 }
 
 export interface InboxHistoryResponse {
   entries: InboxEntry[]
   hasMore: boolean
+}
+
+export interface InboxSeedBody {
+  workspaceId: string
+  workspaceLabel?: string
+  docs?: InboxDoc[]
+  comments?: string
+  kind?: InboxKind
 }
 
 export const inboxApi = {
@@ -27,10 +42,8 @@ export const inboxApi = {
     return fetchJson(`/api/inbox/history?${qs}`)
   },
 
-  /** Dev-only — appends an inbox entry. The production write path is not
-   *  wired yet (see backend route doc). Useful for UI development and
-   *  manual smoke tests. */
-  async seed(body: { workspaceId: string; workspaceLabel?: string; text: string; kind?: InboxKind }): Promise<{ entry: InboxEntry }> {
+  /** Dev-only — append an inbox entry. */
+  async seed(body: InboxSeedBody): Promise<{ entry: InboxEntry }> {
     return fetchJson('/api/inbox/seed', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

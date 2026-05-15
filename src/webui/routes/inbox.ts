@@ -4,15 +4,12 @@
  *   GET  /history?limit=&before=&workspaceId=   paginated, newest-first
  *   POST /seed                                  dev-only: append an entry
  *
- * The UI polls /history every 20s (mirrors notifications). The production
- * write path is deliberately not wired yet — Inbox v0 is a UI-shaped
- * commitment; the integration question (MCP tool from workspace? webhook?
- * something else?) is parked until product direction is decided. /seed
- * exists as a manual test entry point and will be removed once a real
- * writer lands.
+ * UI polls /history every 20s. Production write path is still deliberately
+ * deferred — only /seed exists until the workspace integration pathway
+ * (MCP tool + workspace identity) is decided.
  */
 import { Hono } from 'hono'
-import type { IInboxStore, InboxKind } from '../../core/inbox-store.js'
+import type { IInboxStore, InboxKind, InboxDoc } from '../../core/inbox-store.js'
 
 const VALID_KINDS: ReadonlySet<InboxKind> = new Set(['status', 'done', 'blocked', 'question'])
 
@@ -41,26 +38,47 @@ export function createInboxRoutes(deps: InboxRoutesDeps) {
     const b = body as Partial<{
       workspaceId: string
       workspaceLabel: string
-      text: string
+      docs: unknown
+      comments: string
       kind: string
     }>
     if (!b.workspaceId || typeof b.workspaceId !== 'string') {
       return c.json({ error: 'workspaceId required' }, 400)
     }
-    if (!b.text || typeof b.text !== 'string') {
-      return c.json({ error: 'text required' }, 400)
+
+    // Validate docs shape if present
+    let docs: InboxDoc[] | undefined
+    if (b.docs !== undefined) {
+      if (!Array.isArray(b.docs)) {
+        return c.json({ error: 'docs must be an array' }, 400)
+      }
+      docs = []
+      for (const d of b.docs) {
+        if (typeof d !== 'object' || d === null) {
+          return c.json({ error: 'each doc must be an object' }, 400)
+        }
+        const path = (d as { path?: unknown }).path
+        if (typeof path !== 'string' || !path) {
+          return c.json({ error: 'each doc must have a non-empty `path` string' }, 400)
+        }
+        docs.push({ path })
+      }
     }
+
+    const comments = typeof b.comments === 'string' ? b.comments : undefined
     const kind = b.kind && VALID_KINDS.has(b.kind as InboxKind) ? (b.kind as InboxKind) : undefined
+
     try {
       const entry = await deps.inboxStore.append({
         workspaceId: b.workspaceId,
         workspaceLabel: typeof b.workspaceLabel === 'string' ? b.workspaceLabel : undefined,
-        text: b.text,
+        docs,
+        comments,
         kind,
       })
       return c.json({ entry })
     } catch (err) {
-      return c.json({ error: String(err) }, 500)
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
     }
   })
 

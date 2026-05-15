@@ -1,24 +1,29 @@
 /**
- * InboxStore — workspace-scoped push surface. Parallel to NotificationsStore
- * but explicitly built for the workspace era: every entry is anchored to a
- * `workspaceId`, treating the inbox as "agent (employee) → user about
- * workspace (issue) progress" — Linear-inbox style.
+ * InboxStore — workspace-anchored push surface, Linear-inbox model.
  *
- * Why parallel to NotificationsStore instead of extending it: the older
- * store carries pre-workspace assumptions (heartbeat / cron / manual sources,
- * ConnectorCenter lastInteraction coupling, Telegram inline-on-active). Wiring
- * inbox semantics through that would require either widening NotificationSource
- * with a workspace-shaped sentinel and bolting on workspaceId everywhere, or
- * a backwards-compat shim that papers over the conflation. New track is
- * cheaper; old track stays in place serving its existing users and quietly
- * retires when the workspace surface absorbs its remaining use cases.
+ * Atomic concept here is the **Workspace**, not Linear's "Issue". The
+ * workspace's author (the AI agent) lives inside the workspace, and its
+ * work product is the workspace folder's files — not single comments
+ * authored at notification time. So an inbox entry carries:
  *
- * v0 contract: append-only, single JSONL at `data/inbox/entries.jsonl`,
- * `workspaceId` is required (no manual / sentinel-workspace entries — keeps
- * the inbox semantically clean from day one). No connector subscription,
- * no outputGate, no dedup. The write side is deliberately left without a
- * production caller in v0 — only a dev `/seed` HTTP endpoint exists — until
- * the workspace integration pathway is decided.
+ *   - `docs`     pointers to files in the workspace ("go read these")
+ *                — rendered live at view time, never snapshotted
+ *   - `comments` the agent's voice — markdown, the actual message body
+ *                ("hey boss, here's what I want to say about it")
+ *
+ * Both are optional but at least one must be present. Pointer-only on
+ * docs is deliberate (matches Linear's "inbox row is a notification, the
+ * issue is the SOR"): the workspace folder is its own version-controlled
+ * source of truth, so snapshotting into the inbox would just create a
+ * stale parallel copy. Workspace deletion → inbox tombstones; that's
+ * correct semantics, not a lifecycle bug.
+ *
+ * v0.5 contract: append-only JSONL at `data/inbox/entries.jsonl`,
+ * `workspaceId` required, at least one of {docs, comments} required.
+ * No connector subscription, no outputGate, no dedup. The production
+ * write path is still deliberately deferred — only a dev `/seed`
+ * endpoint exists until the workspace integration pathway (MCP tool +
+ * workspace identity) is decided.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -28,12 +33,22 @@ import { EventEmitter } from 'node:events'
 
 export type InboxKind = 'status' | 'done' | 'blocked' | 'question'
 
+/** Pointer to a workspace file. Rendered live at view time. */
+export interface InboxDoc {
+  /** Path relative to the workspace root. */
+  path: string
+}
+
 export interface InboxInput {
   workspaceId: string
-  /** Display snapshot of the workspace label at write time. Optional because
-   *  the writer may not always have it; readers fall back to workspaceId. */
+  /** Display snapshot of the workspace label. Optional; readers fall
+   *  back to workspaceId. */
   workspaceLabel?: string
-  text: string
+  /** Workspace files to render. Each entry is a pointer — content is
+   *  fetched live from the workspace folder at view time. */
+  docs?: InboxDoc[]
+  /** Agent's message body (markdown). Renders below docs. */
+  comments?: string
   kind?: InboxKind
 }
 
@@ -43,28 +58,42 @@ export interface InboxEntry extends InboxInput {
 }
 
 export interface InboxReadOpts {
-  /** Newest-first slice limit. Default 100. */
   limit?: number
-  /** Cursor — return entries strictly older than this id. */
   before?: string
-  /** Filter by workspace. */
   workspaceId?: string
 }
 
 export interface IInboxStore {
   append(input: InboxInput): Promise<InboxEntry>
-  /** Returns entries newest-first up to `limit`. Empty array when file is missing. */
   read(opts?: InboxReadOpts): Promise<{ entries: InboxEntry[]; hasMore: boolean }>
-  /** Subscribe to live appends. Returns a dispose function. */
   onAppended(listener: (entry: InboxEntry) => void): () => void
 }
 
 const INBOX_FILE = join(process.cwd(), 'data', 'inbox', 'entries.jsonl')
 
+// ==================== Validation ====================
+
+function validateInput(input: InboxInput): void {
+  if (!input.workspaceId) {
+    throw new Error('InboxStore.append: workspaceId is required')
+  }
+  const hasDocs = (input.docs?.length ?? 0) > 0
+  const hasComments = (input.comments ?? '').trim().length > 0
+  if (!hasDocs && !hasComments) {
+    throw new Error('InboxStore.append: at least one of docs or comments must be present')
+  }
+  if (input.docs) {
+    for (const d of input.docs) {
+      if (!d.path || typeof d.path !== 'string') {
+        throw new Error('InboxStore.append: each doc must have a non-empty `path` string')
+      }
+    }
+  }
+}
+
 // ==================== JSONL store ====================
 
 export interface InboxStoreOptions {
-  /** Override the on-disk path; default `data/inbox/entries.jsonl`. */
   filePath?: string
 }
 
@@ -74,9 +103,7 @@ export function createInboxStore(opts: InboxStoreOptions = {}): IInboxStore {
   emitter.setMaxListeners(50)
 
   async function append(input: InboxInput): Promise<InboxEntry> {
-    if (!input.workspaceId) {
-      throw new Error('InboxStore.append: workspaceId is required')
-    }
+    validateInput(input)
     const entry: InboxEntry = {
       ...input,
       id: randomUUID(),
@@ -139,9 +166,7 @@ export function createMemoryInboxStore(): IInboxStore {
   emitter.setMaxListeners(50)
 
   async function append(input: InboxInput): Promise<InboxEntry> {
-    if (!input.workspaceId) {
-      throw new Error('InboxStore.append: workspaceId is required')
-    }
+    validateInput(input)
     const entry: InboxEntry = {
       ...input,
       id: randomUUID(),

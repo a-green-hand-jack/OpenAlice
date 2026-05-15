@@ -139,12 +139,36 @@ function InboxRow({
         </span>
       </div>
 
-      {/* Line 2: text preview */}
+      {/* Line 2: preview — comments first line if present, else docs[0].path */}
       <div className={`pl-3 text-[11px] truncate ${unread ? 'text-text-muted' : 'text-text-muted/70'}`}>
-        {entry.text}
+        {previewFor(entry)}
       </div>
     </div>
   )
+}
+
+// ==================== Preview ====================
+
+/** Build the second-line preview text for a sidebar row.
+ *  - If the entry has comments, use its first non-empty line (strip
+ *    markdown markers minimally — `#`, `>`, `*`, `-` leaders).
+ *  - Otherwise fall back to the first doc's path.
+ *  - Otherwise empty (shouldn't happen — store rejects empty entries).
+ */
+function previewFor(entry: InboxEntry): string {
+  const c = (entry.comments ?? '').trim()
+  if (c) {
+    const firstLine = c.split('\n').find((l) => l.trim().length > 0) ?? ''
+    return firstLine.replace(/^[#>*\-]+\s*/, '').trim()
+  }
+  if (entry.docs && entry.docs.length > 0) {
+    const d = entry.docs[0]
+    if (d) {
+      const suffix = entry.docs.length > 1 ? ` · +${entry.docs.length - 1} more` : ''
+      return `📄 ${d.path}${suffix}`
+    }
+  }
+  return ''
 }
 
 // ==================== Grouping ====================

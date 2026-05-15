@@ -182,6 +182,38 @@ export function createWorkspaceRoutes(svc: WorkspaceService): Hono {
     }
   });
 
+  /**
+   * Read a single UTF-8 text file from inside a workspace. Used by the
+   * Inbox detail pane to render `docs` pointers live (no snapshot — the
+   * workspace folder is the source of truth, see InboxStore doc).
+   *
+   * 404 when the workspace or the file is missing — callers (Inbox UI)
+   * use this to render tombstone states. Larger than 1 MiB returns 413
+   * so the inbox can't be weaponised into a large-file viewer.
+   */
+  app.get('/:id/file', async (c) => {
+    const id = c.req.param('id');
+    if (!validId(id)) return c.json({ error: 'not_found' }, 404);
+    const meta = svc.registry.get(id);
+    if (!meta) return c.json({ error: 'workspace_not_found' }, 404);
+    const p = c.req.query('path') ?? '';
+    if (!p) return c.json({ error: 'path required' }, 400);
+    try {
+      const content = await readWorkspaceFile(meta.dir, p);
+      if (content === null) return c.json({ error: 'file_not_found' }, 404);
+      if (content.length > 1024 * 1024) {
+        return c.json({ error: 'file_too_large', sizeBytes: content.length }, 413);
+      }
+      return c.json({ path: p, content });
+    } catch (err) {
+      if (err instanceof PathTraversal) {
+        return c.json({ error: 'invalid_path', message: err.message }, 400);
+      }
+      launcherLogger.warn('files.read_failed', { id, path: p, err });
+      return c.json({ error: 'read_failed', message: (err as Error).message }, 500);
+    }
+  });
+
   // ── sessions ─────────────────────────────────────────────────────────────
 
   app.post('/:id/sessions/spawn', async (c) => {

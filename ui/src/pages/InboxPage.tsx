@@ -1,9 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { PageHeader } from '../components/PageHeader'
+import { MarkdownContent } from '../components/MarkdownContent'
 import { inboxLive } from '../live/inbox'
 import { useInboxRead } from '../live/inbox-read'
 import { useInboxSelection } from '../live/inbox-selection'
-import type { InboxEntry, InboxKind } from '../api/inbox'
+import { readWorkspaceFile, type ReadFileResult } from '../components/workspace/api'
+import type { InboxEntry, InboxKind, InboxDoc } from '../api/inbox'
 
 const KIND_COLORS: Record<InboxKind, string> = {
   status: 'bg-accent/15 text-accent',
@@ -24,17 +26,11 @@ interface InboxPageProps {
 }
 
 /**
- * Inbox detail pane — rendered in the editor area. The list lives in
- * `InboxSidebar` (Chat-sidebar-shape); selecting a row in the sidebar
- * updates `useInboxSelection`, which this component watches.
+ * Inbox detail pane. Renders the selected entry's docs (live from
+ * workspace) on top, comments (agent's markdown body) below — fixed
+ * order, mirroring Linear's issue-body + activity layout.
  *
- * Default-select-latest is handled by the sidebar (it owns the list);
- * this component just reflects whatever is selected. When nothing is
- * selected it shows an empty state.
- *
- * Mark-read: when this pane becomes visible AND there's a selection,
- * mark all newer-than-the-latest entries read. Mirrors the
- * NotificationsInboxPage timing.
+ * Selection is owned by `useInboxSelection`; the sidebar drives it.
  */
 export function InboxPage({ visible }: InboxPageProps) {
   const entries = inboxLive.useStore((s) => s.entries)
@@ -88,10 +84,14 @@ function EmptyState() {
 }
 
 function Detail({ entry, unread }: { entry: InboxEntry; unread: boolean }) {
+  const hasDocs = (entry.docs?.length ?? 0) > 0
+  const hasComments = (entry.comments ?? '').trim().length > 0
+
   return (
     <div className="max-w-[820px] mx-auto py-6 px-4 md:px-8">
-      <div className="flex items-center gap-2 mb-3 flex-wrap">
-        <span className="text-[13px] font-medium text-text">
+      {/* Header: workspace · kind · timestamp */}
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <span className="text-[14px] font-medium text-text">
           {entry.workspaceLabel ?? entry.workspaceId}
         </span>
         {entry.kind && (
@@ -111,16 +111,109 @@ function Detail({ entry, unread }: { entry: InboxEntry; unread: boolean }) {
         </span>
       </div>
 
-      <div className="text-[13px] text-text whitespace-pre-wrap break-words leading-relaxed border-t border-border pt-4">
-        {entry.text}
-      </div>
+      {/* Docs — top, live render from workspace */}
+      {hasDocs && (
+        <div className="space-y-6">
+          {entry.docs!.map((doc) => (
+            <DocBlock key={doc.path} workspaceId={entry.workspaceId} doc={doc} />
+          ))}
+        </div>
+      )}
 
-      <div className="mt-6 flex items-center gap-2 text-[12px] text-text-muted">
-        <span className="font-mono text-text-muted/60">workspace: {entry.workspaceId}</span>
+      {/* Comments — bottom, agent's voice */}
+      {hasComments && (
+        <div className={`${hasDocs ? 'mt-8 pt-6 border-t border-border' : ''}`}>
+          <div className="text-[11px] font-medium text-text-muted/60 uppercase tracking-wider mb-3">
+            Comments
+          </div>
+          <MarkdownContent text={entry.comments!} />
+        </div>
+      )}
+
+      <div className="mt-8 pt-4 border-t border-border/50 text-[12px] text-text-muted/60 font-mono">
+        workspace: {entry.workspaceId}
       </div>
     </div>
   )
 }
+
+// ==================== Doc block (live fetch from workspace) ====================
+
+function DocBlock({ workspaceId, doc }: { workspaceId: string; doc: InboxDoc }) {
+  const [result, setResult] = useState<ReadFileResult | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setResult(null)
+    readWorkspaceFile(workspaceId, doc.path).then((r) => {
+      if (!cancelled) setResult(r)
+    })
+    return () => { cancelled = true }
+  }, [workspaceId, doc.path])
+
+  return (
+    <div className="rounded-lg border border-border bg-bg/50">
+      <div className="px-4 py-2 border-b border-border/50 flex items-center gap-2">
+        <span className="text-[11px] text-text-muted/70">📄</span>
+        <span className="text-[12px] font-mono text-text-muted">{doc.path}</span>
+      </div>
+      <div className="px-4 py-3">
+        {result === null ? (
+          <div className="text-[12px] text-text-muted">Loading…</div>
+        ) : result.kind === 'ok' ? (
+          <DocContent path={doc.path} content={result.content} />
+        ) : (
+          <DocTombstone result={result} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function DocContent({ path, content }: { path: string; content: string }) {
+  const lower = path.toLowerCase()
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) {
+    return <MarkdownContent text={content} />
+  }
+  if (lower.endsWith('.html') || lower.endsWith('.htm')) {
+    // DOMPurify sanitisation is inside MarkdownContent; for raw HTML we
+    // run it through the markdown renderer too — marked passes HTML
+    // through, then DOMPurify sanitises before insertion.
+    return <MarkdownContent text={content} />
+  }
+  // Plain-text fallback (.txt, .log, no extension, code files…)
+  return (
+    <pre className="text-[12px] text-text whitespace-pre-wrap font-mono leading-relaxed">
+      {content}
+    </pre>
+  )
+}
+
+function DocTombstone({ result }: { result: ReadFileResult }) {
+  const message = (() => {
+    switch (result.kind) {
+      case 'workspace_missing':
+        return 'Workspace no longer exists — it may have been deleted.'
+      case 'file_missing':
+        return 'File not found at this path — it may have been moved, renamed, or deleted in the workspace since this notification was sent.'
+      case 'too_large':
+        return `File too large to render in inbox (${(result.sizeBytes / 1024).toFixed(0)} KB). Open the workspace to view.`
+      case 'invalid_path':
+        return 'Invalid path.'
+      case 'error':
+        return `Could not read file: ${result.message}`
+      case 'ok':
+        return ''
+    }
+  })()
+  return (
+    <div className="text-[12px] text-text-muted italic">
+      {message}
+    </div>
+  )
+}
+
+// ==================== Date formatting ====================
 
 function formatAbsolute(ts: number): string {
   return new Date(ts).toLocaleString(undefined, {

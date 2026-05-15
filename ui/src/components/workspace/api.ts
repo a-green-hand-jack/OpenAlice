@@ -280,6 +280,42 @@ export async function listFiles(id: string, relPath: string): Promise<DirListing
   return (await res.json()) as DirListing;
 }
 
+/**
+ * Read a single UTF-8 text file from inside a workspace. Returns a
+ * discriminated result so the caller (Inbox detail pane) can render
+ * tombstone variants without parsing error strings.
+ */
+export type ReadFileResult =
+  | { kind: 'ok'; content: string }
+  | { kind: 'workspace_missing' }
+  | { kind: 'file_missing' }
+  | { kind: 'too_large'; sizeBytes: number }
+  | { kind: 'invalid_path' }
+  | { kind: 'error'; message: string };
+
+export async function readWorkspaceFile(id: string, relPath: string): Promise<ReadFileResult> {
+  const qs = `?path=${encodeURIComponent(relPath)}`;
+  let res: Response;
+  try {
+    res = await fetch(`/api/workspaces/${encodeURIComponent(id)}/file${qs}`);
+  } catch (err) {
+    return { kind: 'error', message: (err as Error).message };
+  }
+  if (res.ok) {
+    const body = (await res.json()) as { content: string };
+    return { kind: 'ok', content: body.content };
+  }
+  // Map known error shapes to discriminated variants. Unknown → generic error.
+  const body = (await res.json().catch(() => null)) as { error?: string; sizeBytes?: number } | null;
+  switch (body?.error) {
+    case 'workspace_not_found': return { kind: 'workspace_missing' };
+    case 'file_not_found':      return { kind: 'file_missing' };
+    case 'file_too_large':      return { kind: 'too_large', sizeBytes: body.sizeBytes ?? 0 };
+    case 'invalid_path':        return { kind: 'invalid_path' };
+    default:                    return { kind: 'error', message: body?.error ?? `HTTP ${res.status}` };
+  }
+}
+
 // ── Agent provider config ───────────────────────────────────────────────────
 
 export interface AgentProfile {
