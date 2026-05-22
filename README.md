@@ -69,6 +69,9 @@ Automation has two layers in OpenAlice. They're worth separating because each ev
 
 ## Architecture
 
+OpenAlice splits into **two long-lived processes** managed by a thin
+supervisor:
+
 ```mermaid
 graph TB
   subgraph Surfaces["Surfaces — where users interact"]
@@ -82,22 +85,26 @@ graph TB
     WCLI[claude / codex / shell session]
   end
 
-  subgraph Core["Core — orchestration"]
-    AC[AgentCenter<br/>+ ProviderRouter]
-    TC[ToolCenter<br/>+ Workspace ToolCenter]
-    IS[InboxStore]
-    CCR[ConnectorCenter]
+  subgraph Alice["Alice process — agent runtime + research"]
+    subgraph Core["Core — orchestration"]
+      AC[AgentCenter<br/>+ ProviderRouter]
+      TC[ToolCenter<br/>+ Workspace ToolCenter]
+      IS[InboxStore]
+      CCR[ConnectorCenter]
+    end
+    subgraph AliceDomain["Domain — Alice-side"]
+      MD[Market Data]
+      AN[Analysis]
+      NC[News]
+    end
+    SDK[UTA SDK<br/>HTTP client]
   end
 
-  subgraph Domain["Domain — business logic"]
-    subgraph UTA["UTA (Trading)"]
-      TG2[Trading Git]
-      GD[Guards]
-      BK[Brokers]
-    end
-    MD[Market Data]
-    AN[Analysis]
-    NC[News]
+  subgraph UTA["UTA service — broker carrier"]
+    TG2[Trading Git]
+    GD[Guards]
+    BK[Brokers]
+    FX[FX + Snapshots]
   end
 
   subgraph Sched["Scheduling — what fires"]
@@ -109,30 +116,95 @@ graph TB
 
   WEB --> AC
   TG --> AC
-  AC --> Domain
+  AC --> AliceDomain
+  AC --> SDK
+  SDK -.HTTP.-> UTA
 
   Workspace -->|.mcp.json| MCPS
   MCPS --> TC
-  TC --> Domain
+  TC --> AliceDomain
+  TC --> SDK
   Workspace -.inbox_push.-> IS
   IS --> INB
 
   CCR --> Surfaces
 ```
 
-**Surfaces** — external places where users interact with Alice: Web UI (chat, Inbox tab, portfolio dashboards), Telegram, MCP Server. ConnectorCenter tracks the last-used channel for delivery routing.
+**Alice process** holds the agent runtime, research domain (market data,
+analysis, news), workspace launcher, and all user-facing surfaces. Alice
+**does not** hold broker credentials and does not talk to exchanges
+directly. It owns the *deciding* — what to research, when to act, what
+to say.
 
-**Workspace** — A per-task directory + git repo + persistent terminal session running a native agent CLI. The recommended substrate for non-trivial AI work. Wired to OpenAlice via two MCP servers in `.mcp.json`: a global one (full tool catalog) and a per-workspace one (workspace-scoped tools like `inbox_push`, with the wsId carried in the URL path so the agent never traffics its own identity).
+**UTA service** owns the broker connections, the git-like trading state
+machine, guards, FX, and snapshot scheduling. AI tools and the
+frontend reach it through a thin HTTP SDK — `ctx.utaManager.placeOrder()`
+on the Alice side becomes a typed request to the UTA process. UTA owns
+the *doing* — order construction, execution, state.
 
-**Core** — AgentCenter + ProviderRouter route AI calls to the active provider. ToolCenter is the shared registry for global tools; WorkspaceToolCenter holds per-workspace tool factories. InboxStore is an append-only JSONL behind the Inbox tab; ConnectorCenter routes outbound messages on the legacy path.
+Today the two run on the same host (Docker container or `pnpm dev` on
+your laptop) under a Guardian supervisor; tomorrow the UTA service is
+designed to detach: run UTA on a phone, a home-network always-on box,
+or any device you actually trust with your broker keys, while Alice
+sits on a VPS, your desktop, or wherever's convenient. Same wire
+protocol either way. The shape echoes a hardware wallet — the
+credential-holding half is small, isolated, and stays put; the rich
+client half can live wherever you want.
 
-**Domain** — UTA is the trading workspace (broker connection + git history + guards). Market Data, Analysis, and News are independent modules, each exposed to AI through tool registrations.
+**Surfaces** — Web UI (chat, Inbox tab, portfolio dashboards), Telegram,
+MCP Server. ConnectorCenter tracks the last-used channel for delivery
+routing.
 
-**Scheduling** — Cron, the heartbeat timer, and webhook ingest fire events on a schedule. *What* the event drives is the execution layer: today's heartbeat and cron still take the legacy path through AgentCenter (dotted line — the "one-in, one-out" AI call pattern); the direction we're moving in is workspace-resident execution where a scheduled event either fires a one-shot task inside a Workspace or drives continued dialog on a persistent Session.
+**Workspace** — A per-task directory + git repo + persistent terminal
+session running a native agent CLI. The recommended substrate for
+non-trivial AI work. Wired to OpenAlice via two MCP servers in
+`.mcp.json`: a global one (full tool catalog) and a per-workspace one
+(workspace-scoped tools like `inbox_push`, with the wsId carried in the
+URL path so the agent never traffics its own identity).
+
+**Core (Alice)** — AgentCenter + ProviderRouter route AI calls to the
+active provider. ToolCenter is the shared registry for global tools;
+WorkspaceToolCenter holds per-workspace tool factories. InboxStore is
+an append-only JSONL behind the Inbox tab; ConnectorCenter routes
+outbound messages on the legacy path.
+
+**Alice-side Domain** — Market Data, Analysis, and News. Each module is
+exposed to AI through tool registrations and never touches broker code.
+
+**UTA service (carrier)** — Owns the IBroker implementations (CCXT,
+Alpaca, Interactive Brokers, Longbridge, MockBroker), the
+Trading-as-Git state machine, guards, FxService, the snapshot scheduler,
+and the broker catalog refresh loop. Binds `127.0.0.1` only — only the
+co-located Alice process talks to it. v1 ships co-located; subsequent
+versions support running UTA on a separate host or device entirely.
+
+**Guardian** — The supervisor that brings the two processes up in
+order, gates Alice's boot on UTA's `/__uta/health`, and respawns UTA
+when broker config changes (it watches a control flag the UI writes
+through Alice's BFF, so config updates don't require restarting Alice).
+Same module is used by `pnpm dev` (orchestrator with Vite) and the
+Docker entrypoint (with `tini` as PID 1).
+
+**Scheduling** — Cron, the heartbeat timer, and webhook ingest fire
+events on a schedule. *What* the event drives is the execution layer:
+today's heartbeat and cron still take the legacy path through
+AgentCenter (dotted line — the "one-in, one-out" AI call pattern); the
+direction we're moving in is workspace-resident execution where a
+scheduled event either fires a one-shot task inside a Workspace or
+drives continued dialog on a persistent Session.
 
 ## Key Concepts
 
-**UTA (Unified Trading Account)** — The core abstraction. Each UTA wraps a broker connection, operation history, guard pipeline, and snapshot scheduler into a single self-contained workspace. AI and the frontend interact with UTAs exclusively — brokers are internal implementation details. Multiple UTAs work like independent repositories: one for Alpaca US equities, one for Bybit crypto, each with its own history and guards.
+**UTA (Unified Trading Account)** — The core trading abstraction. Each
+UTA wraps a broker connection, operation history, guard pipeline, and
+snapshot scheduler into a single self-contained account. AI and the
+frontend interact with UTAs exclusively — brokers are internal
+implementation details. Multiple UTAs work like independent
+repositories: one for Alpaca US equities, one for Bybit crypto, each
+with its own history and guards. UTAs live inside the **UTA service**
+(see Architecture above) rather than in the Alice process — broker
+credentials are isolated to that carrier and never visible to the
+agent runtime that drives trading decisions.
 
 **Trading-as-Git** — The workflow inside each UTA. Stage orders, commit with a message, then push to execute. Push runs guards, dispatches to the broker, snapshots account state, and records a commit with an 8-char hash. Full history is reviewable like `git log` / `git show`.
 
