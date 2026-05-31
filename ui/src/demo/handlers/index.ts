@@ -2,16 +2,14 @@ import { authHandlers } from './auth'
 import { tradingHandlers } from './trading'
 import { workspacesHandlers } from './workspaces'
 import { eventsHandlers } from './events'
-import { chatHandlers } from './chat'
 import { inboxHandlers } from './inbox'
 import { personaHeartbeatHandlers } from './personaHeartbeat'
-import { channelsHandlers } from './channels'
 import { cronHandlers } from './cron'
 import { toolsSimulatorHandlers } from './toolsSimulator'
 import { marketHandlers } from './market'
 import { configKeysHandlers } from './configKeys'
 import { agentStatusHandlers } from './agentStatus'
-import { notificationsNewsHandlers } from './notificationsNews'
+import { newsListHandlers } from './newsList'
 import { devMiscHandlers } from './devMisc'
 import { catchAllHandlers } from './catchAll'
 
@@ -23,16 +21,14 @@ export const handlers = [
   ...tradingHandlers,
   ...workspacesHandlers,
   ...eventsHandlers,
-  ...chatHandlers,
   ...inboxHandlers,
   ...personaHeartbeatHandlers,
-  ...channelsHandlers,
   ...cronHandlers,
   ...toolsSimulatorHandlers,
   ...marketHandlers,
   ...configKeysHandlers,
   ...agentStatusHandlers,
-  ...notificationsNewsHandlers,
+  ...newsListHandlers,
   ...devMiscHandlers,
   ...catchAllHandlers,
 ]
