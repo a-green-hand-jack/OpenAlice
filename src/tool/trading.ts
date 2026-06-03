@@ -130,7 +130,7 @@ hitting the broker, which otherwise expects the bare base ticker.`,
         assetClass: z.enum(['equity', 'crypto', 'currency', 'commodity', 'unknown']).optional()
           .describe('Asset class hint. Improves matching for crypto/currency where data symbols concatenate quote currency.'),
         source: z.string().optional().describe(sourceDesc(false)),
-      }),
+      }).meta({ examples: [{ pattern: 'AAPL' }] }),
       execute: async ({ pattern, assetClass, source }) => {
         // Symbol → broker pattern: see src/domain/trading/contract-search-rules.md
         // for what the normalization does and why.
@@ -161,7 +161,7 @@ hitting the broker, which otherwise expects the bare base ticker.`,
         aliceId: z.string().optional().describe('Contract ID (format: accountId|nativeKey, from searchContracts)'),
         secType: z.string().optional().describe('Security type filter'),
         currency: z.string().optional().describe('Currency filter'),
-      }),
+      }).meta({ examples: [{ source: 'alpaca-paper', symbol: 'AAPL' }] }),
       execute: async ({ source, symbol, aliceId, secType, currency }) => {
         const uta = await manager.resolveOne(source)
         // Tool only assembles a Contract shell here — aliceId expansion
@@ -189,7 +189,7 @@ hitting the broker, which otherwise expects the bare base ticker.`,
 If this tool returns an error with transient=true, wait a few seconds and retry once before reporting to the user.`,
       inputSchema: z.object({
         source: z.string().optional().describe(sourceDesc(false)),
-      }),
+      }).meta({ examples: [{ source: 'alpaca-paper' }] }),
       execute: async ({ source }) => {
         const targets = await manager.resolve(source)
         if (targets.length === 0) return { error: 'No accounts available.' }
@@ -208,7 +208,7 @@ If this tool returns an error with transient=true, wait a few seconds and retry 
       inputSchema: z.object({
         source: z.string().optional().describe(sourceDesc(false)),
         symbol: z.string().optional().describe('Filter by ticker, or omit for all'),
-      }),
+      }).meta({ examples: [{ source: 'alpaca-paper' }] }),
       execute: async ({ source, symbol }) => {
         const targets = await manager.resolve(source)
         if (targets.length === 0) return { positions: [], message: 'No accounts available.' }
@@ -284,7 +284,7 @@ If this tool returns an error with transient=true, wait a few seconds and retry 
         source: z.string().optional().describe(sourceDesc(false)),
         orderIds: z.array(z.string()).optional().describe('Order IDs to query. If omitted, queries all pending orders.'),
         groupBy: z.enum(['contract']).optional().describe('Group orders by contract (aliceId)'),
-      }),
+      }).meta({ examples: [{ source: 'alpaca-paper' }] }),
       execute: async ({ source, orderIds, groupBy }) => {
         const targets = await manager.resolve(source)
         if (targets.length === 0) return []
@@ -321,7 +321,7 @@ If this tool returns an error with transient=true, wait a few seconds and retry 
       inputSchema: z.object({
         aliceId: z.string().describe('Contract ID (format: accountId|nativeKey, from searchContracts)'),
         source: z.string().optional().describe(sourceDesc(false)),
-      }),
+      }).meta({ examples: [{ aliceId: 'alpaca-paper|AAPL' }] }),
       execute: async ({ aliceId, source }) => {
         // aliceId is UTA-scoped (`{utaId}|{nativeKey}`); route directly to
         // the owning UTA. Fall back to caller-supplied `source` if given
@@ -347,7 +347,7 @@ If this tool returns an error with transient=true, wait a few seconds and retry 
     getMarketClock: tool({
       description: `Get current market clock status (isOpen, nextOpen, nextClose).
 If this tool returns an error with transient=true, wait a few seconds and retry once before reporting to the user.`,
-      inputSchema: z.object({ source: z.string().optional().describe(sourceDesc(false)) }),
+      inputSchema: z.object({ source: z.string().optional().describe(sourceDesc(false)) }).meta({ examples: [{ source: 'alpaca-paper' }] }),
       execute: async ({ source }) => {
         const targets = await manager.resolve(source)
         if (targets.length === 0) return { error: 'No accounts available.' }
@@ -367,7 +367,7 @@ IMPORTANT: Check this BEFORE making new trading decisions.`,
         source: z.string().optional().describe(sourceDesc(false)),
         limit: z.number().int().positive().optional().describe('Number of recent commits (default: 10)'),
         symbol: z.string().optional().describe('Filter commits by symbol'),
-      }),
+      }).meta({ examples: [{ source: 'alpaca-paper', limit: 10 }] }),
       execute: async ({ source, limit, symbol }) => {
         const targets = await manager.resolve(source)
         const allEntries: Array<Record<string, unknown>> = []
@@ -381,7 +381,7 @@ IMPORTANT: Check this BEFORE making new trading decisions.`,
 
     tradingShow: tool({
       description: 'View details of a specific trading commit (like "git show <hash>").',
-      inputSchema: z.object({ hash: z.string().describe('Commit hash (8 characters)') }),
+      inputSchema: z.object({ hash: z.string().describe('Commit hash (8 characters)') }).meta({ examples: [{ hash: '00000000' }] }),
       execute: async ({ hash }) => {
         for (const uta of await manager.resolve()) {
           const commit = await uta.show(hash)
@@ -393,7 +393,7 @@ IMPORTANT: Check this BEFORE making new trading decisions.`,
 
     tradingStatus: tool({
       description: 'View current trading staging area status (like "git status").',
-      inputSchema: z.object({ source: z.string().optional().describe(sourceDesc(false)) }),
+      inputSchema: z.object({ source: z.string().optional().describe(sourceDesc(false)) }).meta({ examples: [{ source: 'alpaca-paper' }] }),
       execute: async ({ source }) => {
         const targets = await manager.resolve(source)
         const results = await Promise.all(targets.map(async (uta) => ({ source: uta.id, ...await uta.status() })))
@@ -409,7 +409,7 @@ IMPORTANT: Check this BEFORE making new trading decisions.`,
           symbol: z.string().describe('Ticker or "all"'),
           change: z.string().describe('"@150" for absolute, "+10%" or "-5%" for relative'),
         })),
-      }),
+      }).meta({ examples: [{ source: 'alpaca-paper', priceChanges: [{ symbol: 'AAPL', change: '+10%' }] }] }),
       execute: async ({ source, priceChanges }) => {
         const targets = await manager.resolve(source)
         if (targets.length === 0) return { error: 'No accounts available.' }
@@ -458,7 +458,7 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
           price: z.string().describe('Stop loss trigger price'),
           limitPrice: z.string().optional().describe('Limit price for stop-limit SL (omit for stop-market)'),
         }).optional().describe('Stop loss order (single-level, full quantity)'),
-      }),
+      }).meta({ examples: [{ source: 'alpaca-paper', aliceId: 'alpaca-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: '1' }] }),
       execute: async ({ source, ...params }) => (await manager.resolveOne(source)).stagePlaceOrder(params),
     }),
 
@@ -475,7 +475,7 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
         orderType: z.enum(['MKT', 'LMT', 'STP', 'STP LMT', 'TRAIL', 'TRAIL LIMIT', 'MOC']).optional().describe('New order type'),
         tif: z.enum(['DAY', 'GTC', 'IOC', 'FOK', 'OPG', 'GTD']).optional().describe('New time in force'),
         goodTillDate: z.string().optional().describe('New expiration date'),
-      }),
+      }).meta({ examples: [{ source: 'alpaca-paper', orderId: '1', lmtPrice: '150' }] }),
       execute: async ({ source, ...params }) => (await manager.resolveOne(source)).stageModifyOrder(params),
     }),
 
@@ -486,7 +486,7 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
         aliceId: z.string().describe('Contract ID (format: accountId|nativeKey, from searchContracts)'),
         symbol: z.string().optional().describe('Human-readable symbol. Optional.'),
         qty: positiveNumeric.optional().describe('Number of shares to sell. Decimal string. Default: sell all.'),
-      }),
+      }).meta({ examples: [{ source: 'alpaca-paper', aliceId: 'alpaca-paper|AAPL' }] }),
       execute: async ({ source, ...params }) => (await manager.resolveOne(source)).stageClosePosition(params),
     }),
 
@@ -495,7 +495,7 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
       inputSchema: z.object({
         source: z.string().describe(sourceDesc(true)),
         orderId: z.string().describe('Order ID to cancel'),
-      }),
+      }).meta({ examples: [{ source: 'alpaca-paper', orderId: '1' }] }),
       execute: async ({ source, orderId }) => (await manager.resolveOne(source)).stageCancelOrder({ orderId }),
     }),
 
@@ -504,7 +504,7 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
       inputSchema: z.object({
         source: z.string().optional().describe(sourceDesc(false, 'If omitted, commits all accounts with staged operations.')),
         message: z.string().describe('Commit message explaining your trading decision'),
-      }),
+      }).meta({ examples: [{ message: 'Entry: long AAPL on momentum' }] }),
       execute: async ({ source, message }) => {
         const targets = await manager.resolve(source)
         const results: Array<Record<string, unknown>> = []
@@ -522,7 +522,7 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
       description: 'Trading push requires manual approval — call tradingStatus to show the user what is pending, then tell them to approve (via Web UI, Telegram /trading, or other connected channels).',
       inputSchema: z.object({
         source: z.string().optional().describe(sourceDesc(false, 'If omitted, checks all accounts.')),
-      }),
+      }).meta({ examples: [{ source: 'alpaca-paper' }] }),
       execute: async ({ source }) => {
         const targets = await manager.resolve(source)
         const statuses = await Promise.all(targets.map(async (uta) => ({ uta, status: await uta.status() })))
@@ -552,7 +552,7 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
       inputSchema: z.object({
         source: z.string().optional().describe(sourceDesc(false, 'If omitted, syncs all accounts with pending orders.')),
         delayMs: z.number().int().min(0).max(30_000).optional().describe('Wait this many ms before querying exchange. Default: 0. Recommended: 2000-5000 after market orders.'),
-      }),
+      }).meta({ examples: [{ source: 'alpaca-paper', delayMs: 2000 }] }),
       execute: async ({ source, delayMs }) => {
         const targets = await manager.resolve(source)
         const results: Array<Record<string, unknown>> = []

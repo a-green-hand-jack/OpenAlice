@@ -140,9 +140,7 @@ const utaDetailModule: ViewModule<'uta-detail'> = {
 }
 
 const devTabTitle: Record<Extract<ViewSpec, { kind: 'dev' }>['params']['tab'], string> = {
-  connectors: 'Connectors',
   tools: 'Tools',
-  sessions: 'Sessions',
   snapshots: 'Snapshots',
   logs: 'Logs',
   simulator: 'Simulator',

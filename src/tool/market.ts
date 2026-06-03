@@ -33,7 +33,7 @@ This is NOT for trading — use searchContracts to find broker-tradeable contrac
       inputSchema: z.object({
         query: z.string().describe('Keyword to search, e.g. "AAPL", "bitcoin", "EUR"'),
         limit: z.number().int().positive().optional().describe('Max results per asset class (default: 20)'),
-      }),
+      }).meta({ examples: [{ query: 'apple' }] }),
       execute: async ({ query, limit }) => {
         const results = await aggregateSymbolSearch(deps, query, limit ?? 20)
         if (results.length === 0) {

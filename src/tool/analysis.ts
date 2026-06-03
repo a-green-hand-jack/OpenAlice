@@ -120,7 +120,7 @@ Use marketSearchForResearch to find the correct symbol first.`,
         asset: z.enum(['equity', 'crypto', 'currency', 'commodity']).describe('Asset class'),
         formula: z.string().describe("Formula expression, e.g. SMA(CLOSE('AAPL', '1d'), 50)"),
         precision: z.number().int().min(0).max(10).optional().describe('Decimal places (default: 4)'),
-      }),
+      }).meta({ examples: [{ asset: 'equity', formula: "SMA(CLOSE('AAPL', '1d'), 50)" }] }),
       execute: async ({ asset, formula, precision }) => {
         const context = buildContext(asset, equityClient, cryptoClient, currencyClient, commodityClient)
         const calculator = new IndicatorCalculator(context)

@@ -156,7 +156,7 @@ Example: globNews({ pattern: "BTC|Bitcoin", lookback: "1d" })`,
         lookback: z.string().optional().describe(`Time range: "1h", "12h", "1d", "7d" (searches up to ${NEWS_LIMIT} most recent items in the window)`),
         metadataFilter: z.record(z.string(), z.string()).optional().describe('Filter by metadata key-value'),
         limit: z.number().int().positive().optional().describe('Max results'),
-      }),
+      }).meta({ examples: [{ pattern: 'BTC|Bitcoin', lookback: '1d' }] }),
       execute: async ({ pattern, lookback, metadataFilter, limit }) => {
         return globNews(
           { getNews: () => provider.getNewsV2({ endTime: new Date(), lookback, limit: NEWS_LIMIT }) },
@@ -182,7 +182,7 @@ Example: grepNews({ pattern: "interest rate", lookback: "2d" })`,
         contextChars: z.number().int().positive().optional().describe('Context chars around match (default: 50)'),
         metadataFilter: z.record(z.string(), z.string()).optional().describe('Filter by metadata key-value'),
         limit: z.number().int().positive().optional().describe('Max results'),
-      }),
+      }).meta({ examples: [{ pattern: 'interest rate', lookback: '2d' }] }),
       execute: async ({ pattern, lookback, contextChars, metadataFilter, limit }) => {
         return grepNews(
           { getNews: () => provider.getNewsV2({ endTime: new Date(), lookback, limit: NEWS_LIMIT }) },
@@ -199,7 +199,7 @@ results. The id is stable, so it resolves regardless of what \`lookback\` you us
 to find the item (no need to repeat it).`,
       inputSchema: z.object({
         id: z.number().int().nonnegative().describe('Stable news id from globNews/grepNews results'),
-      }),
+      }).meta({ examples: [{ id: 0 }] }),
       execute: async ({ id }) => {
         const result = await readNews(
           { getNews: () => provider.getNewsV2({ endTime: new Date(), limit: NEWS_LIMIT }) },

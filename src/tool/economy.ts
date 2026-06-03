@@ -42,7 +42,7 @@ common term. Increase limit only if you need to scan beyond the most popular res
       inputSchema: z.object({
         query: z.string().describe('Keyword(s) to search FRED, e.g. "unemployment", "GDP", "CPI"'),
         limit: z.number().int().positive().optional().describe('Max results to return (default: 100)'),
-      }),
+      }).meta({ examples: [{ query: 'unemployment' }] }),
       execute: async ({ query, limit }) => {
         const params: Record<string, unknown> = { query, provider: FRED_PROVIDER }
         if (limit !== undefined) params.limit = limit
@@ -67,7 +67,7 @@ If you don't know the series_id, call economyFredSearch first.`,
         end_date: z.string().optional().describe('End date YYYY-MM-DD (optional)'),
         limit: z.number().int().positive().optional().describe('Max observations per series (returns latest N when no date range given)'),
         frequency: z.string().optional().describe('Aggregation frequency override (e.g. "m", "q", "a")'),
-      }),
+      }).meta({ examples: [{ symbol: 'UNRATE', limit: 12 }] }),
       execute: async ({ symbol, start_date, end_date, limit, frequency }) => {
         const params: Record<string, unknown> = { symbol, provider: FRED_PROVIDER }
         if (start_date !== undefined) params.start_date = start_date
@@ -93,7 +93,7 @@ per-capita income).`,
         date: z.string().optional().describe('Observation date YYYY-MM-DD (defaults to latest available)'),
         region_type: z.string().optional().describe('Region granularity: "state" (default), "msa", "county"'),
         start_date: z.string().optional().describe('Start date for ranged queries (optional)'),
-      }),
+      }).meta({ examples: [{ symbol: 'WIPCPI' }] }),
       execute: async ({ symbol, date, region_type, start_date }) => {
         const params: Record<string, unknown> = { symbol, provider: FRED_PROVIDER }
         if (date !== undefined) params.date = date
@@ -116,7 +116,7 @@ Once you have the series_id, pass it to economyBlsSeries to get observations.`,
       inputSchema: z.object({
         query: z.string().describe('Keyword to filter the BLS catalog, e.g. "unemployment", "CPI", "JOLTS"'),
         limit: z.number().int().positive().optional().describe('Max results to return (default: 100)'),
-      }),
+      }).meta({ examples: [{ query: 'CPI' }] }),
       execute: async ({ query, limit }) => {
         const params: Record<string, unknown> = { query, provider: BLS_PROVIDER }
         if (limit !== undefined) params.limit = limit
@@ -145,7 +145,7 @@ If you don't know the series_id, call economyBlsSearch first.`,
         symbol: z.string().describe('BLS series id, or comma-separated ids for multi-series'),
         start_date: z.string().optional().describe('Start date YYYY-MM-DD (only year is used; default: 10 years ago)'),
         end_date: z.string().optional().describe('End date YYYY-MM-DD (only year is used; default: current year)'),
-      }),
+      }).meta({ examples: [{ symbol: 'LNS14000000' }] }),
       execute: async ({ symbol, start_date, end_date }) => {
         const params: Record<string, unknown> = { symbol, provider: BLS_PROVIDER }
         if (start_date !== undefined) params.start_date = start_date
@@ -175,7 +175,7 @@ GDP / unemployment / CPI, use economyFredSeries instead.`,
         ]).describe('STEO category'),
         start_date: z.string().optional().describe('Start date YYYY-MM-DD (optional)'),
         end_date: z.string().optional().describe('End date YYYY-MM-DD (optional)'),
-      }),
+      }).meta({ examples: [{ category: 'crude_oil_price' }] }),
       execute: async ({ category, start_date, end_date }) => {
         const params: Record<string, unknown> = { category, provider: EIA_PROVIDER }
         if (start_date !== undefined) params.start_date = start_date
@@ -205,7 +205,7 @@ economyEnergyOutlook.`,
         ]).describe('Petroleum data category'),
         start_date: z.string().optional().describe('Start date YYYY-MM-DD (optional)'),
         end_date: z.string().optional().describe('End date YYYY-MM-DD (optional)'),
-      }),
+      }).meta({ examples: [{ category: 'crude_oil_stocks' }] }),
       execute: async ({ category, start_date, end_date }) => {
         const params: Record<string, unknown> = { category, provider: EIA_PROVIDER }
         if (start_date !== undefined) params.start_date = start_date

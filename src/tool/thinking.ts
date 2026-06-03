@@ -22,7 +22,7 @@ export function createThinkingTools() {
           .describe(
             'Mathematical expression to evaluate, e.g. "100 / 50000", "(1000 * 0.1) / 2"',
           ),
-      }),
+      }).meta({ examples: [{ expression: '(1000 * 0.1) / 2' }] }),
       execute: ({ expression }) => {
         return calculate(expression);
       },

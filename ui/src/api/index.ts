@@ -8,7 +8,6 @@ import { cronApi } from './cron'
 import { heartbeatApi } from './heartbeat'
 import { tradingApi } from './trading'
 import { marketDataApi } from './openbb'
-import { devApi } from './dev'
 import { toolsApi } from './tools'
 import { agentStatusApi } from './agentStatus'
 import { personaApi } from './persona'
@@ -24,7 +23,6 @@ export const api = {
   heartbeat: heartbeatApi,
   trading: tradingApi,
   marketData: marketDataApi,
-  dev: devApi,
   tools: toolsApi,
   agentStatus: agentStatusApi,
   persona: personaApi,

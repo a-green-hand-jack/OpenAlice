@@ -10,18 +10,15 @@ interface CategoryItem {
 }
 
 const CATEGORIES: CategoryItem[] = [
-  { label: 'Connectors', tab: 'connectors' },
   { label: 'Tools', tab: 'tools' },
-  { label: 'Sessions', tab: 'sessions' },
   { label: 'Snapshots', tab: 'snapshots' },
   { label: 'Logs', tab: 'logs' },
   { label: 'Simulator', tab: 'simulator' },
 ]
 
 /**
- * Dev sidebar — five sub-pages, click opens (or focuses) the
- * corresponding dev tab. Active highlight is driven by the focused tab's
- * spec.
+ * Dev sidebar — click opens (or focuses) the corresponding dev tab. Active
+ * highlight is driven by the focused tab's spec.
  */
 export function DevCategoryList() {
   const focused = useWorkspace((state) => getFocusedTab(state)?.spec)

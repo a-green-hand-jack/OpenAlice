@@ -21,7 +21,7 @@ combined with key metrics (market cap, PE ratio, PB ratio, EV/EBITDA, dividend y
 If unsure about the symbol, use marketSearchForResearch to find it.`,
       inputSchema: z.object({
         symbol: z.string().describe('Ticker symbol, e.g. "AAPL", "MSFT"'),
-      }),
+      }).meta({ examples: [{ symbol: 'AAPL' }] }),
       execute: async ({ symbol }) => {
         const [profile, metrics] = await Promise.all([
           equityClient.getProfile({ symbol, provider: 'yfinance' }).catch(() => []),
@@ -43,7 +43,7 @@ If unsure about the symbol, use marketSearchForResearch to find it.`,
         type: z.enum(['income', 'balance', 'cash']).describe('Statement type: "income" for income statement, "balance" for balance sheet, "cash" for cash flow'),
         period: z.enum(['annual', 'quarter']).optional().describe('Fiscal period (default: annual)'),
         limit: z.number().int().positive().optional().describe('Number of periods to return (default: 5)'),
-      }),
+      }).meta({ examples: [{ symbol: 'AAPL', type: 'income', period: 'annual', limit: 5 }] }),
       execute: async ({ symbol, type, period, limit }) => {
         const params: Record<string, unknown> = { symbol, provider: 'yfinance' }
         if (period) params.period = period
@@ -80,7 +80,7 @@ If unsure about the symbol, use marketSearchForResearch to find it.`,
         period: z.enum(['annual', 'quarter']).optional().describe('Fiscal period for the historical series (default: annual)'),
         limit: z.number().int().positive().optional().describe('Number of historical periods to return (default: 5; ignored when ttm="only")'),
         ttm: z.enum(['include', 'exclude', 'only']).optional().describe('TTM handling: "include" (default — TTM + history), "exclude" (history only), "only" (TTM snapshot only)'),
-      }),
+      }).meta({ examples: [{ symbol: 'AAPL', period: 'annual', limit: 5 }] }),
       execute: async ({ symbol, period, limit, ttm }) => {
         // The FMP fetcher defaults ttm to "only" (a single TTM row, with
         // period/limit dead). Default to "include" here so the historical
@@ -103,7 +103,7 @@ Can be queried by symbol (specific company) or by date range (market-wide).`,
         symbol: z.string().optional().describe('Ticker symbol to check (omit for market-wide calendar)'),
         start_date: z.string().optional().describe('Start date in YYYY-MM-DD format'),
         end_date: z.string().optional().describe('End date in YYYY-MM-DD format'),
-      }),
+      }).meta({ examples: [{ symbol: 'AAPL' }] }),
       execute: async ({ symbol, start_date, end_date }) => {
         const params: Record<string, unknown> = { provider: 'fmp' }
         if (symbol) params.symbol = symbol
@@ -123,7 +123,7 @@ If unsure about the symbol, use marketSearchForResearch to find it.`,
       inputSchema: z.object({
         symbol: z.string().describe('Ticker symbol, e.g. "AAPL"'),
         limit: z.number().int().positive().optional().describe('Number of transactions to return (default: 20)'),
-      }),
+      }).meta({ examples: [{ symbol: 'AAPL', limit: 20 }] }),
       execute: async ({ symbol, limit }) => {
         const params: Record<string, unknown> = { symbol, provider: 'fmp' }
         if (limit) params.limit = limit
@@ -138,7 +138,7 @@ Returns top gainers, losers, or most actively traded stocks.
 Use this to get a pulse on what the market is trading today.`,
       inputSchema: z.object({
         type: z.enum(['gainers', 'losers', 'active']).describe('"gainers" for top price gainers, "losers" for top losers, "active" for most actively traded by volume'),
-      }),
+      }).meta({ examples: [{ type: 'gainers' }] }),
       execute: async ({ type }) => {
         switch (type) {
           case 'gainers':
