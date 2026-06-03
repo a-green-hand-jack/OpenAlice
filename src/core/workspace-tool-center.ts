@@ -26,6 +26,7 @@
 
 import type { Tool } from 'ai'
 import type { IInboxStore } from './inbox-store.js'
+import type { IEntityStore } from './entity-store.js'
 
 // ==================== Context handed to factories ====================
 
@@ -40,6 +41,10 @@ export interface WorkspaceToolContext {
   /** Shared inbox store — passed in so factories don't have to import
    *  global state and tests can swap in a memory store. */
   inboxStore: IInboxStore
+  /** Shared entity store — the durable cross-workspace tracked-index that
+   *  entity_upsert / entity_search read and write. Same injection rationale
+   *  as inboxStore. */
+  entityStore: IEntityStore
 }
 
 // ==================== Factory shape ====================

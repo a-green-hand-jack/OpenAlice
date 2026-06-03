@@ -26,6 +26,7 @@ import type { Tool } from 'ai'
 import type { ToolCenter } from '../core/tool-center.js'
 import type { WorkspaceToolCenter } from '../core/workspace-tool-center.js'
 import type { IInboxStore } from '../core/inbox-store.js'
+import type { IEntityStore } from '../core/entity-store.js'
 import type { WorkspaceService } from '../workspaces/service.js'
 import { extractMcpShape, wrapToolExecute } from '../core/mcp-export.js'
 import { CLI_COMMANDS, mappedToolNames } from './cli-commands.js'
@@ -34,6 +35,10 @@ export interface CliGatewayDeps {
   toolCenter: ToolCenter
   workspaceToolCenter: WorkspaceToolCenter
   inboxStore: IInboxStore
+  /** Threaded through so workspace-scoped tools can be built; entity tools
+   *  stay off the CLI surface (not in CLI_COMMANDS) but the build context
+   *  still needs the store. */
+  entityStore: IEntityStore
   /** Lazy — WorkspaceService is created after McpPlugin starts. */
   getWorkspaceService: () => WorkspaceService | null
 }
@@ -42,7 +47,7 @@ type WsMeta = { id: string; tag: string }
 
 /** Mount /cli/:wsId/* onto an existing Hono app (the MCP server's app). */
 export function registerCliRoutes(app: Hono, deps: CliGatewayDeps): void {
-  const { toolCenter, workspaceToolCenter, inboxStore, getWorkspaceService } = deps
+  const { toolCenter, workspaceToolCenter, inboxStore, entityStore, getWorkspaceService } = deps
 
   /** Resolve + validate the workspace from the URL path. */
   const resolveWs = (wsId: string): { meta: WsMeta } | { error: 'unavailable' | 'unknown' } => {
@@ -61,6 +66,7 @@ export function registerCliRoutes(app: Hono, deps: CliGatewayDeps): void {
       workspaceId: ws.id,
       workspaceLabel: ws.tag,
       inboxStore,
+      entityStore,
     })
     return wsTools[name] ?? null
   }

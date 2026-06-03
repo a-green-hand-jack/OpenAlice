@@ -7,6 +7,7 @@ import type { Plugin, EngineContext } from '../core/types.js'
 import type { ToolCenter } from '../core/tool-center.js'
 import type { WorkspaceToolCenter } from '../core/workspace-tool-center.js'
 import type { IInboxStore } from '../core/inbox-store.js'
+import type { IEntityStore } from '../core/entity-store.js'
 import type { WorkspaceService } from '../workspaces/service.js'
 import { extractMcpShape, wrapToolExecute } from '../core/mcp-export.js'
 import { registerCliRoutes } from './cli.js'
@@ -20,8 +21,8 @@ import { registerCliRoutes } from './cli.js'
  *                           identity required.
  *
  *   GET/POST /mcp/:wsId     Workspace-scoped surface (WorkspaceToolCenter).
- *                           Just inbox_push for now; future tools that need
- *                           workspaceId close over it via the factory
+ *                           inbox_push + entity_upsert / entity_search; tools
+ *                           that need workspaceId close over it via the factory
  *                           pattern. The URL path IS the identity carrier —
  *                           agent never sees or supplies workspaceId, and
  *                           bootstrap.sh bakes the per-workspace URL into
@@ -45,6 +46,7 @@ export class McpPlugin implements Plugin {
     private port: number,
     private workspaceToolCenter: WorkspaceToolCenter,
     private inboxStore: IInboxStore,
+    private entityStore: IEntityStore,
     /** Lazy because WorkspaceService is created later (deferred during web
      *  plugin start); McpPlugin starts earlier. Resolved at request time. */
     private getWorkspaceService: () => WorkspaceService | null,
@@ -54,6 +56,7 @@ export class McpPlugin implements Plugin {
     const toolCenter = this.toolCenter
     const workspaceToolCenter = this.workspaceToolCenter
     const inboxStore = this.inboxStore
+    const entityStore = this.entityStore
     const getWorkspaceService = this.getWorkspaceService
 
     /** Build a per-request McpServer with the global ToolCenter catalog. */
@@ -78,6 +81,7 @@ export class McpPlugin implements Plugin {
         workspaceId: wsId,
         workspaceLabel: wsLabel,
         inboxStore,
+        entityStore,
       })
       const mcp = new McpServer({ name: 'open-alice-workspace', version: '1.0.0' })
       for (const [name, t] of Object.entries(tools)) {
@@ -128,6 +132,7 @@ export class McpPlugin implements Plugin {
       toolCenter,
       workspaceToolCenter,
       inboxStore,
+      entityStore,
       getWorkspaceService,
     })
 

@@ -32,6 +32,9 @@ import { createInboxStore } from './core/inbox-store.js'
 import { ToolCenter } from './core/tool-center.js'
 import { WorkspaceToolCenter } from './core/workspace-tool-center.js'
 import { inboxPushFactory } from './tool/inbox-push.js'
+import { createEntityStore } from './core/entity-store.js'
+import { entityUpsertFactory } from './tool/entity-upsert.js'
+import { entitySearchFactory } from './tool/entity-search.js'
 import { AgentWorkRunner } from './core/agent-work.js'
 import { GenerateRouter } from './core/ai-provider-manager.js'
 import { VercelAIProvider } from './ai-providers/vercel-ai-sdk/vercel-provider.js'
@@ -89,6 +92,8 @@ async function main() {
 
   const workspaceToolCenter = new WorkspaceToolCenter()
   workspaceToolCenter.register(inboxPushFactory)
+  workspaceToolCenter.register(entityUpsertFactory)
+  workspaceToolCenter.register(entitySearchFactory)
 
   // ==================== UTA SDK (HTTP boundary) ====================
   //
@@ -223,6 +228,10 @@ async function main() {
 
   const inboxStore = createInboxStore()
 
+  // ==================== Entity store (durable cross-workspace tracked-index) ====================
+
+  const entityStore = createEntityStore()
+
   // ==================== AgentWork runner — shared by all autonomous trigger sources ====================
   //
   // Drives the AI loop via GenerateRouter directly (no AgentCenter
@@ -326,6 +335,7 @@ async function main() {
       config.mcp.port,
       workspaceToolCenter,
       inboxStore,
+      entityStore,
       () => workspaceServiceRef.current,
     ))
   }

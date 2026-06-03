@@ -23,6 +23,7 @@ function makeApp(): Hono {
     toolCenter,
     workspaceToolCenter: new WorkspaceToolCenter(),
     inboxStore: {} as never,
+    entityStore: {} as never,
     getWorkspaceService: () => fakeSvc as never,
   }
 
