@@ -18,7 +18,7 @@
  * SIGTERMs + respawns UTA without restarting Alice.
  */
 
-import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { watch, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -71,6 +71,27 @@ export function spawnChild(spec: SpawnSpec): ChildProcess {
     child.stderr?.on('data', (buf: Buffer) => writePrefixed(process.stderr, buf, tag))
   }
   return child
+}
+
+/**
+ * Kill a child *and its descendants*, cross-platform.
+ *
+ * On Windows the dev children spawn through a shell (see spawnChild), so the
+ * ChildProcess handle points at the `cmd.exe` wrapper — `child.kill()` reaps
+ * the wrapper but orphans the real `node`/`tsx` grandchild, which keeps
+ * holding its port. That breaks UTA restart (the fresh UTA can't bind the
+ * still-occupied port) and leaves zombies on shutdown. `taskkill /T` walks
+ * the whole process tree; `/F` is the only reliable kill for a detached
+ * console child. POSIX has no wrapper, so a direct signal is correct and
+ * keeps graceful SIGTERM (which taskkill /F can't offer anyway).
+ */
+export function killTree(child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM'): void {
+  if (child.pid == null) return
+  if (process.platform === 'win32') {
+    try { spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F']) } catch { /* already gone */ }
+  } else {
+    try { child.kill(signal) } catch { /* already gone */ }
+  }
 }
 
 function writePrefixed(stream: NodeJS.WriteStream, buf: Buffer, tag: string): void {
@@ -144,13 +165,13 @@ export function installCascadeShutdown(opts: CascadeOpts): CascadeControl {
     stopping = true
     for (const c of children) {
       if (c.exitCode === null && !c.killed) {
-        try { c.kill('SIGTERM') } catch { /* noop */ }
+        killTree(c, 'SIGTERM')
       }
     }
     setTimeout(() => {
       for (const c of children) {
         if (c.exitCode === null && !c.killed) {
-          try { c.kill('SIGKILL') } catch { /* noop */ }
+          killTree(c, 'SIGKILL')
         }
       }
       process.exit(0)
@@ -234,10 +255,10 @@ export class UTAController {
       const old = this.child
       this.cascade?.expectExit(old)
       const exited = new Promise<void>((resolve) => old.once('exit', () => resolve()))
-      try { old.kill('SIGTERM') } catch { /* noop */ }
+      killTree(old, 'SIGTERM')
       await Promise.race([exited, sleep(8_000)])
       if (old.exitCode === null) {
-        try { old.kill('SIGKILL') } catch { /* noop */ }
+        killTree(old, 'SIGKILL')
         await exited
       }
 
