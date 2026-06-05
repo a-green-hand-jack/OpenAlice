@@ -1,8 +1,12 @@
+import { execFile } from 'node:child_process';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
-import type { CliAdapter, SpawnContext, WorkspaceAiCred } from '../cli-adapter.js';
+import type { CliAdapter, OnDiskSession, SpawnContext, WorkspaceAiCred } from '../cli-adapter.js';
 import { readWorkspaceFile, writeWorkspaceFile } from '../file-service.js';
+
+const execFileAsync = promisify(execFile);
 
 const OPENCODE_CONFIG_PATH = 'opencode.json';
 const OPENCODE_PROVIDER_NAME = 'workspace';
@@ -51,17 +55,16 @@ const OPENCODE_SDK_NPM = '@ai-sdk/openai-compatible';
  *     top-level `-c/--continue` (last session in cwd) and `-s/--session <id>`
  *     (specific session) — verified in `opencode --help` 1.16.0. So resume is a
  *     flag (like claude's `--resume`), not a subcommand (like codex's `resume`).
- *     Both resumeLast and resumeById are on. resumeById only fires when
- *     OpenAlice has captured a session id; with transcriptDiscovery 'none'
- *     that's not auto-harvested yet — `opencode session` / `opencode export`
- *     are the future subprocess-discovery path. Same posture as codex.
+ *     Both resumeLast and resumeById are on — by-id resume is LIVE via
+ *     transcriptDiscovery 'subprocess' (see below).
  *
- *   - Transcript discovery: 'none'. opencode stores sessions under
- *     `~/.local/share/opencode/storage` keyed by a per-project hash —
- *     global-rooted and internally churny, so fs-watch is degenerate (same
- *     reason codex uses 'none'). Session identity is better harvested from the
- *     `--format json` JSONL stream on the future headless/auto-run path than by
- *     reverse-engineering the on-disk layout.
+ *   - Transcript discovery: 'subprocess'. opencode sessions are SQLite rows
+ *     (not per-cwd files), and it mints its own `ses_…` ids with no way for the
+ *     launcher to assign one at spawn (verified against v1.16.0 source: the
+ *     public `POST /session` schema omits `id`). So `listOnDisk` shells out to
+ *     `opencode session list --format json` (cwd-scoped) post-spawn; the
+ *     transcript watcher polls it, captures the new session's id, and persists
+ *     it as resumeHint → `opencode --session <id>` resumes by id.
  */
 export const opencodeAdapter: CliAdapter = {
   id: 'opencode',
@@ -72,7 +75,12 @@ export const opencodeAdapter: CliAdapter = {
     parallelPerCwd: true,
     resumeLast: true,
     resumeById: true,
-    transcriptDiscovery: 'none',
+    // by-id resume: opencode can't be assigned an id at spawn and its sessions
+    // are SQLite rows (no per-cwd files to fs-watch), but `opencode session
+    // list --format json` is cwd-scoped — so the watcher polls `listOnDisk`
+    // post-spawn, captures the id, persists it as resumeHint, and
+    // `opencode --session <id>` (composeCommand) resumes by id.
+    transcriptDiscovery: 'subprocess',
   },
 
   composeCommand(_base: readonly string[], ctx: SpawnContext): readonly string[] {
@@ -171,5 +179,49 @@ export const opencodeAdapter: CliAdapter = {
     }
     if (baseUrl === null && apiKey === null && model === null) return null;
     return { baseUrl, apiKey, model };
+  },
+
+  /**
+   * List opencode sessions for THIS workspace cwd, for the watcher's post-spawn
+   * id capture. opencode stores sessions as SQLite rows (no per-cwd files), but
+   * `opencode session list --format json` is cwd-scoped — so we shell out with
+   * cwd set to the workspace. Hermetic env (same disables as composeEnv).
+   * Failure (binary missing / bad json) degrades to [] → resume falls back to
+   * `--continue`.
+   */
+  async listOnDisk(cwd: string): Promise<readonly OnDiskSession[]> {
+    let stdout: string;
+    try {
+      const res = await execFileAsync('opencode', ['session', 'list', '--format', 'json'], {
+        cwd,
+        env: {
+          ...process.env,
+          OPENCODE_DISABLE_MODELS_FETCH: '1',
+          OPENCODE_DISABLE_AUTOUPDATE: '1',
+          OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
+        },
+        timeout: 10_000,
+        maxBuffer: 8 * 1024 * 1024,
+      });
+      stdout = res.stdout;
+    } catch {
+      return [];
+    }
+    let rows: unknown;
+    try {
+      rows = JSON.parse(stdout);
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(rows)) return [];
+    const out: OnDiskSession[] = [];
+    for (const r of rows as Array<Record<string, unknown>>) {
+      const id = r['id'];
+      if (typeof id !== 'string') continue;
+      const ts = r['updated'] ?? r['created'];
+      const mtime = typeof ts === 'number' ? new Date(ts).toISOString() : String(ts ?? '');
+      out.push({ sessionId: id, file: '', mtime, sizeBytes: 0 });
+    }
+    return out;
   },
 };

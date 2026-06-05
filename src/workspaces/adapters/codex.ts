@@ -1,9 +1,10 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createReadStream, existsSync, readFileSync } from 'node:fs';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { createInterface } from 'node:readline';
 
-import type { BootstrapContext, CliAdapter, SpawnContext, WorkspaceAiCred } from '../cli-adapter.js';
+import type { BootstrapContext, CliAdapter, OnDiskSession, SpawnContext, WorkspaceAiCred } from '../cli-adapter.js';
 import { readWorkspaceFile, writeWorkspaceFile } from '../file-service.js';
 
 const CODEX_CONFIG_PATH = '.codex/config.toml';
@@ -59,7 +60,12 @@ export const codexAdapter: CliAdapter = {
     parallelPerCwd: true,
     resumeLast: true,
     resumeById: true,
-    transcriptDiscovery: 'none',
+    // by-id resume (claude-level): codex can't be assigned an id at spawn, so
+    // the watcher polls `listOnDisk` post-spawn — codex writes a global
+    // `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` whose line-1 `session_meta`
+    // carries { id, cwd }, so we attribute by cwd and persist the id as
+    // resumeHint. Then `codex resume <id>` (composeCommand) resumes by id.
+    transcriptDiscovery: 'subprocess',
   },
 
   /**
@@ -224,7 +230,93 @@ export const codexAdapter: CliAdapter = {
   async bootstrap(ctx: BootstrapContext): Promise<void> {
     await ensureTrustedProject(ctx.cwd);
   },
+
+  /**
+   * List codex sessions belonging to THIS workspace cwd, for the transcript
+   * watcher's post-spawn id capture (codex can't be assigned an id at spawn).
+   * Sessions live at `$CODEX_HOME/sessions` (override mode) or
+   * `~/.codex/sessions` (default), partitioned `YYYY/MM/DD`, GLOBAL across all
+   * cwds. We read each rollout's line-1 `session_meta { id, cwd }` (written at
+   * session start) and keep only those whose cwd matches — scanning just the
+   * newest dated leaves since a just-spawned session is today's.
+   */
+  async listOnDisk(cwd: string): Promise<readonly OnDiskSession[]> {
+    const root = existsSync(join(cwd, '.codex'))
+      ? join(cwd, '.codex', 'sessions')
+      : join(homedir(), '.codex', 'sessions');
+    const target = resolve(cwd);
+    const out: OnDiskSession[] = [];
+    for (const leaf of await recentDatedLeaves(root, 2)) {
+      let files: string[];
+      try {
+        files = await readdir(leaf);
+      } catch {
+        continue;
+      }
+      for (const f of files) {
+        if (!CODEX_ROLLOUT_RE.test(f)) continue;
+        const fp = join(leaf, f);
+        try {
+          const meta = JSON.parse(await firstLine(fp)) as {
+            type?: string;
+            payload?: { id?: string; cwd?: string };
+          };
+          const id = meta.payload?.id;
+          const rolloutCwd = meta.payload?.cwd;
+          if (meta.type !== 'session_meta' || typeof id !== 'string' || typeof rolloutCwd !== 'string') continue;
+          if (resolve(rolloutCwd) !== target) continue;
+          const st = await stat(fp);
+          out.push({ sessionId: id, file: fp, mtime: st.mtime.toISOString(), sizeBytes: st.size });
+        } catch {
+          // partial / unreadable rollout — skip
+        }
+      }
+    }
+    return out;
+  },
 };
+
+const CODEX_ROLLOUT_RE = /^rollout-.*\.jsonl$/;
+
+/** Newest `count` `YYYY/MM/DD` leaf dirs under a date-partitioned root. A
+ *  just-spawned session is in today's leaf, so the newest few suffice. */
+async function recentDatedLeaves(root: string, count: number): Promise<string[]> {
+  const newestNumeric = async (dir: string, n: number): Promise<string[]> => {
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch {
+      return [];
+    }
+    return names
+      .filter((x) => /^\d+$/.test(x))
+      .sort()
+      .reverse()
+      .slice(0, n)
+      .map((x) => join(dir, x));
+  };
+  const leaves: string[] = [];
+  for (const y of await newestNumeric(root, 1)) {
+    for (const m of await newestNumeric(y, 1)) {
+      for (const d of await newestNumeric(m, count)) leaves.push(d);
+    }
+  }
+  return leaves;
+}
+
+/** First line only — codex rollout line-1 (session_meta) can be many KB
+ *  (it embeds the full base instructions), so stream rather than readFile. */
+async function firstLine(fp: string): Promise<string> {
+  const input = createReadStream(fp, { encoding: 'utf8' });
+  const rl = createInterface({ input, crlfDelay: Infinity });
+  try {
+    for await (const line of rl) return line;
+    return '';
+  } finally {
+    rl.close();
+    input.destroy();
+  }
+}
 
 /**
  * Add (or no-op if present) a `[projects."<abs>"] trust_level = "trusted"`

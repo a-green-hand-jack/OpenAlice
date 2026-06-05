@@ -6,7 +6,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -154,6 +154,23 @@ describe('codexAdapter AI-config', () => {
 
   it('readAiConfig returns null when no files exist', async () => {
     expect(await codexAdapter.readAiConfig!(dir)).toBeNull();
+  });
+
+  it('listOnDisk returns only rollouts whose session_meta cwd matches this workspace', async () => {
+    // Workspace has its own .codex → adapter reads <cwd>/.codex/sessions (not ~).
+    const leaf = join(dir, '.codex', 'sessions', '2026', '06', '05');
+    await mkdir(leaf, { recursive: true });
+    const mine = { type: 'session_meta', payload: { id: 'mine-uuid-0001', cwd: dir } };
+    const other = { type: 'session_meta', payload: { id: 'other-uuid-0002', cwd: '/some/other/workspace' } };
+    // line-1 is a (potentially huge) session_meta; subsequent lines are turns.
+    await writeFile(join(leaf, 'rollout-2026-06-05T10-00-00-mine.jsonl'), JSON.stringify(mine) + '\n{"type":"turn"}\n');
+    await writeFile(join(leaf, 'rollout-2026-06-05T11-00-00-other.jsonl'), JSON.stringify(other) + '\n');
+    const found = await codexAdapter.listOnDisk!(dir);
+    expect(found.map((s) => s.sessionId)).toEqual(['mine-uuid-0001']);
+  });
+
+  it('listOnDisk returns [] when there are no sessions', async () => {
+    expect(await codexAdapter.listOnDisk!(dir)).toEqual([]);
   });
 });
 

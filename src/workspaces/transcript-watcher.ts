@@ -2,7 +2,7 @@ import { mkdir, readdir, stat } from 'node:fs/promises';
 import { watch, type FSWatcher } from 'node:fs';
 import { basename, join } from 'node:path';
 
-import type { CliAdapter } from './cli-adapter.js';
+import type { CliAdapter, OnDiskSession } from './cli-adapter.js';
 import type { Logger } from './logger.js';
 import type { PersistentSession } from './persistent-session.js';
 import type { SessionRegistry } from './session-registry.js';
@@ -10,7 +10,8 @@ import type { SessionRegistry } from './session-registry.js';
 interface Pending {
   readonly session: PersistentSession;
   readonly adapter: CliAdapter;
-  /** Files in the transcript dir at register time — ignored when matching. */
+  /** Identifiers (fs-watch: filenames; subprocess: session ids) present at
+   *  register time — ignored when matching, so we only claim what's NEW. */
   readonly existingBefore: ReadonlySet<string>;
 }
 
@@ -20,6 +21,24 @@ interface PerKey {
   readonly watcher: FSWatcher;
   readonly pending: Pending[];
 }
+
+/** subprocess-discovery (codex/opencode): no fs event for a DB/global-dir
+ *  write, so we poll `adapter.listOnDisk(cwd)` until each pending session's id
+ *  appears, then persist it as the record's resumeHint (same channel fs-watch
+ *  uses). Keyed by (wsId, cwd). */
+interface PollEntry {
+  readonly cwd: string;
+  readonly adapter: CliAdapter;
+  readonly pending: Pending[];
+  timer: ReturnType<typeof setInterval> | null;
+  readonly startedAtMs: number;
+}
+
+const POLL_INTERVAL_MS = 1500;
+// Give up after this long unresolved — the session never produced a
+// discoverable id (e.g. opened then idle before any turn). Resume then falls
+// back to `--continue`/last, exactly as today. Not load-bearing.
+const POLL_MAX_MS = 90_000;
 
 function watchKey(wsId: string, dir: string): string {
   return `${wsId}\x00${dir}`;
@@ -46,6 +65,7 @@ function watchKey(wsId: string, dir: string): string {
  */
 export class TranscriptWatcher {
   private readonly entries = new Map<string, PerKey>();
+  private readonly pollEntries = new Map<string, PollEntry>();
 
   constructor(
     private readonly logger: Logger,
@@ -58,7 +78,12 @@ export class TranscriptWatcher {
   ) {}
 
   async register(session: PersistentSession, adapter: CliAdapter): Promise<void> {
-    if (adapter.capabilities.transcriptDiscovery !== 'fs-watch') return;
+    const discovery = adapter.capabilities.transcriptDiscovery;
+    if (discovery === 'subprocess') {
+      await this.registerSubprocess(session, adapter);
+      return;
+    }
+    if (discovery !== 'fs-watch') return;
     if (!adapter.transcriptDir || !adapter.transcriptFileRe || !adapter.extractSessionId) {
       this.logger.warn('transcript_watch.adapter_missing_fs_methods', { adapter: adapter.id });
       return;
@@ -147,6 +172,99 @@ export class TranscriptWatcher {
     });
   }
 
+  /**
+   * subprocess discovery: snapshot existing session ids, then poll
+   * `listOnDisk(cwd)` until each pending session's NEW id shows up. Used by
+   * codex (global session dir, attributed by reading each rollout's cwd) and
+   * opencode (SQLite-backed, listed cwd-scoped via the CLI) — neither emits an
+   * fs event we could watch.
+   */
+  private async registerSubprocess(session: PersistentSession, adapter: CliAdapter): Promise<void> {
+    if (!adapter.listOnDisk) {
+      this.logger.warn('transcript_watch.adapter_missing_list_on_disk', { adapter: adapter.id });
+      return;
+    }
+    let existing: ReadonlySet<string>;
+    try {
+      existing = new Set((await adapter.listOnDisk(session.cwd)).map((s) => s.sessionId));
+    } catch (err) {
+      this.logger.warn('transcript_watch.list_on_disk_failed', { adapter: adapter.id, cwd: session.cwd, err });
+      existing = new Set();
+    }
+    const key = watchKey(session.wsId, session.cwd);
+    let entry = this.pollEntries.get(key);
+    if (!entry) {
+      entry = { cwd: session.cwd, adapter, pending: [], timer: null, startedAtMs: Date.now() };
+      this.pollEntries.set(key, entry);
+    }
+    entry.pending.push({ session, adapter, existingBefore: existing });
+    if (!entry.timer) {
+      entry.timer = setInterval(() => void this.pollOnce(key), POLL_INTERVAL_MS);
+    }
+    this.logger.info('transcript_watch.subprocess_registered', {
+      wsId: session.wsId,
+      recordId: session.recordId,
+      agent: adapter.id,
+      preexisting: existing.size,
+      pending: entry.pending.length,
+    });
+  }
+
+  /** One poll tick: assign each NEW (since-register) session id to the oldest
+   *  unresolved pending in spawn order — same heuristic as the fs-watch path. */
+  private async pollOnce(key: string): Promise<void> {
+    const entry = this.pollEntries.get(key);
+    if (!entry) return;
+    const live = entry.pending.filter((p) => p.session.agentSessionId === null);
+    entry.pending.length = 0;
+    entry.pending.push(...live);
+    if (entry.pending.length === 0 || Date.now() - entry.startedAtMs > POLL_MAX_MS) {
+      this.stopPoll(key);
+      return;
+    }
+    let list: readonly OnDiskSession[];
+    try {
+      list = await entry.adapter.listOnDisk!(entry.cwd);
+    } catch (err) {
+      this.logger.warn('transcript_watch.poll_list_failed', { agent: entry.adapter.id, cwd: entry.cwd, err });
+      return;
+    }
+    const byOldest = [...list].sort((a, b) => a.mtime.localeCompare(b.mtime));
+    const claimedThisRound = new Set<string>();
+    for (const p of entry.pending) {
+      if (p.session.agentSessionId !== null) continue;
+      const pick = byOldest.find((s) => !p.existingBefore.has(s.sessionId) && !claimedThisRound.has(s.sessionId));
+      if (!pick) continue;
+      p.session.setAgentSessionId(pick.sessionId);
+      claimedThisRound.add(pick.sessionId);
+      this.logger.info('transcript.session.captured', {
+        wsId: p.session.wsId,
+        recordId: p.session.recordId,
+        agent: p.adapter.id,
+        agentSessionId: pick.sessionId,
+      });
+      if (this.sessionRegistry) {
+        void this.sessionRegistry
+          .update(p.session.wsId, p.session.recordId, {
+            resumeHint: { kind: 'agent-session-id', value: pick.sessionId },
+          })
+          .catch((err) =>
+            this.logger.warn('transcript_watch.registry_update_failed', {
+              wsId: p.session.wsId,
+              id: p.session.recordId,
+              err,
+            }),
+          );
+      }
+    }
+  }
+
+  private stopPoll(key: string): void {
+    const entry = this.pollEntries.get(key);
+    if (entry?.timer) clearInterval(entry.timer);
+    this.pollEntries.delete(key);
+  }
+
   /** Called when a session is disposed OR resolved. Closes idle watchers. */
   unregister(session: PersistentSession): void {
     for (const [key, entry] of this.entries.entries()) {
@@ -162,6 +280,12 @@ export class TranscriptWatcher {
         this.entries.delete(key);
       }
     }
+    for (const [key, entry] of this.pollEntries.entries()) {
+      const idx = entry.pending.findIndex((p) => p.session === session);
+      if (idx < 0) continue;
+      entry.pending.splice(idx, 1);
+      if (entry.pending.length === 0) this.stopPoll(key);
+    }
   }
 
   disposeAll(): void {
@@ -173,6 +297,10 @@ export class TranscriptWatcher {
       }
     }
     this.entries.clear();
+    for (const entry of this.pollEntries.values()) {
+      if (entry.timer) clearInterval(entry.timer);
+    }
+    this.pollEntries.clear();
   }
 
   private async onEvent(key: string, _event: string, filename: string): Promise<void> {
