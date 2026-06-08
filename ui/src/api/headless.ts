@@ -6,7 +6,7 @@ export interface HeadlessTaskRecord {
   taskId: string
   wsId: string
   agent: string
-  promptPreview: string
+  prompt: string
   status: HeadlessTaskStatus
   startedAt: number
   finishedAt?: number

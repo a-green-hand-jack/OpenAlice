@@ -27,6 +27,15 @@ function fmtDuration(ms?: number): string {
 export function AutomationRunsSection() {
   const [tasks, setTasks] = useState<HeadlessTaskRecord[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+
+  const toggle = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
 
   const load = useCallback(async () => {
     try {
@@ -78,8 +87,20 @@ export function AutomationRunsSection() {
                 </span>
               </td>
               <td className="whitespace-nowrap py-2 pr-4">{t.agent}</td>
-              <td className="max-w-md py-2 pr-4">
-                <span className="line-clamp-2">{t.promptPreview}</span>
+              <td className="max-w-xl py-2 pr-4">
+                <button
+                  type="button"
+                  onClick={() => toggle(t.taskId)}
+                  className="block w-full cursor-pointer text-left"
+                  title={expanded.has(t.taskId) ? 'Collapse' : 'Expand'}
+                >
+                  <span className={expanded.has(t.taskId) ? 'whitespace-pre-wrap break-words' : 'line-clamp-2'}>
+                    {t.prompt}
+                  </span>
+                  <span className="mt-0.5 block text-xs text-muted">
+                    {expanded.has(t.taskId) ? '▴ collapse' : '▾ expand'}
+                  </span>
+                </button>
                 {t.error ? <div className="mt-0.5 text-xs text-red-400">{t.error}</div> : null}
               </td>
               <td className="whitespace-nowrap py-2 pr-4 font-mono text-xs text-muted">

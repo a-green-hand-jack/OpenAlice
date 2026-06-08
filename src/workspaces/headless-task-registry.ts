@@ -25,8 +25,8 @@ export interface HeadlessTaskRecord {
   readonly taskId: string
   readonly wsId: string
   readonly agent: string
-  /** Truncated task prompt — enough to identify the run in the panel. */
-  readonly promptPreview: string
+  /** The task prompt (the run's instruction) — shown collapsible in the panel. */
+  readonly prompt: string
   status: HeadlessTaskStatus
   readonly startedAt: number
   finishedAt?: number
@@ -38,7 +38,6 @@ export interface HeadlessTaskRecord {
 }
 
 const MAX_RECORDS = 200 // prune oldest FINISHED records past this (bounds the file)
-const PROMPT_PREVIEW_CHARS = 280
 
 export class HeadlessTaskRegistry {
   private tasks: HeadlessTaskRecord[] = [] // newest-last in memory
@@ -89,7 +88,7 @@ export class HeadlessTaskRegistry {
       taskId: randomUUID(),
       wsId: input.wsId,
       agent: input.agent,
-      promptPreview: input.prompt.slice(0, PROMPT_PREVIEW_CHARS),
+      prompt: input.prompt,
       status: 'running',
       startedAt: input.startedAt,
     }

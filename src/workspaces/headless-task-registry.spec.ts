@@ -56,10 +56,10 @@ describe('HeadlessTaskRegistry', () => {
     expect(reg.list({ limit: 1 }).length).toBe(1)
   })
 
-  it('truncates the prompt preview', async () => {
+  it('stores the full task prompt (not truncated — collapsible in the UI)', async () => {
     const reg = await HeadlessTaskRegistry.load(path, noopLogger)
     const a = await reg.create({ wsId: 'w1', agent: 'codex', prompt: 'x'.repeat(1000), startedAt: 1 })
-    expect(a.promptPreview.length).toBeLessThanOrEqual(280)
+    expect(a.prompt.length).toBe(1000)
   })
 
   it('persists completed records across reload', async () => {
