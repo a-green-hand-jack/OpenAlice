@@ -20,7 +20,7 @@ import {
   type AgentId,
   type SavedCredential,
 } from './api'
-import { api, type Preset } from '../../api'
+import { api, type Preset, type WireShape } from '../../api'
 import { baseUrlToVendor, vendorPreset, presetModels } from '../../lib/presetHelpers'
 import { ModelCombobox } from '../credentials/PresetFields'
 import { useTestGate } from '../../lib/useTestGate'
@@ -51,6 +51,8 @@ interface FormState {
   baseUrl: string
   apiKey: string
   model: string
+  /** The wire protocol — drives the test + how the adapter is configured. */
+  wireShape: WireShape
   wireApi: 'chat' | 'responses'
   // Claude-only: which header carries the key. 'x-api-key' is Anthropic's
   // first-party default; 'bearer' (Authorization: Bearer) is what most
@@ -59,20 +61,23 @@ interface FormState {
   authMode: 'x-api-key' | 'bearer'
 }
 
-// codex-cli ≥ 0.130 hard-rejects `wire_api = "chat"`. The AgentConfig schema
-// still carries `wireApi` (the backend writer / file IO is shared with other
-// codex-shaped configs), but this modal locks it to "responses" for every
-// codex provider — a stale 'chat' loaded from disk is normalized on display,
-// so the next Save silently corrects it.
-// Ref: github.com/openai/codex/discussions/7782
-const EMPTY_FORM: FormState = { baseUrl: '', apiKey: '', model: '', wireApi: 'responses', authMode: 'x-api-key' }
+/** The wire shape each agent defaults to when nothing else specifies one. */
+const DEFAULT_WIRE_BY_TAB: Record<Tab, WireShape> = {
+  claude: 'anthropic',
+  codex: 'openai-responses', // codex is Responses-only (hard-rejects chat)
+  opencode: 'openai-chat',
+  pi: 'openai-chat',
+}
 
-function configToForm(cfg: AgentConfig | null): FormState {
-  if (!cfg) return EMPTY_FORM
+const EMPTY_FORM: FormState = { baseUrl: '', apiKey: '', model: '', wireShape: 'anthropic', wireApi: 'responses', authMode: 'x-api-key' }
+
+function configToForm(cfg: AgentConfig | null, tab: Tab): FormState {
+  if (!cfg) return { ...EMPTY_FORM, wireShape: DEFAULT_WIRE_BY_TAB[tab] }
   return {
     baseUrl: cfg.baseUrl ?? '',
     apiKey: cfg.apiKey ?? '',
     model: cfg.model ?? '',
+    wireShape: cfg.wireShape ?? DEFAULT_WIRE_BY_TAB[tab],
     wireApi: 'responses',
     authMode: cfg.authMode === 'bearer' ? 'bearer' : 'x-api-key',
   }
@@ -83,6 +88,7 @@ function formToConfig(form: FormState, agent: AgentId): AgentConfig {
     baseUrl: form.baseUrl.trim() || null,
     apiKey: form.apiKey.trim() || null,
     model: form.model.trim() || null,
+    wireShape: form.wireShape,
   }
   if (agent === 'codex') {
     return { ...cfg, wireApi: form.wireApi }
@@ -90,7 +96,7 @@ function formToConfig(form: FormState, agent: AgentId): AgentConfig {
   if (agent === 'claude') {
     return { ...cfg, authMode: form.authMode }
   }
-  // opencode: plain baseUrl/apiKey/model — no wireApi, no authMode.
+  // opencode / pi: baseUrl/apiKey/model + wireShape.
   return cfg
 }
 
@@ -105,7 +111,7 @@ function testKey(form: FormState, agent: AgentId): string {
     form.baseUrl.trim(),
     form.apiKey.trim(),
     form.model.trim(),
-    agent === 'codex' ? form.wireApi : '',
+    form.wireShape,
     agent === 'claude' ? form.authMode : '',
   ].join('|')
 }
@@ -140,10 +146,10 @@ export function WorkspaceAIConfigModal({ wsId, onClose }: Props) {
       .then(([creds, b]) => {
         setCredentials(creds)
         setBundle(b)
-        setClaudeForm(configToForm(b.claude))
-        setCodexForm(configToForm(b.codex))
-        setOpencodeForm(configToForm(b.opencode))
-        setPiForm(configToForm(b.pi))
+        setClaudeForm(configToForm(b.claude, 'claude'))
+        setCodexForm(configToForm(b.codex, 'codex'))
+        setOpencodeForm(configToForm(b.opencode, 'opencode'))
+        setPiForm(configToForm(b.pi, 'pi'))
       })
       .catch((err: Error) => setError(err.message))
     // Presets drive the model-id suggestions (anti-typo) — load once.
@@ -172,12 +178,12 @@ export function WorkspaceAIConfigModal({ wsId, onClose }: Props) {
   const dirty = useMemo(() => {
     if (!bundle) return false
     const saved = bundle[tab]
-    const savedForm = configToForm(saved)
+    const savedForm = configToForm(saved, tab)
     return (
       savedForm.baseUrl !== form.baseUrl ||
       savedForm.apiKey !== form.apiKey ||
       savedForm.model !== form.model ||
-      (tab === 'codex' && savedForm.wireApi !== form.wireApi) ||
+      savedForm.wireShape !== form.wireShape ||
       (tab === 'claude' && savedForm.authMode !== form.authMode)
     )
   }, [bundle, form, tab])
@@ -198,6 +204,9 @@ export function WorkspaceAIConfigModal({ wsId, onClose }: Props) {
       baseUrl: cred.baseUrl ?? '',
       apiKey: cred.apiKey ?? '',
       model: defaultModel,
+      // The credential's stored wire shape drives the test + the adapter config;
+      // fall back to the tab's native shape for pre-wireShape credentials.
+      wireShape: cred.wireShape ?? DEFAULT_WIRE_BY_TAB[tab],
       authMode: bearer ? 'bearer' : 'x-api-key',
     })
     gate.reset() // a new provider invalidates any prior test verdict
@@ -234,6 +243,7 @@ export function WorkspaceAIConfigModal({ wsId, onClose }: Props) {
         apiKey: form.apiKey.trim(),
         ...(form.baseUrl.trim() ? { baseUrl: form.baseUrl.trim() } : {}),
         agent: tab,
+        wireShape: form.wireShape,
       })
       setCredentials(await listCredentials())
       setOfferSaveCred(false)
@@ -253,7 +263,7 @@ export function WorkspaceAIConfigModal({ wsId, onClose }: Props) {
       await saveAgentConfig(wsId, tab, { baseUrl: null, apiKey: null, model: null })
       const fresh = await getAgentConfig(wsId)
       setBundle(fresh)
-      setForm(EMPTY_FORM)
+      setForm({ ...EMPTY_FORM, wireShape: DEFAULT_WIRE_BY_TAB[tab] })
       setSavedFlash(true)
       setTimeout(() => setSavedFlash(false), 1800)
     } catch (err) {
@@ -275,7 +285,7 @@ export function WorkspaceAIConfigModal({ wsId, onClose }: Props) {
         baseUrl: form.baseUrl.trim(),
         apiKey: form.apiKey.trim(),
         model: form.model.trim(),
-        ...(tab === 'codex' ? { wireApi: form.wireApi } : {}),
+        wireShape: form.wireShape,
         ...(tab === 'claude' ? { authMode: form.authMode } : {}),
       }),
     )

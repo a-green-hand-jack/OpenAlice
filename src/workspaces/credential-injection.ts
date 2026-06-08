@@ -37,7 +37,7 @@ export interface CredentialInjectionOverrides {
  *   - opencode / pi → neither (plain OpenAI-compatible Chat Completions)
  */
 export function credentialToWorkspaceAiCred(
-  credential: Pick<Credential, 'apiKey' | 'baseUrl'>,
+  credential: Pick<Credential, 'apiKey' | 'baseUrl' | 'wireShape'>,
   agentId: string,
   overrides: CredentialInjectionOverrides = {},
 ): WorkspaceAiCred {
@@ -45,6 +45,10 @@ export function credentialToWorkspaceAiCred(
     baseUrl: credential.baseUrl ?? null,
     apiKey: credential.apiKey ?? null,
     model: overrides.model ?? null,
+    // The credential's wire shape drives how the consuming adapter is configured
+    // (which @ai-sdk package / api field / wire_api) — so a runtime uses the
+    // shape the credential was created + tested with.
+    ...(credential.wireShape ? { wireShape: credential.wireShape } : {}),
   }
 
   if (agentId === 'claude') {

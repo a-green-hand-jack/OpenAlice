@@ -12,10 +12,7 @@ import type { WireShape } from '../../ai-providers/preset-catalog.js'
 import { getSdkAdapterInfo } from '../../ai-providers/sdk-adapters.js'
 import { testWithProfile } from '../../core/ai-config.js'
 import { resolveAnthropicAuthMode } from '../../core/credential-inference.js'
-import { probeAnthropic, probeOpenAI } from '../../workspaces/agent-probe.js'
-
-const DEFAULT_ANTHROPIC_BASE = 'https://api.anthropic.com'
-const DEFAULT_OPENAI_BASE = 'https://api.openai.com/v1'
+import { probeByWireShape } from '../../workspaces/agent-probe.js'
 
 interface ConfigRouteOpts {
   ctx?: EngineContext
@@ -222,9 +219,9 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
   })
 
   /**
-   * POST /credentials/test — probe a credential. `wireShape` selects the prober
-   * via a table (no if/else ladder): anthropic Messages, OpenAI Chat
-   * Completions, or OpenAI Responses. Extensible — add a row per new shape.
+   * POST /credentials/test — probe a credential via the shared
+   * `probeByWireShape` dispatcher (same logic as the per-workspace test). For
+   * the anthropic shape the auth header is auto-resolved from the baseUrl.
    */
   app.post('/credentials/test', async (c) => {
     try {
@@ -238,22 +235,10 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
       if (!body.apiKey || !body.model) {
         return c.json({ ok: false, error: 'apiKey and model are required' })
       }
-      const PROBERS: Record<WireShape, () => Promise<{ text: string }>> = {
-        anthropic: () => {
-          const baseUrl = body.baseUrl?.trim() || DEFAULT_ANTHROPIC_BASE
-          return probeAnthropic({
-            baseUrl, apiKey: body.apiKey, model: body.model,
-            authMode: resolveAnthropicAuthMode({ authMode: body.authMode, baseUrl }),
-          })
-        },
-        'openai-chat': () =>
-          probeOpenAI({ baseUrl: body.baseUrl?.trim() || DEFAULT_OPENAI_BASE, apiKey: body.apiKey, model: body.model, wireApi: 'chat' }),
-        'openai-responses': () =>
-          probeOpenAI({ baseUrl: body.baseUrl?.trim() || DEFAULT_OPENAI_BASE, apiKey: body.apiKey, model: body.model, wireApi: 'responses' }),
-      }
-      const probe = PROBERS[body.wireShape]
-      if (!probe) return c.json({ ok: false, error: `unknown wire shape: ${body.wireShape}` })
-      const r = await probe()
+      const authMode = resolveAnthropicAuthMode({ authMode: body.authMode, baseUrl: body.baseUrl })
+      const r = await probeByWireShape(body.wireShape, {
+        baseUrl: body.baseUrl, apiKey: body.apiKey, model: body.model, authMode,
+      })
       return c.json({ ok: true, response: r.text })
     } catch (err) {
       return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) })

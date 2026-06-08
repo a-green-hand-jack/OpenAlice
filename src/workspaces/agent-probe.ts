@@ -11,9 +11,14 @@
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 
+import type { WireShape } from '../ai-providers/preset-catalog.js';
+
 export interface ProbeResult {
   text: string;
 }
+
+const DEFAULT_ANTHROPIC_BASE = 'https://api.anthropic.com';
+const DEFAULT_OPENAI_BASE = 'https://api.openai.com/v1';
 
 export interface ClaudeProbeInput {
   baseUrl: string;
@@ -71,4 +76,31 @@ export async function probeOpenAI(input: CodexProbeInput): Promise<ProbeResult> 
     max_tokens: 32,
   });
   return { text: resp.choices[0]?.message?.content ?? '' };
+}
+
+/**
+ * Single dispatcher: probe an endpoint by its wire shape. The one place that
+ * maps WireShape → prober — both the credential-vault test
+ * (`/api/config/credentials/test`) and the per-workspace test
+ * (`/api/workspaces/:id/agent-config/:agent/test`) go through here, so "Test"
+ * means the same thing everywhere. An empty baseUrl falls back to the shape's
+ * official endpoint.
+ */
+export async function probeByWireShape(
+  wireShape: WireShape,
+  input: { baseUrl?: string; apiKey: string; model: string; authMode?: 'x-api-key' | 'bearer' },
+): Promise<ProbeResult> {
+  switch (wireShape) {
+    case 'anthropic':
+      return probeAnthropic({
+        baseUrl: input.baseUrl?.trim() || DEFAULT_ANTHROPIC_BASE,
+        apiKey: input.apiKey,
+        model: input.model,
+        authMode: input.authMode ?? 'x-api-key',
+      });
+    case 'openai-chat':
+      return probeOpenAI({ baseUrl: input.baseUrl?.trim() || DEFAULT_OPENAI_BASE, apiKey: input.apiKey, model: input.model, wireApi: 'chat' });
+    case 'openai-responses':
+      return probeOpenAI({ baseUrl: input.baseUrl?.trim() || DEFAULT_OPENAI_BASE, apiKey: input.apiKey, model: input.model, wireApi: 'responses' });
+  }
 }
