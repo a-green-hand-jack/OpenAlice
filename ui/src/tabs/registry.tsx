@@ -68,7 +68,6 @@ const automationSectionTitle: Record<
   string
 > = {
   flow: 'Flow',
-  heartbeat: 'Heartbeat',
   cron: 'Cron Jobs',
   webhook: 'Webhook',
   runs: 'Runs',

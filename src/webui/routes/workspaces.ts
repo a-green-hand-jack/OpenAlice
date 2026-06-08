@@ -810,26 +810,6 @@ export function createWorkspaceRoutes(svc: WorkspaceService): Hono {
   // CODEX_HOME. These routes are pure file IO over the launcher's
   // path-traversal guard.
 
-  app.get('/agent-profiles', async (c) => {
-    try {
-      const raw = await readFile(resolvePath('data/config/ai-provider-manager.json'), 'utf8');
-      const parsed = JSON.parse(raw) as { profiles?: Record<string, ProfileShape> };
-      const profiles = parsed.profiles ?? {};
-      const list = Object.entries(profiles).map(([name, p]) => ({
-        name,
-        baseUrl: typeof p.baseUrl === 'string' ? p.baseUrl : null,
-        apiKey: typeof p.apiKey === 'string' ? p.apiKey : null,
-        model: typeof p.model === 'string' ? p.model : null,
-        authMode: p.authMode === 'bearer' ? 'bearer' : p.authMode === 'x-api-key' ? 'x-api-key' : null,
-      }));
-      return c.json({ profiles: list });
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT') return c.json({ profiles: [] });
-      launcherLogger.warn('agent_profiles.read_failed', { err });
-      return c.json({ error: 'profiles_read_failed', message: (err as Error).message }, 500);
-    }
-  });
 
   // Central credential store, surfaced to the workspace AI-config modal. The
   // "Load from saved credential" picker reads this list; the "Save to Alice"
@@ -971,13 +951,6 @@ export function createWorkspaceRoutes(svc: WorkspaceService): Hono {
 }
 
 // ── Agent config helpers ────────────────────────────────────────────────────
-
-interface ProfileShape {
-  baseUrl?: unknown;
-  apiKey?: unknown;
-  model?: unknown;
-  authMode?: unknown;
-}
 
 // AI-provider config IO moved into the CLI adapters (writeAiConfig /
 // readAiConfig on claudeAdapter / codexAdapter). The routes above dispatch

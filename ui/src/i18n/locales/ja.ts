@@ -144,7 +144,6 @@ export const ja: Resources = {
   automation: {
     runs: '実行',
     flow: 'フロー',
-    heartbeat: 'ハートビート',
     cronJobs: 'Cron ジョブ',
     webhook: 'Webhook',
   },

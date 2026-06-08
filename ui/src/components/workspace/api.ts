@@ -376,15 +376,6 @@ export async function readWorkspaceFile(id: string, relPath: string): Promise<Re
 
 // ── Agent provider config ───────────────────────────────────────────────────
 
-export interface AgentProfile {
-  readonly name: string;
-  readonly baseUrl: string | null;
-  readonly apiKey: string | null;
-  readonly model: string | null;
-  /** Claude only — which header carries the key, if the profile pins one. */
-  readonly authMode?: 'x-api-key' | 'bearer' | null;
-}
-
 export interface AgentConfig {
   readonly baseUrl: string | null;
   readonly apiKey: string | null;
@@ -409,13 +400,6 @@ export interface AgentConfigBundle {
 }
 
 export type AgentId = 'claude' | 'codex' | 'opencode' | 'pi';
-
-export async function listAgentProfiles(): Promise<AgentProfile[]> {
-  const res = await fetch('/api/workspaces/agent-profiles');
-  if (!res.ok) throw new Error(`list agent profiles failed: ${res.status}`);
-  const body = (await res.json()) as { profiles: AgentProfile[] };
-  return body.profiles;
-}
 
 // ── Central credential store ──────────────────────────────────────────────
 //

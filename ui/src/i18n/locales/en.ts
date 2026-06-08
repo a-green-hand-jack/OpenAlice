@@ -155,7 +155,6 @@ export const en = {
   automation: {
     runs: 'Runs',
     flow: 'Flow',
-    heartbeat: 'Heartbeat',
     cronJobs: 'Cron Jobs',
     webhook: 'Webhook',
   },

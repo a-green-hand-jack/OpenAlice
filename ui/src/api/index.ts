@@ -5,7 +5,6 @@
 import { configApi } from './config'
 import { eventsApi } from './events'
 import { cronApi } from './cron'
-import { heartbeatApi } from './heartbeat'
 import { tradingApi } from './trading'
 import { marketDataApi } from './openbb'
 import { toolsApi } from './tools'
@@ -22,7 +21,6 @@ export const api = {
   config: configApi,
   events: eventsApi,
   cron: cronApi,
-  heartbeat: heartbeatApi,
   trading: tradingApi,
   marketData: marketDataApi,
   tools: toolsApi,

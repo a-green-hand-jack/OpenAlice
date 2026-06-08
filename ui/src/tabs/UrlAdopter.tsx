@@ -84,7 +84,6 @@ export function UrlAdopter() {
         <Route path="/logs" element={<Navigate to="/dev/logs" replace />} />
         <Route path="/events" element={<Navigate to="/dev/logs" replace />} />
         <Route path="/agent-status" element={<Navigate to="/dev/logs" replace />} />
-        <Route path="/heartbeat" element={<Navigate to="/automation/heartbeat" replace />} />
         <Route path="/scheduler" element={<Navigate to="/automation/cron" replace />} />
         <Route path="/ai-provider" element={<Navigate to="/settings/ai-provider" replace />} />
         <Route path="/trading" element={<Navigate to="/settings/trading" replace />} />
@@ -154,7 +153,7 @@ function AdoptDev() {
 
 function AdoptAutomation() {
   const { section } = useParams<{ section: string }>()
-  const valid: ReadonlyArray<string> = ['flow', 'heartbeat', 'cron', 'webhook']
+  const valid: ReadonlyArray<string> = ['flow', 'cron', 'webhook']
   if (!section || !valid.includes(section)) return <Navigate to="/automation/flow" replace />
   return (
     <AdoptStatic

@@ -152,7 +152,6 @@ export const zhHant: Resources = {
   automation: {
     runs: '運行',
     flow: '流程',
-    heartbeat: '心跳',
     cronJobs: 'Cron 任務',
     webhook: 'Webhook',
   },

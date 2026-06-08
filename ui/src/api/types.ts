@@ -164,12 +164,6 @@ export interface AppConfig {
   engine: Record<string, unknown>
   agent: { evolutionMode: boolean; claudeCode: Record<string, unknown> }
   compaction: { maxContextTokens: number; maxOutputTokens: number }
-  heartbeat: {
-    enabled: boolean
-    every: string
-    prompt: string
-    activeHours: { start: string; end: string; timezone: string } | null
-  }
   snapshot: {
     enabled: boolean
     every: string

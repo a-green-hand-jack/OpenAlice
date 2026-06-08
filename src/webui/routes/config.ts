@@ -1,11 +1,10 @@
 import { Hono } from 'hono'
 import {
-  loadConfig, writeConfigSection, readAIProviderConfig, validSections,
-  writeProfile, deleteProfile, setActiveProfile,
+  loadConfig, writeConfigSection, validSections,
   readCredentials, addCredential, deleteCredential, writeCredential, resolveCredential,
   credentialWires,
-  profileSchema, credentialVendorEnum, credentialWireShapeEnum,
-  type ConfigSection, type Profile, type Credential, type CredentialWireShape,
+  credentialVendorEnum, credentialWireShapeEnum,
+  type ConfigSection, type Credential, type CredentialWireShape,
 } from '../../core/config.js'
 
 /** Validate a `{ [wireShape]: baseUrl }` body into a typed wires map. */
@@ -21,8 +20,6 @@ function parseWires(raw: unknown): Partial<Record<CredentialWireShape, string>> 
 import type { EngineContext } from '../../core/types.js'
 import { BUILTIN_PRESETS } from '../../ai-providers/presets.js'
 import type { WireShape } from '../../ai-providers/preset-catalog.js'
-import { getSdkAdapterInfo } from '../../ai-providers/sdk-adapters.js'
-import { testWithProfile } from '../../core/ai-config.js'
 import { resolveAnthropicAuthMode } from '../../core/credential-inference.js'
 import { probeByWireShape } from '../../workspaces/agent-probe.js'
 
@@ -43,104 +40,10 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
     }
   })
 
-  // ==================== Profile CRUD ====================
-
-  /** GET /profiles — list profiles + credentials map + active profile slug */
-  app.get('/profiles', async (c) => {
-    try {
-      const config = await readAIProviderConfig()
-      return c.json({
-        profiles: config.profiles,
-        credentials: config.credentials,
-        activeProfile: config.activeProfile,
-      })
-    } catch (err) {
-      return c.json({ error: String(err) }, 500)
-    }
-  })
-
-  /** GET /sdk-adapters — list SDK adapters with their preset associations */
-  app.get('/sdk-adapters', (c) => c.json({ adapters: getSdkAdapterInfo() }))
-
-  /** POST /profiles — create a new profile */
-  app.post('/profiles', async (c) => {
-    try {
-      const body = await c.req.json<{ slug: string; profile: Profile }>()
-      if (!body.slug?.trim()) {
-        return c.json({ error: 'Profile name is required' }, 400)
-      }
-      const config = await readAIProviderConfig()
-      if (config.profiles[body.slug]) {
-        return c.json({ error: 'profile slug already exists' }, 409)
-      }
-      const validated = profileSchema.parse(body.profile)
-      await writeProfile(body.slug, validated)
-      return c.json({ slug: body.slug, profile: validated }, 201)
-    } catch (err) {
-      if (err instanceof Error && err.name === 'ZodError') {
-        return c.json({ error: 'Validation failed', details: JSON.parse(err.message) }, 400)
-      }
-      return c.json({ error: String(err) }, 500)
-    }
-  })
-
-  /** PUT /profiles/:slug — update a profile */
-  app.put('/profiles/:slug', async (c) => {
-    try {
-      const slug = c.req.param('slug')
-      const body = await c.req.json<Profile>()
-      const validated = profileSchema.parse(body)
-      await writeProfile(slug, validated)
-      return c.json({ slug, profile: validated })
-    } catch (err) {
-      if (err instanceof Error && err.name === 'ZodError') {
-        return c.json({ error: 'Validation failed', details: JSON.parse(err.message) }, 400)
-      }
-      return c.json({ error: String(err) }, 500)
-    }
-  })
-
-  /** DELETE /profiles/:slug — delete a profile */
-  app.delete('/profiles/:slug', async (c) => {
-    try {
-      const slug = c.req.param('slug')
-      await deleteProfile(slug)
-      return c.json({ success: true })
-    } catch (err) {
-      return c.json({ error: String(err) }, 400)
-    }
-  })
-
-  /** PUT /active-profile — set the active profile */
-  app.put('/active-profile', async (c) => {
-    try {
-      const { slug } = await c.req.json<{ slug: string }>()
-      await setActiveProfile(slug)
-      return c.json({ activeProfile: slug })
-    } catch (err) {
-      return c.json({ error: String(err) }, 400)
-    }
-  })
-
   // ==================== Presets ====================
 
-  /** GET /presets — built-in preset templates for profile creation */
+  /** GET /presets — built-in preset suggestions for the credential vault form */
   app.get('/presets', (c) => c.json({ presets: BUILTIN_PRESETS }))
-
-  // ==================== Profile Test ====================
-
-  /** POST /profiles/test — test profile config by sending "Hi" (without saving) */
-  app.post('/profiles/test', async (c) => {
-    if (!opts?.ctx) return c.json({ ok: false, error: 'Test not available' }, 500)
-    try {
-      const profileData = await c.req.json<Profile>()
-      const validated = profileSchema.parse(profileData)
-      const result = await testWithProfile(opts.ctx.router, validated, 'Hi')
-      return c.json({ ok: true, response: result.text })
-    } catch (err) {
-      return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) })
-    }
-  })
 
   // ==================== Credential Vault ====================
   //

@@ -144,7 +144,6 @@ export const zh: Resources = {
   automation: {
     runs: '运行',
     flow: '流程',
-    heartbeat: '心跳',
     cronJobs: 'Cron 任务',
     webhook: 'Webhook',
   },
