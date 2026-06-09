@@ -9,7 +9,9 @@
 
 import Decimal from 'decimal.js'
 import { Contract, Order, ContractDescription, ContractDetails, UNSET_DECIMAL } from '@traderalice/ibkr'
-import { BrokerError, type IBroker, type AccountInfo, type Position, type OpenOrder, type PlaceOrderResult, type Quote, type MarketClock, type AccountCapabilities, type BrokerHealth, type BrokerHealthInfo, type TpSlParams, type Bar, type BarParams } from './brokers/types.js'
+import { BrokerError, type IBroker, type AccountInfo, type Position, type OpenOrder, type PlaceOrderResult, type Quote, type MarketClock, type AccountCapabilities, type BrokerHealth, type BrokerHealthInfo, type UTAReach, type UTATier, type TpSlParams, type Bar, type BarParams } from './brokers/types.js'
+
+const REACH_RANK: Record<UTAReach, number> = { down: 0, connected: 1, readable: 2 }
 import { TradingGit } from './git/TradingGit.js'
 import { recomputeCostBasisFromCommits } from './cost-basis.js'
 import { pnlOf } from './position-math.js'
@@ -101,6 +103,9 @@ export class UnifiedTradingAccount {
   private _recoveryTimer?: ReturnType<typeof setTimeout>
   private _recovering = false
   private _disabled = false
+  /** Current rung on the capability ladder. Updated by every connect/recovery
+   *  probe and by live broker-call success/failure. */
+  private _currentReach: UTAReach = 'down'
   private _connectPromise: Promise<void>
 
   constructor(broker: IBroker, options: UnifiedTradingAccountOptions = {}) {
@@ -109,6 +114,10 @@ export class UnifiedTradingAccount {
     this.label = broker.label
     this.keyless = options.keyless ?? false
     this.readOnly = options.readOnly ?? options.keyless ?? false
+    // Optimistically assume we'll reach this account's target until the first
+    // probe says otherwise — preserves "usable immediately after construction"
+    // (the probe corrects/demotes within ms).
+    this._currentReach = this.targetReach
     this._onHealthChange = options.onHealthChange
     this._onPostPush = options.onPostPush
     this._onPostReject = options.onPostReject
@@ -180,9 +189,35 @@ export class UnifiedTradingAccount {
 
   // ==================== Health ====================
 
+  /** What this account is for (static): keyless → data, funded+readOnly →
+   *  account, funded+writable → trading. */
+  get tier(): UTATier {
+    if (this.keyless) return 'data'
+    return this.readOnly ? 'account' : 'trading'
+  }
+
+  /** The reach the recovery loop aims for. A data account is done at 'connected'
+   *  (public data, no key); funded accounts want 'readable' (account read). */
+  get targetReach(): UTAReach {
+    return this.tier === 'data' ? 'connected' : 'readable'
+  }
+
+  get reach(): UTAReach {
+    return this._currentReach
+  }
+
+  private _reachedTarget(): boolean {
+    return REACH_RANK[this._currentReach] >= REACH_RANK[this.targetReach]
+  }
+
   get health(): BrokerHealth {
     if (this._disabled) return 'offline'
+    if (this._currentReach === 'down') return 'offline'
     if (this._consecutiveFailures >= UnifiedTradingAccount.OFFLINE_THRESHOLD) return 'offline'
+    // Reachable but below the account's target (e.g. funded account: markets up
+    // but account-read failing) → degraded, NOT a full outage. This is the fix
+    // for "a transient getAccount blip nukes a healthy connection".
+    if (!this._reachedTarget()) return 'degraded'
     if (this._consecutiveFailures >= UnifiedTradingAccount.DEGRADED_THRESHOLD) return 'degraded'
     return 'healthy'
   }
@@ -194,6 +229,8 @@ export class UnifiedTradingAccount {
   getHealthInfo(): BrokerHealthInfo {
     return {
       status: this.health,
+      reach: this._currentReach,
+      tier: this.tier,
       consecutiveFailures: this._consecutiveFailures,
       lastError: this._lastError,
       lastSuccessAt: this._lastSuccessAt,
@@ -203,30 +240,64 @@ export class UnifiedTradingAccount {
     }
   }
 
-  /** Initial broker connection — fire-and-forget from constructor. */
-  private async _connect(): Promise<void> {
+  /** Probe the capability ladder up to this account's target reach. Stages:
+   *  L1 `broker.init()` (transport + public data) → 'connected'; for funded
+   *  accounts only, L2 `broker.getAccount()` (private read) → 'readable'. A
+   *  keyless data account stops at L1 and NEVER calls getAccount — so it can't
+   *  loop on "requires apiKey". Sets `_disabled` on a permanent config error. */
+  private async _attemptReach(): Promise<UTAReach> {
     try {
       await this.broker.init()
+    } catch (err) {
+      this._notePermanent(err)
+      this._noteFailure(err)
+      return 'down'
+    }
+    if (this.targetReach === 'connected') {
+      this._lastSuccessAt = new Date()
+      return 'connected'
+    }
+    try {
       await this.broker.getAccount()
+      this._lastSuccessAt = new Date()
+      return 'readable'
+    } catch (err) {
+      this._notePermanent(err)
+      this._noteFailure(err)
+      return 'connected' // transport up, but private read failing
+    }
+  }
+
+  private _notePermanent(err: unknown): void {
+    if (err instanceof BrokerError && err.permanent) this._disabled = true
+  }
+  private _noteFailure(err: unknown): void {
+    this._lastError = err instanceof Error ? err.message : String(err)
+    this._lastFailureAt = new Date()
+  }
+
+  /** Initial broker connection — fire-and-forget from constructor. */
+  private async _connect(): Promise<void> {
+    this._currentReach = await this._attemptReach()
+    if (this._disabled) {
+      console.warn(`UTA[${this.id}]: disabled — ${this._lastError}`)
+      this._emitHealthChange()
+      throw new BrokerError('CONFIG', this._lastError ?? `Account "${this.label}" disabled`)
+    }
+    if (this._reachedTarget()) {
       this._onSuccess()
       this._emitHealthChange()
-      console.log(`UTA[${this.id}]: connected`)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (err instanceof BrokerError && err.permanent) {
-        console.warn(`UTA[${this.id}]: disabled — ${msg}`)
-        this._disabled = true
-        this._lastError = msg
-        this._emitHealthChange()
-        throw err
-      }
-      console.warn(`UTA[${this.id}]: initial connect failed: ${msg}`)
-      this._consecutiveFailures = UnifiedTradingAccount.OFFLINE_THRESHOLD
-      this._lastError = msg
-      this._lastFailureAt = new Date()
-      this._startRecovery()
-      throw err
+      console.log(`UTA[${this.id}]: ${this._currentReach} (${this.tier})`)
+      return
     }
+    // Below target → recover toward it.
+    if (this._currentReach === 'down') this._consecutiveFailures = UnifiedTradingAccount.OFFLINE_THRESHOLD
+    this._startRecovery()
+    this._emitHealthChange()
+    if (this._currentReach === 'down') {
+      throw new BrokerError('NETWORK', this._lastError ?? `Account "${this.label}" unreachable`)
+    }
+    // 'connected' but funded wants 'readable' — partial; recovery pursues it.
   }
 
   private async _callBroker<T>(fn: () => Promise<T>): Promise<T> {
@@ -295,21 +366,19 @@ export class UnifiedTradingAccount {
       UnifiedTradingAccount.RECOVERY_MAX_MS,
     )
     this._recoveryTimer = setTimeout(async () => {
-      try {
-        await this.broker.init()
-        await this.broker.getAccount()
-        this._onSuccess()
-        console.log(`UTA[${this.id}]: auto-recovery succeeded`)
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        if (err instanceof BrokerError && err.permanent) {
-          console.warn(`UTA[${this.id}]: disabled — ${msg}`)
-          this._disabled = true
-          this._recovering = false
-          this._emitHealthChange()
-          return
-        }
-        console.warn(`UTA[${this.id}]: recovery attempt ${attempt + 1} failed: ${msg}`)
+      this._currentReach = await this._attemptReach()
+      if (this._disabled) {
+        this._recovering = false
+        console.warn(`UTA[${this.id}]: disabled — ${this._lastError}`)
+        this._emitHealthChange()
+        return
+      }
+      if (this._reachedTarget()) {
+        this._onSuccess() // resets failures, clears timer + _recovering, emits
+        console.log(`UTA[${this.id}]: auto-recovery succeeded (${this._currentReach})`)
+      } else {
+        console.warn(`UTA[${this.id}]: recovery attempt ${attempt + 1} reached "${this._currentReach}" (target "${this.targetReach}"): ${this._lastError ?? 'below target'}`)
+        this._emitHealthChange() // reflect partial progress (down → connected)
         this._scheduleRecoveryAttempt(attempt + 1)
       }
     }, delay)

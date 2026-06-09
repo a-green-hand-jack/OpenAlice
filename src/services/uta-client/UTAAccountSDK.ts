@@ -92,6 +92,8 @@ export class UTAAccountSDK {
     // optimistic shape; tighten once Alice's SDK caches per-UTA state.
     return {
       status: 'healthy',
+      reach: 'readable',
+      tier: 'trading',
       consecutiveFailures: 0,
       recovering: false,
       disabled: false,

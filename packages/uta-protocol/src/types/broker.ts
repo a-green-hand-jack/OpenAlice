@@ -221,8 +221,36 @@ export interface Bar {
 
 export type BrokerHealth = 'healthy' | 'degraded' | 'offline'
 
+/**
+ * Operational reach — the capability ladder a UTA can currently climb. Health
+ * is NOT a single "connected?" boolean: connecting, reading account data, and
+ * writing orders are three different things.
+ *   - 'down'      transport unreachable (can't load markets / open the socket)
+ *   - 'connected' broker reachable + PUBLIC market data available (no key) —
+ *                 this is full health for a keyless data source
+ *   - 'readable'  PRIVATE account read works (auth OK); implies connected
+ * Writing is not a reach level (we never place a probe order) — it's
+ * `tier === 'trading'`, gated at order time.
+ */
+export type UTAReach = 'down' | 'connected' | 'readable'
+
+/**
+ * What an account is FOR (static, from config) — drives the target reach the
+ * recovery loop aims at, and the UI badge:
+ *   - 'data'    keyless public-data source        → target reach 'connected'
+ *   - 'account' funded but read-only              → target reach 'readable'
+ *   - 'trading' funded + writable                 → target reach 'readable'
+ */
+export type UTATier = 'data' | 'account' | 'trading'
+
 export interface BrokerHealthInfo {
   status: BrokerHealth
+  /** Current operational reach on the capability ladder. */
+  reach: UTAReach
+  /** What this account is for (static). Recovery aims for this account's target
+   *  reach — a keyless 'data' account is healthy at 'connected', and never
+   *  probes account-read, so it no longer loops on "requires apiKey". */
+  tier: UTATier
   consecutiveFailures: number
   lastError?: string
   lastSuccessAt?: Date

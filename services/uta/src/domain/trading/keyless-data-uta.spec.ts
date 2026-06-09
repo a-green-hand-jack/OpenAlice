@@ -28,4 +28,17 @@ describe('keyless data UTA injection (createBroker)', () => {
       expect((broker as { getCapabilities(): { historicalBars?: { supported: boolean } } }).getCapabilities().historicalBars?.supported).toBe(true)
     })
   }
+
+  it('keyless account-reads return empty without auth (no fetchBalance / no init)', async () => {
+    const broker = createBroker(cfgFor('binance')) as unknown as {
+      getAccount(): Promise<{ totalCashValue: string; netLiquidation: string }>
+      getPositions(): Promise<unknown[]>
+      getOrders(ids: string[]): Promise<unknown[]>
+    }
+    const acct = await broker.getAccount()
+    expect(acct.totalCashValue).toBe('0')
+    expect(acct.netLiquidation).toBe('0')
+    expect(await broker.getPositions()).toEqual([])
+    expect(await broker.getOrders([])).toEqual([])
+  })
 })

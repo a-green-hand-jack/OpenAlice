@@ -23,6 +23,8 @@ export const demoTradingAccounts: TradingAccount[] = [
 
 const healthOk = {
   status: 'healthy' as const,
+  reach: 'readable' as const,
+  tier: 'trading' as const,
   consecutiveFailures: 0,
   lastSuccessAt: new Date().toISOString(),
   recovering: false,

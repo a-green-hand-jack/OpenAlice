@@ -302,8 +302,16 @@ export interface CronJob {
 
 export type BrokerHealth = 'healthy' | 'degraded' | 'offline'
 
+/** Capability ladder: 'down' < 'connected' (transport + public data) <
+ *  'readable' (private account read). Mirrors the UTA-protocol type. */
+export type UTAReach = 'down' | 'connected' | 'readable'
+/** What an account is for: keyless data source / read-only / writable. */
+export type UTATier = 'data' | 'account' | 'trading'
+
 export interface BrokerHealthInfo {
   status: BrokerHealth
+  reach: UTAReach
+  tier: UTATier
   consecutiveFailures: number
   lastError?: string
   lastSuccessAt?: string

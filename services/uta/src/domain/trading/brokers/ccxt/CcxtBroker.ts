@@ -680,6 +680,12 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   }
 
   async getAccount(): Promise<AccountInfo> {
+    // Keyless data sources have no account — return a zeroed one rather than
+    // calling fetchBalance (which requires credentials). The federation excludes
+    // keyless UTAs from equity aggregation, so this never shows as phantom cash.
+    if (this.keyless) {
+      return { baseCurrency: 'USD', netLiquidation: '0', totalCashValue: '0', unrealizedPnL: '0', realizedPnL: '0', initMarginReq: '0' }
+    }
     this.ensureInit()
 
     try {
@@ -747,6 +753,7 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   }
 
   async getPositions(): Promise<Position[]> {
+    if (this.keyless) return []
     this.ensureInit()
 
     try {
@@ -802,6 +809,7 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   }
 
   async getOrders(orderIds: string[]): Promise<OpenOrder[]> {
+    if (this.keyless) return []
     this.ensureInit()
 
 

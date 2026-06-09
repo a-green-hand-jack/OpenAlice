@@ -1,42 +1,41 @@
 import type { BrokerHealthInfo } from '../../api/types'
 
-/** Connection-status pill for a UTA. Two sizes: 'sm' (cards) / 'md' (dialog headers). */
+/** Connection-status pill for a UTA. Two sizes: 'sm' (cards) / 'md' (dialog headers).
+ *  Health is a capability ladder — the label reflects both the connection status
+ *  AND what the account is for (a keyless data source reads "Data source", a
+ *  read-only account says so), so a data UTA never looks like a broken trader. */
 export function HealthBadge({ health, size = 'sm' }: { health?: BrokerHealthInfo; size?: 'sm' | 'md' }) {
   const textSize = size === 'md' ? 'text-[12px]' : 'text-[11px]'
   const dotSize = size === 'md' ? 'w-2 h-2' : 'w-1.5 h-1.5'
 
   if (!health) return <span className="text-text-muted/40">—</span>
 
-  if (health.disabled) {
-    return (
-      <span className={`inline-flex items-center gap-1.5 ${textSize} text-text-muted`} title={health.lastError}>
-        <span className={`${dotSize} rounded-full bg-text-muted/40 shrink-0`} />
-        Disabled
-      </span>
-    )
-  }
+  const pill = (color: string, dot: string, label: string, title?: string, pulse = false) => (
+    <span className={`inline-flex items-center gap-1.5 ${textSize} ${color}`} title={title}>
+      <span className={`${dotSize} rounded-full ${dot} shrink-0 ${pulse ? 'animate-pulse' : ''}`} />
+      {label}
+    </span>
+  )
+
+  if (health.disabled) return pill('text-text-muted', 'bg-text-muted/40', 'Disabled', health.lastError)
 
   switch (health.status) {
     case 'healthy':
-      return (
-        <span className={`inline-flex items-center gap-1.5 ${textSize} text-green`}>
-          <span className={`${dotSize} rounded-full bg-green shrink-0`} />
-          Connected
-        </span>
+      // At target reach. The label tells the user the account's role.
+      return pill(
+        'text-green',
+        'bg-green',
+        health.tier === 'data' ? 'Data source' : health.tier === 'account' ? 'Connected · read-only' : 'Connected',
       )
     case 'degraded':
-      return (
-        <span className={`inline-flex items-center gap-1.5 ${textSize} text-yellow-400`}>
-          <span className={`${dotSize} rounded-full bg-yellow-400 shrink-0`} />
-          Unstable
-        </span>
+      // Reachable but below target — e.g. transport up but account-read failing.
+      return pill(
+        'text-yellow-400',
+        'bg-yellow-400',
+        health.reach === 'connected' ? 'No account access' : 'Unstable',
+        health.lastError,
       )
     case 'offline':
-      return (
-        <span className={`inline-flex items-center gap-1.5 ${textSize} text-red`} title={health.lastError}>
-          <span className={`${dotSize} rounded-full bg-red shrink-0 animate-pulse`} />
-          {health.recovering ? 'Reconnecting...' : 'Offline'}
-        </span>
-      )
+      return pill('text-red', 'bg-red', health.recovering ? 'Reconnecting...' : 'Offline', health.lastError, true)
   }
 }

@@ -194,6 +194,7 @@ export class MockBroker implements IBroker {
   private _accountOverride: AccountInfo | null = null
   private _callLog: CallRecord[] = []
   private _failRemaining = 0
+  private _failMethods = new Set<string>()
 
   constructor(options: MockBrokerOptions = {}) {
     this.id = options.id ?? 'mock-paper'
@@ -214,6 +215,9 @@ export class MockBroker implements IBroker {
   }
 
   private _checkFail(method: string): void {
+    if (this._failMethods.has(method)) {
+      throw new Error(`MockBroker[${this.id}]: simulated ${method} failure`)
+    }
     if (this._failRemaining > 0) {
       this._failRemaining--
       throw new Error(`MockBroker[${this.id}]: simulated ${method} failure`)
@@ -848,6 +852,15 @@ export class MockBroker implements IBroker {
   /** Make the next N broker calls throw. Used to test health transitions. */
   setFailMode(count: number): void {
     this._failRemaining = count
+  }
+
+  /** Make a specific method always throw (until cleared) — lets a test fail
+   *  e.g. getAccount while letting init succeed (the capability-ladder case). */
+  setFailMethod(method: string): void {
+    this._failMethods.add(method)
+  }
+  clearFailMethod(method: string): void {
+    this._failMethods.delete(method)
   }
 
   /** Override account info directly. Bypasses computed values from positions. */
