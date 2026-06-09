@@ -364,6 +364,16 @@ export interface IBroker<TMeta = unknown> {
    */
   getHistorical?(contract: Contract, params: BarParams): Promise<Bar[]>
 
+  /**
+   * The asset class a contract belongs to, decided by the VENUE — not by the
+   * instrument's claimed type. A crypto exchange's "AAPL" is a synthetic /
+   * custodial token, so CcxtBroker reports everything as 'crypto' regardless of
+   * secType; IBKR/Alpaca map per real instrument. Optional — when absent, the
+   * consumer falls back to a secType heuristic (which is broker-blind and wrong
+   * for e.g. a CCXT dated future, hence this hook).
+   */
+  assetClassFor?(contract: Contract): 'equity' | 'crypto' | 'currency' | 'commodity' | 'unknown'
+
   // ---- Capabilities ----
 
   getCapabilities(): AccountCapabilities

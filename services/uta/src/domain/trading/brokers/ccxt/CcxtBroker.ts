@@ -928,6 +928,13 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
   // ---- Capabilities ----
 
+  /** A crypto exchange's instruments are crypto — period. Even a listed "AAPL"
+   *  is a synthetic/custodial token here, not the real equity; secType (spot /
+   *  CRYPTO_PERP / FUT / OPT) is the instrument shape, not the asset class. */
+  assetClassFor(): 'crypto' {
+    return 'crypto'
+  }
+
   getCapabilities(): AccountCapabilities {
     return {
       supportedSecTypes: ['CRYPTO', 'CRYPTO_PERP'],

@@ -1,24 +1,29 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { marketApi, type SearchResult, type AssetClass } from '../api/market'
+import { type AssetClass, type BarSourceCandidate } from '../api/market'
+import { useAssetSearch } from './market/useAssetSearch'
 import { useWorkspace } from '../tabs/store'
 import { useWatchlist } from '../tabs/watchlist-store'
 import { getFocusedTab, type ViewSpec } from '../tabs/types'
 import { SidebarRow } from './SidebarRow'
 
-const ASSET_CLASS_COLORS: Record<AssetClass, string> = {
+const ASSET_CLASS_COLORS: Record<string, string> = {
   equity: 'bg-accent/15 text-accent',
   crypto: 'bg-amber-500/15 text-amber-400',
   currency: 'bg-green/15 text-green',
   commodity: 'bg-purple-500/15 text-purple-400',
+  unknown: 'bg-bg-tertiary text-text-muted',
 }
 
-function resultSymbol(r: SearchResult): string {
-  return r.symbol ?? r.id ?? ''
+const CAPABILITY_COLOR: Record<string, string> = {
+  realtime: 'text-green', iex: 'text-accent', delayed: 'text-text-muted/70',
+  subscription: 'text-amber-400', free: 'text-text-muted/70',
 }
 
-function resultKey(r: SearchResult): string {
-  return `${r.assetClass}:${r.symbol ?? r.id ?? Math.random()}`
+/** A crypto venue's "AAPL" is synthetic — the route segment still needs a valid
+ *  asset class, so map 'unknown' to a sane default. */
+function routeAssetClass(c: BarSourceCandidate['assetClass']): AssetClass {
+  return c === 'unknown' ? 'equity' : c
 }
 
 /**
@@ -33,8 +38,8 @@ function resultKey(r: SearchResult): string {
 export function MarketSidebar() {
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState<SearchResult[]>([])
-  const [loading, setLoading] = useState(false)
+  // Shared with the main search box — one search logic, no drift.
+  const { results, loading } = useAssetSearch(query)
 
   const watchlist = useWatchlist((s) => s.entries)
   const removeFromWatchlist = useWatchlist((s) => s.remove)
@@ -42,37 +47,16 @@ export function MarketSidebar() {
 
   const focusedSpec = useWorkspace((state) => getFocusedTab(state)?.spec)
   const isFocused = (kind: ViewSpec['kind']) => focusedSpec?.kind === kind
-  const isFocusedDetail = (assetClass: AssetClass, symbol: string) =>
+  const isFocusedDetail = (assetClass: string, symbol: string, source?: string) =>
     focusedSpec?.kind === 'market-detail' &&
     focusedSpec.params.assetClass === assetClass &&
-    focusedSpec.params.symbol === symbol
+    focusedSpec.params.symbol === symbol &&
+    (source === undefined || focusedSpec.params.source === source)
 
-  useEffect(() => {
-    const q = query.trim()
-    if (!q) {
-      setResults([])
-      setLoading(false)
-      return
-    }
-    setLoading(true)
-    const timer = setTimeout(async () => {
-      try {
-        const res = await marketApi.search(q, 20)
-        setResults(res.results)
-      } catch (err) {
-        console.error('search failed', err)
-        setResults([])
-      } finally {
-        setLoading(false)
-      }
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [query])
-
-  const handleSelectResult = (r: SearchResult) => {
-    const sym = resultSymbol(r)
-    if (!sym) return
-    openOrFocus({ kind: 'market-detail', params: { assetClass: r.assetClass, symbol: sym } })
+  const handleSelectResult = (c: BarSourceCandidate) => {
+    if (!c.symbol) return
+    // Open the chart on THIS exact provider (source = barId).
+    openOrFocus({ kind: 'market-detail', params: { assetClass: routeAssetClass(c.assetClass), symbol: c.symbol, source: c.barId } })
   }
 
   return (
@@ -111,23 +95,20 @@ export function MarketSidebar() {
             {!loading && results.length === 0 && (
               <p className="px-3 py-1 text-[12px] text-text-muted/60">{t('market.noMatches')}</p>
             )}
-            {results.map((r) => {
-              const sym = resultSymbol(r)
-              return (
-                <SidebarRow
-                  key={resultKey(r)}
-                  label={
-                    <span className="flex items-center gap-1.5 truncate">
-                      <span className="font-mono font-semibold truncate">{sym}</span>
-                      {r.name && <span className="text-text-muted truncate">{r.name}</span>}
-                    </span>
-                  }
-                  active={isFocusedDetail(r.assetClass, sym)}
-                  onClick={() => handleSelectResult(r)}
-                  trail={<AssetClassChip cls={r.assetClass} />}
-                />
-              )
-            })}
+            {results.map((c) => (
+              <SidebarRow
+                key={c.barId}
+                label={
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <span className="font-mono font-semibold shrink-0">{c.symbol}</span>
+                    {c.name && <span className="text-text-muted truncate">{c.name}</span>}
+                  </span>
+                }
+                active={isFocusedDetail(routeAssetClass(c.assetClass), c.symbol, c.barId)}
+                onClick={() => handleSelectResult(c)}
+                trail={<SourceTrail c={c} />}
+              />
+            ))}
           </>
         )}
 
@@ -175,10 +156,25 @@ export function MarketSidebar() {
   )
 }
 
-function AssetClassChip({ cls }: { cls: AssetClass }) {
+function AssetClassChip({ cls }: { cls: string }) {
   return (
-    <span className={`shrink-0 text-[9px] uppercase tracking-wide px-1 rounded ${ASSET_CLASS_COLORS[cls]}`}>
+    <span className={`shrink-0 text-[9px] uppercase tracking-wide px-1 rounded ${ASSET_CLASS_COLORS[cls] ?? ASSET_CLASS_COLORS.unknown}`}>
       {cls}
+    </span>
+  )
+}
+
+/** Explicit provider + freshness + asset class for a search hit — this is how
+ *  same-symbol sources are disambiguated (TradingView-style). */
+function SourceTrail({ c }: { c: BarSourceCandidate }) {
+  // Provider is the disambiguator; keep it compact so the ticker is never
+  // crushed. (Asset class is shown in the wider main search box, not here.)
+  return (
+    <span className="flex items-center gap-1 shrink-0" title={`${c.barId}${c.barCapability ? ` · ${c.barCapability}` : ''}`}>
+      <span className="text-[10px] text-text/75 font-medium truncate max-w-[96px]">{c.sourceId}</span>
+      {c.barCapability && (
+        <span className={`text-[9px] ${CAPABILITY_COLOR[c.barCapability] ?? 'text-text-muted'}`}>{c.barCapability}</span>
+      )}
     </span>
   )
 }

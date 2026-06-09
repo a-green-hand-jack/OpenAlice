@@ -29,6 +29,13 @@ describe('keyless data UTA injection (createBroker)', () => {
     })
   }
 
+  it('reports every contract as crypto (a crypto venue\'s "stock" is synthetic)', () => {
+    const broker = createBroker(cfgFor('okx')) as unknown as { assetClassFor(c: unknown): string }
+    // Even a "FUT" or a tokenized-equity-looking contract → crypto, by venue.
+    expect(broker.assetClassFor({ symbol: 'BTC', secType: 'FUT' })).toBe('crypto')
+    expect(broker.assetClassFor({ symbol: 'AAPL', secType: 'STK' })).toBe('crypto')
+  })
+
   it('keyless account-reads return empty without auth (no fetchBalance / no init)', async () => {
     const broker = createBroker(cfgFor('binance')) as unknown as {
       getAccount(): Promise<{ totalCashValue: string; netLiquidation: string }>

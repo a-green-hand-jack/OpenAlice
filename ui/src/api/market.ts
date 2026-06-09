@@ -127,3 +127,68 @@ export const marketApi = {
     cashflow: (symbol: string) => equityEndpoint<FinancialStatementRow>('fundamental/cash', { symbol }),
   },
 }
+
+// ==================== Federated bars (multi-source K-lines) ====================
+
+export type BarSource = 'vendor' | 'uta'
+export type BarCapability = 'realtime' | 'iex' | 'delayed' | 'subscription' | 'free'
+
+/** A selectable K-line source for a symbol — the provider is always explicit
+ *  (TradingView-style "symbol · provider"); sources are never normalized away. */
+export interface BarSourceCandidate {
+  barId: string
+  source: BarSource
+  sourceId: string
+  symbol: string
+  name?: string
+  assetClass: AssetClass | 'unknown'
+  label: string
+  barCapability?: BarCapability
+}
+
+/** Provenance of the bars currently shown — the explicit "who provided this". */
+export interface BarMeta {
+  symbol: string
+  from: string
+  to: string
+  bars: number
+  source: BarSource
+  sourceId: string
+  barId: string
+  provider: string
+  barCapability?: BarCapability
+}
+
+export interface BarsResponse {
+  results: HistoricalBar[] | null
+  meta: BarMeta | null
+  error?: string
+}
+
+export const barsApi = {
+  /** Federated source candidates (barIds across vendors + connected brokers). */
+  async searchSources(query: string, limit = 20): Promise<{ candidates: BarSourceCandidate[]; count: number }> {
+    const qs = new URLSearchParams({ query, limit: String(limit) })
+    return fetchJson(`/api/bars/search?${qs}`)
+  },
+
+  /** Bars for an explicit source (barId) or the vendor default (symbol+assetClass). */
+  async bars(params: {
+    barId?: string
+    symbol?: string
+    assetClass?: AssetClass
+    interval: string
+    count?: number
+    start?: string
+    end?: string
+  }): Promise<BarsResponse> {
+    const qs = new URLSearchParams({ interval: params.interval })
+    if (params.barId) qs.set('barId', params.barId)
+    if (params.symbol) qs.set('symbol', params.symbol)
+    if (params.assetClass) qs.set('assetClass', params.assetClass)
+    if (params.count != null) qs.set('count', String(params.count))
+    if (params.start) qs.set('start', params.start)
+    if (params.end) qs.set('end', params.end)
+    return fetchJson(`/api/bars?${qs}`)
+  },
+}

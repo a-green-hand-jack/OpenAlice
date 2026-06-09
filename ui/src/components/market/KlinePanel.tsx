@@ -10,7 +10,7 @@ import {
   type CandlestickData,
   type HistogramData,
 } from 'lightweight-charts'
-import { marketApi, type AssetClass, type HistoricalBar } from '../../api/market'
+import { barsApi, type AssetClass, type HistoricalBar, type BarSourceCandidate, type BarMeta } from '../../api/market'
 
 type Interval = '1m' | '5m' | '1h' | '1d'
 type Timeframe = '1D' | '5D' | '1M' | '3M' | '1Y' | '5Y' | 'All'
@@ -62,6 +62,8 @@ export function KlinePanel({ selection }: Props) {
   const [searchParams, setSearchParams] = useSearchParams()
   const interval = parseInterval(searchParams.get('interval'))
   const tf = parseTimeframe(searchParams.get('range'))
+  // The provider picked at search time (a barId), if any — opens the chart on it.
+  const sourceParam = searchParams.get('source')
 
   // Local setter named `selectInterval` rather than `setInterval` so it
   // doesn't shadow the global timer function we use for polling below.
@@ -83,7 +85,11 @@ export function KlinePanel({ selection }: Props) {
   }
 
   const [bars, setBars] = useState<HistoricalBar[] | null>(null)
-  const [provider, setProvider] = useState<string | null>(null)
+  const [meta, setMeta] = useState<BarMeta | null>(null)
+  const [candidates, setCandidates] = useState<BarSourceCandidate[]>([])
+  // null = vendor default for this symbol; a barId = an explicitly-picked source.
+  // Seed from the URL so the very first fetch is the right source (no vendor flicker).
+  const [selectedBarId, setSelectedBarId] = useState<string | null>(sourceParam)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -142,53 +148,64 @@ export function KlinePanel({ selection }: Props) {
     chartRef.current?.timeScale().applyOptions({ timeVisible: INTRADAY.has(interval) })
   }, [interval])
 
-  // Fetch bars on any of: symbol, interval, timeframe. Re-polls periodically
-  // so a long-open tab doesn't show yesterday's bars as if they were live.
+  // Discover the available bar sources for this symbol (populates the picker).
+  // Seed the picked source from the URL (?source=barId, set at search time);
+  // otherwise null → vendor default.
   useEffect(() => {
-    if (!selection) { setBars(null); setProvider(null); setError(null); return }
+    setSelectedBarId(sourceParam)
+    setCandidates([])
+    if (!selection || selection.assetClass === 'commodity') return
+    let cancelled = false
+    barsApi.searchSources(selection.symbol, 12)
+      .then((r) => { if (!cancelled) setCandidates(r.candidates) })
+      .catch(() => { if (!cancelled) setCandidates([]) })
+    return () => { cancelled = true }
+  }, [selection, sourceParam])
+
+  // Fetch bars: an explicitly-picked source (barId) or the vendor default
+  // (symbol+assetClass). Re-polls so a long-open tab doesn't show stale bars.
+  useEffect(() => {
+    if (!selection) { setBars(null); setMeta(null); setError(null); return }
     if (selection.assetClass === 'commodity') {
       setBars(null)
-      setProvider(null)
+      setMeta(null)
       setError('Commodity K-line support is coming in the next step.')
       return
     }
     let cancelled = false
-    const fetch = (isInitial: boolean) => {
+    const run = (isInitial: boolean) => {
       if (isInitial) setLoading(true)
       setError(null)
       const days = daysForTimeframe(tf)
-      const opts: { interval: string; startDate?: string } = { interval }
-      if (days != null) opts.startDate = startDateFromToday(days)
+      const params: Parameters<typeof barsApi.bars>[0] = { interval }
+      if (selectedBarId) params.barId = selectedBarId
+      else { params.symbol = selection.symbol; params.assetClass = selection.assetClass }
+      if (days != null) params.start = startDateFromToday(days)
 
-      marketApi.historical(selection.assetClass, selection.symbol, opts)
+      barsApi.bars(params)
         .then((res) => {
           if (cancelled) return
           if (res.error || !res.results) {
-            setError(res.error ?? 'No data returned.')
-            setBars(null)
-            setProvider(null)
+            setError(res.error ?? 'No data returned.'); setBars(null); setMeta(null)
           } else if (res.results.length === 0) {
-            setError('No bars in this range.')
-            setBars([])
-            setProvider(res.provider || null)
+            setError('No bars in this range.'); setBars([]); setMeta(res.meta)
           } else {
-            setBars(res.results)
-            setProvider(res.provider || null)
+            setBars(res.results); setMeta(res.meta)
           }
         })
         .catch((e) => {
           if (cancelled) return
-          setError(e instanceof Error ? e.message : String(e)); setBars(null); setProvider(null)
+          setError(e instanceof Error ? e.message : String(e)); setBars(null); setMeta(null)
         })
         .finally(() => { if (!cancelled && isInitial) setLoading(false) })
     }
-    fetch(true)
+    run(true)
     // 60s for intraday intervals (1m/5m/1h) because each tick is a fresh bar;
     // 5min for daily because a refresh within a single day is cosmetic.
     const pollMs = INTRADAY.has(interval) ? 60_000 : 300_000
-    const timer = setInterval(() => fetch(false), pollMs)
+    const timer = setInterval(() => run(false), pollMs)
     return () => { cancelled = true; clearInterval(timer) }
-  }, [selection, interval, tf])
+  }, [selection, selectedBarId, interval, tf])
 
   // Push bars into chart and fit.
   useEffect(() => {
@@ -222,14 +239,27 @@ export function KlinePanel({ selection }: Props) {
     return `${selection.symbol} · ${selection.assetClass}`
   }, [selection])
 
+  // Source options for the picker — always include the currently-shown provider
+  // (even if it wasn't in the search results), so the dropdown reflects reality.
+  const sourceOptions = useMemo<BarSourceCandidate[]>(() => {
+    const opts = [...candidates]
+    if (meta?.barId && !opts.some((c) => c.barId === meta.barId)) {
+      opts.unshift({ barId: meta.barId, source: meta.source, sourceId: meta.sourceId, symbol: meta.symbol, assetClass: 'unknown', label: meta.sourceId, barCapability: meta.barCapability })
+    }
+    return opts
+  }, [candidates, meta])
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between py-2 px-1 gap-3 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-[13px] font-medium text-text truncate">{title}</span>
-          {provider && (
-            <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-bg-tertiary text-text-muted font-medium">
-              {provider}
+          {meta && (
+            <span
+              className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-bg-tertiary text-text-muted font-medium"
+              title={`Provider: ${meta.barId}${meta.barCapability ? ` (${meta.barCapability})` : ''}`}
+            >
+              {meta.sourceId}{meta.barCapability ? ` · ${meta.barCapability}` : ''}
             </span>
           )}
           {bars && bars.length > 0 && (
@@ -239,6 +269,23 @@ export function KlinePanel({ selection }: Props) {
           )}
         </div>
         <div className="flex items-center gap-5 flex-wrap">
+          {sourceOptions.length > 1 && (
+            <label className="flex items-center gap-2">
+              <span className="text-[11px] uppercase tracking-wide text-text-muted/70">Source</span>
+              <select
+                value={selectedBarId ?? meta?.barId ?? ''}
+                onChange={(e) => setSelectedBarId(e.target.value || null)}
+                className="bg-bg-tertiary border border-border rounded px-2 py-1 text-[12px] text-text cursor-pointer max-w-[240px]"
+                title="Which provider's K-line to show — sources are never merged; you pick"
+              >
+                {sourceOptions.map((c) => (
+                  <option key={c.barId} value={c.barId}>
+                    {c.sourceId} · {c.symbol}{c.barCapability ? ` (${c.barCapability})` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="flex items-center gap-2">
             <span className="text-[11px] uppercase tracking-wide text-text-muted/70">Interval</span>
             <div className="flex border border-border rounded overflow-hidden" title="Candle width (how much time each bar covers)">

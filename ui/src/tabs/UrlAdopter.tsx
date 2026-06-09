@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Navigate, Route, Routes, useParams } from 'react-router-dom'
+import { Navigate, Route, Routes, useParams, useSearchParams } from 'react-router-dom'
 import { useWorkspace } from './store'
 import { specEquals, type ActivitySection, type ViewSpec } from './types'
 import { getView } from './registry'
@@ -114,10 +114,12 @@ function AdoptStatic({ spec }: { spec: ViewSpec }) {
 
 function AdoptMarketDetail() {
   const { assetClass, symbol } = useParams<{ assetClass: string; symbol: string }>()
+  const [search] = useSearchParams()
   const valid: ReadonlyArray<string> = ['equity', 'crypto', 'currency', 'commodity']
   if (!assetClass || !symbol || !valid.includes(assetClass)) {
     return <Navigate to="/market" replace />
   }
+  const source = search.get('source') ?? undefined
   return (
     <AdoptStatic
       spec={{
@@ -125,6 +127,7 @@ function AdoptMarketDetail() {
         params: {
           assetClass: assetClass as Extract<ViewSpec, { kind: 'market-detail' }>['params']['assetClass'],
           symbol,
+          ...(source ? { source } : {}),
         },
       }}
     />

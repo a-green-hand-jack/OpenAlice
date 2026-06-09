@@ -171,6 +171,24 @@ describe('searchBarSources — federated candidates', () => {
     expect(out.some((c) => c.source === 'vendor')).toBe(true)
   })
 
+  it('venue-decided assetClass wins over the secType heuristic (CCXT future ≠ commodity)', async () => {
+    const utaManager = {
+      has: async () => true,
+      get: async () => undefined,
+      searchContracts: async () => [
+        // A CCXT dated future: secType FUT (would heuristically → commodity), but
+        // the venue says crypto → crypto must win.
+        { source: 'okx-readonly', contract: { aliceId: 'okx-readonly|BTC/USDT:USDT-240628', symbol: 'BTC', secType: 'FUT' }, derivativeSecTypes: [], assetClass: 'crypto' },
+        // No venue hint → falls back to the secType heuristic (FUT → commodity).
+        { source: 'ibkr', contract: { aliceId: 'ibkr|CL', symbol: 'CL', secType: 'FUT' }, derivativeSecTypes: [] },
+      ],
+    } as never
+    const out = await createBarService(makeDeps({ utaManager })).searchBarSources('BTC')
+    const uta = out.filter((c) => c.source === 'uta')
+    expect(uta[0]).toMatchObject({ sourceId: 'okx-readonly', assetClass: 'crypto' })
+    expect(uta[1]).toMatchObject({ sourceId: 'ibkr', assetClass: 'commodity' })
+  })
+
   it('survives one side failing (vendor still returns if UTA throws)', async () => {
     const utaManager = {
       has: async () => true,

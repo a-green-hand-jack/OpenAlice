@@ -50,4 +50,7 @@ export interface ContractSearchHit {
   source: string
   contract: ContractDescription['contract']
   derivativeSecTypes: string[]
+  /** Venue-decided asset class (the broker's `assetClassFor`) — authoritative
+   *  over a secType heuristic. Absent ⇒ consumer falls back to secType. */
+  assetClass?: 'equity' | 'crypto' | 'currency' | 'commodity' | 'unknown'
 }

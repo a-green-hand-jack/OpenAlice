@@ -232,6 +232,7 @@ export function createBarService(deps: BarServiceDeps): BarService {
             source: 'vendor',
             sourceId: provider,
             symbol,
+            name: r.name ?? undefined,
             assetClass: r.assetClass,
             label: r.name ? `${symbol} · ${r.name} (${provider})` : `${symbol} (${provider})`,
             barCapability: VENDOR_CAPABILITY[provider],
@@ -249,7 +250,9 @@ export function createBarService(deps: BarServiceDeps): BarService {
             source: 'uta',
             sourceId: hit.source,
             symbol,
-            assetClass: secTypeToAssetClass(hit.contract.secType),
+            // Venue-decided asset class is authoritative; secType is only a
+            // broker-blind fallback (and wrong for e.g. a CCXT dated future).
+            assetClass: hit.assetClass ?? secTypeToAssetClass(hit.contract.secType),
             label: symbol ? `${symbol} (${hit.source})` : `${barId}`,
             barCapability: 'realtime',
           })
