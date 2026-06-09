@@ -8,12 +8,12 @@
  */
 
 import { parse } from './parser.js'
-import { evaluate, type CalcDeps } from './evaluator.js'
+import { evaluate, type CalcDeps, type CalcValue } from './evaluator.js'
 import { CalcError, type CalcDiagnostic } from './errors.js'
 import type { DataSourceMeta } from '../indicator/types.js'
 
 export interface RunResult {
-  value?: number | Record<string, number>
+  value?: CalcValue
   /** Sources actually fetched, keyed by barId (source/provider/capability). */
   dataRange?: Record<string, DataSourceMeta>
   /** Present iff the script failed — actionable for self-correction. */
@@ -31,12 +31,13 @@ export async function runScript(script: string, deps: CalcDeps, precision = 4): 
   }
 }
 
-function round(v: number | Record<string, number>, precision: number): number | Record<string, number> {
-  const r = (x: number) => Number.isFinite(x) ? Number(x.toFixed(precision)) : x
-  if (typeof v === 'number') return r(v)
-  return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, r(x)]))
+function round(v: CalcValue, precision: number): CalcValue {
+  if (typeof v === 'number') return Number.isFinite(v) ? Number(v.toFixed(precision)) : v
+  if (typeof v === 'string') return v
+  if (Array.isArray(v)) return v.map((x) => round(x, precision))
+  return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, round(x, precision)]))
 }
 
-export type { CalcDeps } from './evaluator.js'
+export type { CalcDeps, CalcValue } from './evaluator.js'
 export type { CalcDiagnostic, CalcErrorKind } from './errors.js'
 export { CalcError } from './errors.js'

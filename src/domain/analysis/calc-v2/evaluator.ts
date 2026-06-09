@@ -19,8 +19,13 @@ export interface CalcDeps {
   barService: BarService
 }
 
+/** A returnable value: a scalar, a string label, a named record (e.g. bbands),
+ *  a positional panel (list), or a labeled panel (dict). Recursive so panels can
+ *  nest. */
+export type CalcValue = number | string | CalcValue[] | { [k: string]: CalcValue }
+
 export interface CalcOutput {
-  value: number | Record<string, number>
+  value: CalcValue
   /** Sources actually fetched, keyed by barId. */
   dataRange: Record<string, DataSourceMeta>
 }
@@ -34,8 +39,13 @@ type V =
   | { k: 'col'; col: Col }
   | { k: 'series'; barId: string; r: BarsResult }
   | { k: 'rec'; v: Record<string, number> }
+  | { k: 'list'; items: CalcValue[] }
+  | { k: 'dict'; map: Record<string, CalcValue> }
 
 const SERIES_COLUMNS = ['open', 'high', 'low', 'close', 'volume'] as const
+/** A panel (list/dict result) batches many computations in one call — but each
+ *  entry is still a single value, so the output stays small. Cap the count. */
+const MAX_PANEL = 50
 
 export async function evaluate(program: Program, deps: CalcDeps): Promise<CalcOutput> {
   const env = new Map<string, V>()
@@ -101,6 +111,18 @@ export async function evaluate(program: Program, deps: CalcDeps): Promise<CalcOu
         if (e.callee === 'bars') return evalBars(e)
         return evalFunction(e)
       }
+      case 'list': {
+        if (e.elements.length > MAX_PANEL) throw new CalcError({ kind: 'type', message: `A panel takes at most ${MAX_PANEL} entries, got ${e.elements.length}`, line: e.pos.line })
+        const items: CalcValue[] = []
+        for (const el of e.elements) items.push(asLeaf(await evalExpr(el), el.pos.line))
+        return { k: 'list', items }
+      }
+      case 'dict': {
+        if (e.entries.length > MAX_PANEL) throw new CalcError({ kind: 'type', message: `A panel takes at most ${MAX_PANEL} entries, got ${e.entries.length}`, line: e.pos.line })
+        const map: Record<string, CalcValue> = {}
+        for (const ent of e.entries) map[ent.key] = asLeaf(await evalExpr(ent.value), ent.value.pos.line)
+        return { k: 'dict', map }
+      }
     }
   }
 
@@ -142,10 +164,31 @@ export async function evaluate(program: Program, deps: CalcDeps): Promise<CalcOu
     env.set(b.name, await evalExpr(b.value))
   }
   const out = await evalExpr(program.result)
-  if (out.k === 'num') return { value: out.v, dataRange }
-  if (out.k === 'rec') return { value: out.v, dataRange }
-  const what = out.k === 'series' ? 'a series' : out.k === 'col' ? 'a series column' : 'a string'
-  throw new CalcError({ kind: 'type', message: `The result is ${what}, not a number — reduce it with [-1] or an indicator (e.g. sma(s.close, 50))`, line: program.result.pos.line })
+  switch (out.k) {
+    case 'num': return { value: out.v, dataRange }
+    case 'str': return { value: out.v, dataRange }
+    case 'rec': return { value: out.v, dataRange }
+    case 'list': return { value: out.items, dataRange }
+    case 'dict': return { value: out.map, dataRange }
+    default: {
+      const what = out.k === 'series' ? 'a series' : 'a series column'
+      throw new CalcError({ kind: 'type', message: `The result is ${what}, not a value — reduce it with [-1] or an indicator (e.g. sma(s.close, 50)), or return a panel like { "1h": rsi(s.close, 14) }`, line: program.result.pos.line })
+    }
+  }
+}
+
+/** Coerce a value used as a panel entry: must be a single value (not a raw
+ *  series), so the panel stays small. */
+function asLeaf(v: V, line: number): CalcValue {
+  switch (v.k) {
+    case 'num': return v.v
+    case 'str': return v.v
+    case 'rec': return v.v
+    case 'list': return v.items
+    case 'dict': return v.map
+    default:
+      throw new CalcError({ kind: 'type', message: 'A panel entry must be a single value — reduce a series with [-1] or an indicator (e.g. sma(s.close, 50))', line })
+  }
 }
 
 // ---- coercions ----

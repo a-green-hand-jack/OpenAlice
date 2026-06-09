@@ -10,7 +10,7 @@ import type { Pos } from './ast.js'
 
 export type TokenType =
   | 'num' | 'str' | 'name'
-  | '+' | '-' | '*' | '/' | '=' | '(' | ')' | '[' | ']' | ',' | '.' | ':'
+  | '+' | '-' | '*' | '/' | '=' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | '.' | ':'
   | 'newline' | 'eof'
 
 export interface Token {
@@ -21,7 +21,7 @@ export interface Token {
 
 const SINGLE: Record<string, TokenType> = {
   '+': '+', '-': '-', '*': '*', '/': '/', '=': '=',
-  '(': '(', ')': ')', '[': '[', ']': ']', ',': ',', '.': '.', ':': ':',
+  '(': '(', ')': ')', '[': '[', ']': ']', '{': '{', '}': '}', ',': ',', '.': '.', ':': ':',
 }
 
 export function tokenize(src: string): Token[] {

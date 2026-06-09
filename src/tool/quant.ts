@@ -61,6 +61,16 @@ Indicators return the LATEST value directly (a scalar) — do NOT index them.
 Only raw columns are series: index them with s.close[-1] (latest), s.close[-n] (n-back).
 Arithmetic: + - * /.
 
+Panels — batch many computations in ONE call (avoids calling this tool N times).
+The result can be a labeled dict { "label": expr, ... } or a list [ expr, ... ].
+Each entry must still be a single value (a scalar/record), max 50 entries. Use
+this for multi-timeframe / multi-symbol / multi-indicator at once, e.g.:
+  h1  = bars("binance-readonly|BTC/USDT", "1h",  count=250)
+  h4  = bars("binance-readonly|BTC/USDT", "4h",  count=250)
+  h12 = bars("binance-readonly|BTC/USDT", "12h", count=250)
+  { "1h": rsi(h1.close, 14), "4h": rsi(h4.close, 14), "12h": rsi(h12.close, 14) }
+→ { "1h": 53.2, "4h": 48.9, "12h": 61.4 }
+
 Why v2 over calculateIndicator: target a specific source ("chart what I trade"),
 or compare sources in one script, e.g. basis check:
   a = bars("ibkr|265598", "1d", count=5)

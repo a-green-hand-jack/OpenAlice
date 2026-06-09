@@ -16,7 +16,7 @@
 
 import { tokenize, type Token, type TokenType } from './lexer.js'
 import { CalcError } from './errors.js'
-import type { Program, Expr, Assign, Arg, Pos } from './ast.js'
+import type { Program, Expr, Assign, Arg, DictEntry, Pos } from './ast.js'
 
 const KEYWORDS = new Set(['if', 'else', 'elif', 'and', 'or', 'not', 'for', 'while', 'in', 'lambda'])
 
@@ -136,11 +136,52 @@ class Parser {
     if (t.type === 'num') { this.next(); return { type: 'num', value: Number(t.value), pos: t.pos } }
     if (t.type === 'str') { this.next(); return { type: 'str', value: t.value, pos: t.pos } }
     if (t.type === '(') { this.next(); const e = this.parseExpr(); this.eat(')'); return e }
+    if (t.type === '[') return this.parseList()
+    if (t.type === '{') return this.parseDict()
     if (t.type === 'name') {
       if (this.peek(1).type === '(') return this.parseCall()
       this.next(); return { type: 'name', id: t.value, pos: t.pos }
     }
     throw new CalcError({ kind: 'syntax', message: `Unexpected ${describe(t.type, t.value)}`, line: t.pos.line, col: t.pos.col })
+  }
+
+  /** `[a, b, c]` — positional panel. Newlines + a trailing comma are allowed. */
+  private parseList(): Expr {
+    const pos = this.eat('[').pos
+    const elements: Expr[] = []
+    this.skipNewlines()
+    while (!this.at(']')) {
+      elements.push(this.parseExpr())
+      this.skipNewlines()
+      if (this.at(',')) { this.next(); this.skipNewlines() } else break
+    }
+    this.skipNewlines()
+    this.eat(']')
+    return { type: 'list', elements, pos }
+  }
+
+  /** `{ "1h": expr, name: expr }` — labeled panel. */
+  private parseDict(): Expr {
+    const pos = this.eat('{').pos
+    const entries: DictEntry[] = []
+    this.skipNewlines()
+    while (!this.at('}')) {
+      const key = this.parseDictKey()
+      this.eat(':')
+      const value = this.parseExpr()
+      entries.push({ key, value })
+      this.skipNewlines()
+      if (this.at(',')) { this.next(); this.skipNewlines() } else break
+    }
+    this.skipNewlines()
+    this.eat('}')
+    return { type: 'dict', entries, pos }
+  }
+
+  private parseDictKey(): string {
+    const t = this.peek()
+    if (t.type === 'str' || t.type === 'name' || t.type === 'num') { this.next(); return t.value }
+    throw new CalcError({ kind: 'syntax', message: `Dict key must be a string or name, got ${describe(t.type, t.value)}`, line: t.pos.line, col: t.pos.col })
   }
 
   private parseCall(): Expr {

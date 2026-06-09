@@ -91,4 +91,38 @@ describe('calc-v2 evaluator', () => {
     expect(r.value).toHaveProperty('middle')
     expect(r.value).toHaveProperty('lower')
   })
+
+  // ---- panels: batch many computations in one call ----
+
+  it('returns a labeled panel (dict) — the multi-timeframe case', async () => {
+    const r = await run(
+      `h1 = bars("x","1h",asset="crypto")\nh4 = bars("x","4h",asset="crypto")\n{ "1h": sma(h1.close, 3), "4h": sma(h4.close, 3) }`,
+      mockBars([1, 2, 3, 4, 5]),
+    )
+    expect(r.error).toBeUndefined()
+    expect(r.value).toEqual({ '1h': 4, '4h': 4 })
+  })
+
+  it('returns a positional panel (list)', async () => {
+    const r = await run(`s = bars("x","1d",asset="equity")\n[ s.close[-1], sma(s.close, 3) ]`, mockBars([1, 2, 3, 4, 5]))
+    expect(r.value).toEqual([5, 4])
+  })
+
+  it('a panel entry must reduce to a single value (raw series rejected)', async () => {
+    const r = await run(`s = bars("x","1d",asset="equity")\n{ "x": s.close }`, mockBars([1, 2, 3]))
+    expect(r.error?.kind).toBe('type')
+    expect(r.error?.message).toMatch(/single value/)
+  })
+
+  it('caps panel size', async () => {
+    const entries = Array.from({ length: 51 }, (_, i) => `"k${i}": 1`).join(', ')
+    const r = await run(`{ ${entries} }`, mockBars([1, 2, 3]))
+    expect(r.error?.kind).toBe('type')
+    expect(r.error?.message).toMatch(/at most 50/)
+  })
+
+  it('a panel entry can be an indicator record (nested)', async () => {
+    const r = await run(`s = bars("x","1d",asset="equity")\n{ "bb": bbands(s.close, 3, 2) }`, mockBars([1, 2, 3, 4, 5, 6]))
+    expect((r.value as Record<string, unknown>).bb).toHaveProperty('upper')
+  })
 })

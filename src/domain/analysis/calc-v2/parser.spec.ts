@@ -86,4 +86,19 @@ describe('calc-v2 parser', () => {
     expect(p.bindings).toHaveLength(1)
     expect(p.result).toMatchObject({ type: 'call', callee: 'sma' })
   })
+
+  it('parses a labeled panel (dict) across lines with a trailing comma', () => {
+    const p = parse(`a = bars("x","1h")\n{\n  "1h": rsi(a.close, 14),\n  "4h": rsi(a.close, 14),\n}`)
+    expect(p.result.type).toBe('dict')
+    if (p.result.type === 'dict') {
+      expect(p.result.entries.map((e) => e.key)).toEqual(['1h', '4h'])
+      expect(p.result.entries[0].value).toMatchObject({ type: 'call', callee: 'rsi' })
+    }
+  })
+
+  it('parses a positional panel (list literal)', () => {
+    const p = parse(`a = bars("x","1d")\n[ a.close[-1], sma(a.close, 50) ]`)
+    expect(p.result.type).toBe('list')
+    if (p.result.type === 'list') expect(p.result.elements).toHaveLength(2)
+  })
 })

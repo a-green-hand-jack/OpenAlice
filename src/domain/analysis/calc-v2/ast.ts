@@ -35,6 +35,8 @@ export type Expr =
   | IndexExpr
   | BinaryExpr
   | UnaryExpr
+  | ListLit
+  | DictLit
 
 export interface NumLit { type: 'num'; value: number; pos: Pos }
 export interface StrLit { type: 'str'; value: string; pos: Pos }
@@ -53,3 +55,11 @@ export type BinaryOp = '+' | '-' | '*' | '/'
 export interface BinaryExpr { type: 'binary'; op: BinaryOp; left: Expr; right: Expr; pos: Pos }
 
 export interface UnaryExpr { type: 'unary'; op: '-'; operand: Expr; pos: Pos }
+
+/** `[a, b, c]` — a positional panel of values (batch many computations in one call). */
+export interface ListLit { type: 'list'; elements: Expr[]; pos: Pos }
+
+/** `{ "1h": rsi(...), "4h": rsi(...) }` — a labeled panel. Keys are string
+ *  literals or bare identifiers. */
+export interface DictEntry { key: string; value: Expr }
+export interface DictLit { type: 'dict'; entries: DictEntry[]; pos: Pos }
