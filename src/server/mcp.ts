@@ -137,8 +137,15 @@ export class McpPlugin implements Plugin {
       getWorkspaceService,
     })
 
-    this.server = serve({ fetch: app.fetch, port: this.port }, (info) => {
-      console.log(`mcp plugin listening on http://localhost:${info.port}/mcp (+ /mcp/:wsId)`)
+    // Without an explicit hostname @hono/node-server listens on the wildcard
+    // address (all interfaces) — which exposed the FULL tool surface,
+    // trading included and auth-free, to the LAN. Default to loopback like
+    // the web plugin; OPENALICE_BIND_HOST is the explicit opt-out (Docker
+    // sets 0.0.0.0, where the container boundary is the gate — only the web
+    // port is published). Workspace CLIs always reach MCP via 127.0.0.1.
+    const bindHost = (process.env['OPENALICE_BIND_HOST'] ?? '127.0.0.1').trim()
+    this.server = serve({ fetch: app.fetch, port: this.port, hostname: bindHost }, (info) => {
+      console.log(`mcp plugin listening on http://${bindHost}:${info.port}/mcp (+ /mcp/:wsId)`)
     })
   }
 

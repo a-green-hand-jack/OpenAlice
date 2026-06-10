@@ -22,7 +22,21 @@ export async function probeFreePort(start: number, end: number = start + 100): P
   throw new Error(`probeFreePort: no free port in range ${start}..${end}`)
 }
 
-function isPortFree(port: number): Promise<boolean> {
+/**
+ * A port only counts as free when BOTH the v4 wildcard (0.0.0.0) and the
+ * loopback (127.0.0.1) bind succeed. One bind is not enough on macOS/BSD:
+ * SO_REUSEADDR (node's default) lets a specific-address bind succeed while
+ * a wildcard listener holds the port — and vice versa — so probing only
+ * 127.0.0.1 reported ports held by wildcard listeners (e.g. a default
+ * `serve({ port })` with no hostname) as free. Empirical matrix (macOS,
+ * node 22): holder default/`::`/0.0.0.0/127.0.0.1 × probe 127.0.0.1 OR
+ * 0.0.0.0 each miss one mode; the conjunction catches all four.
+ */
+async function isPortFree(port: number): Promise<boolean> {
+  return (await bindable(port, '0.0.0.0')) && (await bindable(port, '127.0.0.1'))
+}
+
+function bindable(port: number, host: string): Promise<boolean> {
   return new Promise((res) => {
     const srv = createServer()
     let settled = false
@@ -34,6 +48,6 @@ function isPortFree(port: number): Promise<boolean> {
     }
     srv.once('error', () => done(false))
     srv.once('listening', () => done(true))
-    srv.listen(port, '127.0.0.1')
+    srv.listen(port, host)
   })
 }
