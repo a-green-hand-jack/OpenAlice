@@ -75,6 +75,22 @@ function ibkrTifToAlpaca(tif: string): string {
   }
 }
 
+/**
+ * Surface Alpaca's response body in failures. The SDK throws axios-shaped
+ * errors whose message is just "Request failed with status code 422" — the
+ * actual reason ("order is not cancelable", observed live when cancelling
+ * during the after-hours pending_new window) lives in response.data and was
+ * being dropped, leaving the git record and the UI with an opaque code.
+ */
+function alpacaErrorMessage(err: unknown): string {
+  const base = err instanceof Error ? err.message : String(err)
+  const data = (err as { response?: { data?: unknown } })?.response?.data
+  if (data && typeof data === 'object') {
+    return `${base} — alpaca: ${JSON.stringify(data)}`
+  }
+  return base
+}
+
 export class AlpacaBroker implements IBroker {
   // ---- Self-registration ----
 
@@ -299,7 +315,7 @@ export class AlpacaBroker implements IBroker {
         orderState: makeOrderState(result.status),
       }
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) }
+      return { success: false, error: alpacaErrorMessage(err) }
     }
   }
 
@@ -320,7 +336,7 @@ export class AlpacaBroker implements IBroker {
         orderState: makeOrderState(result.status),
       }
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) }
+      return { success: false, error: alpacaErrorMessage(err) }
     }
   }
 
@@ -331,7 +347,7 @@ export class AlpacaBroker implements IBroker {
       orderState.status = 'Cancelled'
       return { success: true, orderId, orderState }
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) }
+      return { success: false, error: alpacaErrorMessage(err) }
     }
   }
 
@@ -365,7 +381,7 @@ export class AlpacaBroker implements IBroker {
         orderState: makeOrderState(result.status),
       }
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) }
+      return { success: false, error: alpacaErrorMessage(err) }
     }
   }
 
