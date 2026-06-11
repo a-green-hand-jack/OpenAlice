@@ -258,6 +258,47 @@ describe('UTA — getState', () => {
   })
 })
 
+// ==================== getAccount PnL invariant ====================
+
+describe('UTA — getAccount PnL invariant', () => {
+  it('account-level unrealizedPnL equals the sum over positions (broker placeholder overridden)', async () => {
+    const { uta, broker } = createUTA()
+    // CCXT-spot pattern: broker account info carries a placeholder 0 while
+    // the positions surface has real PnL. MockBroker derives position PnL
+    // from qty/avgCost/markPrice: (160-150)*10 = 100 and (1645.46-1644.44)*2
+    // = 2.04 → account must report the 102.04 sum, not the placeholder.
+    broker.setAccountInfo({ unrealizedPnL: '0' })
+    broker.setPositions([
+      makePosition({ quantity: new Decimal(10), avgCost: '150', marketPrice: '160' }),
+      makePosition({
+        contract: makeContract({ aliceId: 'mock-paper|ETH', symbol: 'ETH', secType: 'CRYPTO' }),
+        quantity: new Decimal(2),
+        avgCost: '1644.44',
+        marketPrice: '1645.46',
+      }),
+    ])
+
+    const account = await uta.getAccount()
+    expect(account.unrealizedPnL).toBe('102.04')
+  })
+
+  it('keeps the broker-reported value for mixed-currency books (no blind cross-currency sum)', async () => {
+    const { uta, broker } = createUTA()
+    broker.setAccountInfo({ baseCurrency: 'USD', unrealizedPnL: '777' })
+    broker.setPositions([
+      makePosition({ unrealizedPnL: '100' }), // USD
+      makePosition({
+        contract: makeContract({ aliceId: 'mock-paper|0700', symbol: '0700', currency: 'HKD' }),
+        currency: 'HKD',
+        unrealizedPnL: '500', // HKD — not summable with USD
+      }),
+    ])
+
+    const account = await uta.getAccount()
+    expect(account.unrealizedPnL).toBe('777')
+  })
+})
+
 // ==================== stagePlaceOrder ====================
 
 describe('UTA — stagePlaceOrder', () => {
@@ -578,6 +619,45 @@ describe('UTA — sync', () => {
     expect(result.updatedCount).toBe(1)
     expect(result.updates[0].orderId).toBe(orderId)
     expect(result.updates[0].currentStatus).toBe('filled')
+    // Execution data must flow into the sync record — without qty/price the
+    // fill is invisible to cost-basis reconstruction.
+    expect(result.updates[0].filledQty).toBe('10')
+    expect(result.updates[0].filledPrice).toBe('149')
+  })
+
+  it('records cumulative qty + weighted avg price across partial fills', async () => {
+    const { uta, broker } = createUTA()
+
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'LMT', totalQuantity: '10', lmtPrice: '150' })
+    uta.commit('limit buy')
+    const pushResult = await uta.push()
+    const orderId = pushResult.submitted[0]!.orderId!
+
+    broker.fillOrder(orderId, { qty: '4', price: '148' })
+    broker.fillOrder(orderId, { qty: '6', price: '150' })
+
+    const result = await uta.sync()
+    expect(result.updates[0].currentStatus).toBe('filled')
+    expect(result.updates[0].filledQty).toBe('10')
+    // (148*4 + 150*6) / 10 = 149.2
+    expect(result.updates[0].filledPrice).toBe('149.2')
+  })
+
+  it('passes the operation localSymbol as the broker symbolHint', async () => {
+    const { uta, broker } = createUTA()
+
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'LMT', totalQuantity: '10', lmtPrice: '150' })
+    uta.commit('limit buy')
+    const pushResult = await uta.push()
+    const orderId = pushResult.submitted[0]!.orderId!
+    broker.fillPendingOrder(orderId, 149)
+
+    const spy = vi.spyOn(broker, 'getOrder')
+    await uta.sync()
+    // MockBroker stamps localSymbol = nativeKey on contracts it resolves; a
+    // symbol-scoped broker (CCXT) needs this hint to look orders up after a
+    // restart wipes its in-memory cache.
+    expect(spy).toHaveBeenCalledWith(orderId, expect.any(String))
   })
 
   it('does not update when pending order not found in broker', async () => {

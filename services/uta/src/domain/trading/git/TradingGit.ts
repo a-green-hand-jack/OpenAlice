@@ -517,7 +517,7 @@ export class TradingGit implements ITradingGit {
     return { hash, updatedCount: updates.length, updates }
   }
 
-  getPendingOrderIds(): Array<{ orderId: string; symbol: string }> {
+  getPendingOrderIds(): Array<{ orderId: string; symbol: string; localSymbol?: string }> {
     // Scan newest→oldest to find latest known status per orderId
     const orderStatus = new Map<string, string>()
 
@@ -530,7 +530,7 @@ export class TradingGit implements ITradingGit {
     }
 
     // Collect orders still pending
-    const pending: Array<{ orderId: string; symbol: string }> = []
+    const pending: Array<{ orderId: string; symbol: string; localSymbol?: string }> = []
     const seen = new Set<string>()
 
     for (const commit of this.commits) {
@@ -541,8 +541,16 @@ export class TradingGit implements ITradingGit {
           !seen.has(result.orderId) &&
           orderStatus.get(result.orderId) === 'submitted'
         ) {
-          const symbol = getOperationSymbol(commit.operations[j])
-          pending.push({ orderId: result.orderId, symbol })
+          const op = commit.operations[j]
+          const symbol = getOperationSymbol(op)
+          // Broker-native symbol for symbol-scoped order lookups (CCXT).
+          // Persisted with the operation, so it survives process restarts
+          // where the broker's in-memory orderId→symbol cache is empty.
+          const localSymbol =
+            (op?.action === 'placeOrder' || op?.action === 'closePosition')
+              ? op.contract?.localSymbol || undefined
+              : undefined
+          pending.push({ orderId: result.orderId, symbol, ...(localSymbol && { localSymbol }) })
           seen.add(result.orderId)
         }
       }

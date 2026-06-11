@@ -541,6 +541,8 @@ export class AlpacaBroker implements IBroker {
     if (o.stop_price) order.auxPrice = new Decimal(o.stop_price)
     if (o.time_in_force) order.tif = o.time_in_force.toUpperCase()
     if (o.extended_hours) order.outsideRth = true
+    // Fill data — sync reads these to record execution qty/price into git.
+    if (o.filled_qty != null) order.filledQuantity = new Decimal(o.filled_qty)
     // Alpaca order IDs are UUIDs — IBKR's orderId field is number, so leave at default 0.
     // The real string ID is preserved through PlaceOrderResult.orderId and getOrder(string).
     order.orderId = 0
@@ -550,6 +552,7 @@ export class AlpacaBroker implements IBroker {
       contract,
       order,
       orderState: makeOrderState(o.status, o.reject_reason ?? undefined),
+      ...(o.filled_avg_price != null && { avgFillPrice: o.filled_avg_price }),
       ...(tpsl && { tpsl }),
     }
   }

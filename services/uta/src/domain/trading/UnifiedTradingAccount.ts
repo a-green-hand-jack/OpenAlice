@@ -545,8 +545,8 @@ export class UnifiedTradingAccount {
 
     const updates: OrderStatusUpdate[] = []
 
-    for (const { orderId, symbol } of pendingOrders) {
-      const brokerOrder = await this._callBroker(() => this.broker.getOrder(orderId))
+    for (const { orderId, symbol, localSymbol } of pendingOrders) {
+      const brokerOrder = await this._callBroker(() => this.broker.getOrder(orderId, localSymbol))
       if (!brokerOrder) continue
 
       const status = brokerOrder.orderState.status
@@ -560,11 +560,24 @@ export class UnifiedTradingAccount {
           ? orderFilledQty.toFixed()
           : undefined
 
+        const currentStatus =
+          status === 'Filled' ? 'filled' : status === 'Cancelled' ? 'cancelled' : 'rejected'
+        if (currentStatus === 'filled' && (!filledQty || !brokerOrder.avgFillPrice)) {
+          // Loud, not fatal: a fill without qty/price still advances the
+          // state machine, but cost-basis reconstruction downstream will be
+          // missing data — that must be visible, not silent.
+          console.warn(
+            `UTA[${this.id}]: order ${orderId} (${symbol}) synced to filled but broker omitted ` +
+            `${!filledQty ? 'filledQuantity' : ''}${!filledQty && !brokerOrder.avgFillPrice ? ' and ' : ''}` +
+            `${!brokerOrder.avgFillPrice ? 'avgFillPrice' : ''} — cost basis for this fill may be incomplete`,
+          )
+        }
+
         updates.push({
           orderId,
           symbol,
           previousStatus: 'submitted',
-          currentStatus: status === 'Filled' ? 'filled' : status === 'Cancelled' ? 'cancelled' : 'rejected',
+          currentStatus,
           filledQty,
           filledPrice: brokerOrder.avgFillPrice,
         })
@@ -579,7 +592,7 @@ export class UnifiedTradingAccount {
     return this.git.sync(updates, state)
   }
 
-  getPendingOrderIds(): Array<{ orderId: string; symbol: string }> {
+  getPendingOrderIds(): Array<{ orderId: string; symbol: string; localSymbol?: string }> {
     return this.git.getPendingOrderIds()
   }
 
@@ -593,8 +606,37 @@ export class UnifiedTradingAccount {
 
   // ==================== Broker queries (delegation) ====================
 
-  getAccount(): Promise<AccountInfo> {
-    return this._callBroker(() => this.broker.getAccount())
+  /**
+   * Account info with the UTA-layer invariant enforced: account-level
+   * unrealizedPnL ALWAYS equals the sum over reconciled positions. Brokers
+   * can't uphold this themselves — wallet-sourced spot positions (CCXT
+   * synthesis from fetchBalance) carry a placeholder unrealizedPnL of '0'
+   * at the broker layer because cost basis lives in Alice's order log, not
+   * on the exchange. Trusting broker-reported account PnL therefore shows
+   * 0 for spot-only accounts while the positions surface shows real PnL
+   * (the Bybit-demo aggregation bug). Deriving from positions makes the
+   * two surfaces agree by construction, at the cost of one extra broker
+   * round-trip per account read (a 60s-poll path, not a hot path).
+   */
+  async getAccount(): Promise<AccountInfo> {
+    const account = await this._callBroker(() => this.broker.getAccount())
+    const positions = await this.getPositions()
+    // Currency guard: position PnLs can only be summed when they all share
+    // the account's base currency. Mixed-currency books (IBKR holding HKD +
+    // USD lines) would otherwise blind-sum different units — the exact bug
+    // aggregateAccountFromPositions has today. Those accounts keep the
+    // broker-reported value until the currency-aware FX aggregation lands.
+    const summable = positions.every(
+      (p) => (p.currency || account.baseCurrency) === account.baseCurrency,
+    )
+    if (summable) {
+      let unrealized = new Decimal(0)
+      for (const p of positions) {
+        unrealized = unrealized.plus(new Decimal(p.unrealizedPnL || '0'))
+      }
+      account.unrealizedPnL = unrealized.toString()
+    }
+    return account
   }
 
   async getPositions(): Promise<Position[]> {

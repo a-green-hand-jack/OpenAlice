@@ -5,12 +5,17 @@
  *
  *   USER_DATA_HOME    user-produced state (config, sessions, broker
  *                     git-like commits, brain files, etc.). Survives
- *                     app upgrades and reinstalls. In production, set by
- *                     the guardian (apps/desktop/src/main.ts) to a
- *                     platform-standard location like ~/Library/Application
- *                     Support/OpenAlice/. In dev (pnpm dev / pnpm
- *                     electron:dev), the guardian pins it to the repo
- *                     root so contributors see their working data.
+ *                     app upgrades and reinstalls. Default: ~/.openalice —
+ *                     ONE store shared by every topology (pnpm dev, pnpm
+ *                     start, packaged Electron), so broker credentials and
+ *                     trading state are configured once, not per checkout.
+ *                     Guardians still inject OPENALICE_HOME explicitly so
+ *                     parent and children never derive the root twice;
+ *                     `OPENALICE_HOME=$PWD pnpm dev` pins a checkout-local
+ *                     store when an experiment shouldn't touch real data.
+ *                     The `data/` subtree under it is the portable part
+ *                     (back up / migrate / share THAT); machine-bound
+ *                     secrets like sealing.key live beside it, not in it.
  *
  *   APP_RESOURCES_HOME   files shipped with the app (default templates,
  *                        the UI bundle). Replaced wholesale on app
@@ -24,8 +29,14 @@
  */
 
 import { resolve } from 'node:path'
+import { homedir } from 'node:os'
 
-const USER_DATA_HOME = process.env['OPENALICE_HOME'] ?? process.cwd()
+/** Default user-data root when OPENALICE_HOME is unset. Shared with the
+ *  workspace launcher (~/.openalice/workspaces) and the global provider-key
+ *  store (~/.openalice/provider-keys.json) — one OpenAlice home. */
+const DEFAULT_USER_DATA_HOME = resolve(homedir(), '.openalice')
+
+const USER_DATA_HOME = process.env['OPENALICE_HOME'] ?? DEFAULT_USER_DATA_HOME
 const APP_RESOURCES_HOME = process.env['OPENALICE_APP_HOME'] ?? process.cwd()
 
 /** Path under `data/` — user-produced state. */
@@ -77,6 +88,10 @@ export function cliBinPath(): string {
 
 /** Effective USER_DATA_HOME — exported for diagnostics / migration logic. */
 export const userDataHome = USER_DATA_HOME
+
+/** The built-in default home (~/.openalice), independent of env overrides.
+ *  Used by legacy-data adoption notices to phrase "where data lives now". */
+export const defaultUserDataHome = DEFAULT_USER_DATA_HOME
 
 /** Effective APP_RESOURCES_HOME — exported for diagnostics. */
 export const appResourcesHome = APP_RESOURCES_HOME

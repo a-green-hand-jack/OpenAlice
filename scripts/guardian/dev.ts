@@ -15,6 +15,8 @@
  */
 
 import { resolve } from 'node:path'
+import { homedir } from 'node:os'
+import { existsSync } from 'node:fs'
 import type { ChildProcess } from 'node:child_process'
 import {
   readPortsFile,
@@ -29,7 +31,28 @@ import {
 } from './shared.js'
 
 async function main(): Promise<void> {
-  const dataHome = process.cwd()
+  // One global store by default (~/.openalice) — shared with the packaged
+  // app. `OPENALICE_HOME=$PWD pnpm dev` pins a checkout-local store for
+  // experiments that shouldn't touch real data.
+  const dataHome = process.env['OPENALICE_HOME'] ?? resolve(homedir(), '.openalice')
+
+  // Legacy adoption notice: this checkout has a pre-global-root data/ store
+  // and the global one is still virgin. Never auto-move — multiple worktrees
+  // may each carry a ./data and only the user knows which is canonical.
+  if (
+    !process.env['OPENALICE_HOME'] &&
+    existsSync(resolve(process.cwd(), 'data', 'config')) &&
+    !existsSync(resolve(dataHome, 'data', 'config'))
+  ) {
+    console.warn('[guardian] ──────────────────────────────────────────────────────')
+    console.warn(`[guardian] Found existing data/ in this checkout (${resolve(process.cwd(), 'data')}).`)
+    console.warn(`[guardian] OpenAlice now stores user data in ${dataHome}/data.`)
+    console.warn(`[guardian] To adopt this checkout's data, stop the stack and run:`)
+    console.warn(`[guardian]   mv "$PWD/data" "${dataHome}/data"`)
+    console.warn('[guardian] Continuing with a fresh store. (Old behavior: OPENALICE_HOME="$PWD" pnpm dev)')
+    console.warn('[guardian] ──────────────────────────────────────────────────────')
+  }
+
   // env (OPENALICE_*_PORT) > data/config/ports.json > default+probe.
   const ports = await planPorts(resolvePortConfig(process.env, await readPortsFile(dataHome)))
   const flagPath = resolve(dataHome, 'data/control/restart-uta.flag')
@@ -45,7 +68,9 @@ async function main(): Promise<void> {
   const baseEnv = {
     ...process.env,
     NODE_OPTIONS: `${process.env['NODE_OPTIONS'] ?? ''} --conditions=openalice-source`.trim(),
-    OPENALICE_USER_DATA_HOME: dataHome,
+    // Children must resolve the same user-data root the Guardian watches —
+    // src/core/paths.ts reads OPENALICE_HOME; never rely on cwd inheritance.
+    OPENALICE_HOME: dataHome,
   }
 
   // ── UTA spec (re-used by Guardian for restart) ────────────

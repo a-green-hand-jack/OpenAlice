@@ -28,6 +28,7 @@ import {
 } from '@/domain/market-data/client/typebb/index.js'
 import type { CurrencyClientLike } from '@/domain/market-data/client/types.js'
 import { buildSDKCredentials } from '@/domain/market-data/credential-map.js'
+import { startOrderSyncPoller } from './domain/trading/order-sync-poller.js'
 import { createTradingRoutes } from './http/routes-trading.js'
 import { createSimulatorRoutes } from './http/routes-simulator.js'
 import type { UTAEngineContext } from './types.js'
@@ -111,6 +112,13 @@ async function main(): Promise<void> {
   if (config.snapshot.enabled) {
     console.log(`[uta] snapshot scheduler started (every ${config.snapshot.every})`)
   }
+
+  // ==================== Order-sync poller ====================
+  // Fill awareness: polls brokers for pending-order status and records the
+  // transitions as git sync commits. Idle (no pending orders) costs nothing.
+
+  startOrderSyncPoller(() => utaManager.resolve())
+  console.log('[uta] order-sync poller started (10s cadence, pending-only)')
 
   // ==================== Catalog refresh ====================
   // Brokers that cache catalog (Alpaca / CCXT / Mock) need periodic refresh.

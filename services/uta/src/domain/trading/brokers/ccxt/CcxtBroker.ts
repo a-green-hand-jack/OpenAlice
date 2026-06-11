@@ -821,10 +821,13 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     return results
   }
 
-  async getOrder(orderId: string): Promise<OpenOrder | null> {
+  async getOrder(orderId: string, symbolHint?: string): Promise<OpenOrder | null> {
     this.ensureInit()
 
-    const ccxtSymbol = this.orderSymbolCache.get(orderId)
+    // CCXT order lookup is symbol-scoped. The in-memory cache covers orders
+    // placed by this process; the hint (broker-native localSymbol persisted
+    // with the git operation) covers orders placed before a restart.
+    const ccxtSymbol = this.orderSymbolCache.get(orderId) ?? symbolHint
     if (!ccxtSymbol) return null
 
     const fetchOverride = this.overrides.fetchOrderById
@@ -853,6 +856,9 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     order.totalQuantity = new Decimal(o.amount ?? 0)
     order.orderType = (o.type ?? 'market').toUpperCase()
     if (o.price != null) order.lmtPrice = new Decimal(o.price)
+    // Fill data — without these, a sync that sees the order filled records
+    // the transition but loses qty/price, breaking cost-basis downstream.
+    if (o.filled != null) order.filledQuantity = new Decimal(o.filled)
     order.orderId = parseInt(o.id, 10) || 0
 
     const tp = o.takeProfitPrice
@@ -868,6 +874,7 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       contract,
       order,
       orderState: makeOrderState(o.status),
+      ...(o.average != null && { avgFillPrice: String(o.average) }),
       ...(tpsl && { tpsl }),
     }
   }

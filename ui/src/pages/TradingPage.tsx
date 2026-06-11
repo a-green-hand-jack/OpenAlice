@@ -128,11 +128,14 @@ export function TradingPage() {
           presets={presets}
           onSave={async (uta) => {
             const created = await tc.createUTA(uta)
-            const result = await tc.reconnectUTA(created.id)
-            if (!result.success) {
-              throw new Error(result.error || 'Connection failed')
-            }
+            // Persisted — close NOW. The first broker connection runs in the
+            // background and the list's health badge tracks it (Reconnecting
+            // → Connected/Offline); credential validity has its own explicit
+            // Test step in the wizard. Holding the dialog open on a failed
+            // first connect lies about an already-created UTA — re-clicking
+            // Save can only 409.
             setShowAdd(false)
+            void tc.reconnectUTA(created.id).catch(() => {})
             // Trigger a fresh fetch so the new UTA shows live numbers right away.
             void api.trading.equity().then(setEquity).catch(() => {})
             return created

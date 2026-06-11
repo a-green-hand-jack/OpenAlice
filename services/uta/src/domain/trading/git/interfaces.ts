@@ -51,7 +51,10 @@ export interface ITradingGit {
   // ---- git pull (sync pending orders) ----
 
   sync(updates: OrderStatusUpdate[], currentState: GitState): Promise<SyncResult>
-  getPendingOrderIds(): Array<{ orderId: string; symbol: string }>
+  /** `localSymbol` is the broker-native symbol from the order's operation
+   *  contract — passed to IBroker.getOrder as the symbolHint so lookups
+   *  survive restarts (CCXT's order API is symbol-scoped). */
+  getPendingOrderIds(): Array<{ orderId: string; symbol: string; localSymbol?: string }>
 
   // ---- serialization ----
 

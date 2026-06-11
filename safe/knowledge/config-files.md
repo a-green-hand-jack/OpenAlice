@@ -18,7 +18,7 @@ auth implementation. `restart-uta.flag` already exists.
 
 | Path | Contents | Sensitivity |
 |---|---|---|
-| `data/config/accounts.json` | broker UTA configs — **including API keys & secrets** | **Critical** — direct broker theft |
+| `data/config/accounts.json` | broker UTA configs incl. API keys — **sealed** (AES-256-GCM envelope; key at `<userDataHome>/sealing.key`, outside `data/`) | **Critical** — needs file + key; key theft = direct broker theft |
 | `data/config/ai-provider-manager.json` | AI provider keys (Claude/OpenAI/Anthropic) | **High** — credential theft |
 | `data/config/connectors.json` | Telegram bot token + allowed chat IDs | **High** — bot impersonation |
 | `data/config/cron/jobs.json` | scheduled task definitions | **Medium** — silent code execution paths |
@@ -31,13 +31,10 @@ auth implementation. `restart-uta.flag` already exists.
 
 ## File permissions
 
-There's no explicit chmod in any OpenAlice code today. Files are written
-with whatever umask the process has — usually `644` (world-readable). For
-a self-host user on a multi-user host, **anyone with shell access to the
-host can read accounts.json plaintext** today.
-
-After auth lands, `auth.json` and `sessions.json` should be created with
-`600` (owner-only). This is an open finding.
+`auth.json`, `accounts.json`, and `sealing.key` are written `600`
+(owner-only, chmod re-applied best-effort for platforms that ignore the
+writeFile mode). Other config files are written with the process umask —
+usually `644` — but contain lower-sensitivity state.
 
 ## Sample `accounts.json` (sanitized)
 
@@ -64,9 +61,14 @@ After auth lands, `auth.json` and `sessions.json` should be created with
 ]
 ```
 
-`apiKey` and `apiSecret` are **plaintext**. There's no encryption-at-rest.
-The threat model accepts this (host root = game over anyway), but it does
-mean any read-primitive on this file = full broker compromise.
+That's the LOGICAL shape (what the API layer sees, masked over HTTP). At
+rest the file is a sealed envelope —
+`{"$sealed":1,"alg":"aes-256-gcm","iv":…,"tag":…,"data":…}` — keyed by
+`<userDataHome>/sealing.key` (deliberately outside the portable `data/`
+subtree). A read-primitive on the file alone no longer yields broker
+credentials; file + key does. Same-user code execution still equals
+compromise (the key is readable by design); the structural answer to that
+tier is the detached-UTA split, not at-rest crypto.
 
 ## Sample `ai-provider-manager.json` (sanitized)
 
@@ -94,9 +96,10 @@ Same situation — plaintext API keys.
 
 The base data directory is resolved by `src/core/paths.ts`:
 
-- In dev: `process.cwd()/data/` (i.e., the repo root)
-- In Docker: `OPENALICE_USER_DATA_HOME` env (default `/data`, the mounted volume)
-- In Electron (future): `app.getPath('userData')/data/`
+- Default (dev, bare `pnpm start`, Electron): `~/.openalice/data/` — one
+  global store shared across checkouts and the desktop app
+- Override: `OPENALICE_HOME` env (Docker sets `/data`;
+  `OPENALICE_HOME="$PWD"` pins a checkout-local store)
 
 An attacker who can convince OpenAlice to read or write a path **outside**
 its data root would have a serious primitive. The relevant functions to
@@ -113,8 +116,8 @@ audit:
 For static reconnaissance without changing anything:
 
 ```bash
-# What UTAs are configured?
-cat data/config/accounts.json | jq '[.[] | {id, presetId, enabled, mode: .presetConfig.mode}]'
+# What UTAs are configured? (file is sealed — use the masked HTTP surface)
+curl -s http://localhost:47331/api/trading/config/ | jq '.utas[] | {id, presetId, enabled}'
 
 # What broker preset types exist?
 curl -s http://localhost:47331/api/trading/config/broker-presets | jq '.presets[].id'
@@ -146,8 +149,8 @@ usually aren't — `data/` is `.gitignore`d).
 
 ## Out-of-tree paths
 
-The `OPENALICE_USER_DATA_HOME` env var (defaulting to `/data` in Docker,
-cwd in dev) controls the root. An attacker who can influence env vars
+The `OPENALICE_HOME` env var (defaulting to `~/.openalice`; `/data` in
+Docker) controls the root. An attacker who can influence env vars
 (e.g., via container escape or shell-level compromise) can redirect Alice
 to read/write a different `data/` tree.
 

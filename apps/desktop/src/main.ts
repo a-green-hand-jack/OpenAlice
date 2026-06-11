@@ -19,12 +19,14 @@
  * graceful-shutdown UX polish, multi-window, native menu integration.
  */
 
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { dirname, resolve } from 'node:path'
+import { homedir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { probeFreePort } from './probe-port.js'
+import { relocateLegacyData } from './relocate-data.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -122,23 +124,41 @@ app.whenReady().then(async () => {
   const backendEntry = resolve(__dirname, '..', 'main.js')
 
   // Two homes — user data vs app resources. See src/core/paths.ts for why
-  // they're split. In packaged builds the OS-standard locations apply; in
-  // dev (pnpm electron:dev) we now invoke electron with cwd=apps/desktop/,
-  // so we pin both homes to the repo root explicitly — preserves the
-  // pre-split behavior where the backend fell back to process.cwd() and
-  // saw the working repo.
+  // they're split. User data lives at ~/.openalice in BOTH branches — one
+  // store shared with `pnpm dev` and bare `pnpm start`, so accounts are
+  // configured once, not per topology. App resources stay lifecycle-owned:
+  // .app/Contents/Resources when packaged, the repo in dev.
   const repoRoot = resolve(__dirname, '..', '..')
+  const userDataHome = join(homedir(), '.openalice')
   const homeEnv = app.isPackaged
     ? {
-        // ~/Library/Application Support/<productName>/ on macOS
-        OPENALICE_HOME: app.getPath('userData'),
+        OPENALICE_HOME: userDataHome,
         // .app/Contents/Resources/ — sibling of app.asar
         OPENALICE_APP_HOME: dirname(app.getAppPath()),
       }
     : {
-        OPENALICE_HOME: repoRoot,
+        OPENALICE_HOME: userDataHome,
         OPENALICE_APP_HOME: repoRoot,
       }
+
+  // Pre-global-root installs kept user data under Electron's userData dir.
+  // Move it once, BEFORE ports.json is read from the new root and before the
+  // backend boots (it would run migrations against an empty store). On
+  // failure: surface and quit — booting beside the user's real data would
+  // fork their trading history.
+  if (app.isPackaged) {
+    try {
+      await relocateLegacyData(app.getPath('userData'), userDataHome)
+    } catch (err) {
+      dialog.showErrorBox(
+        'OpenAlice — data relocation failed',
+        `Could not move the user data store from\n${app.getPath('userData')}/data\nto\n${userDataHome}/data\n\n` +
+          `${err instanceof Error ? err.message : String(err)}\n\nNothing was deleted. Please move the directory manually, then relaunch.`,
+      )
+      app.quit()
+      return
+    }
+  }
 
   // Port precedence: env (OPENALICE_*_PORT) > data/config/ports.json (under
   // the user-data home, same L1 file the dev/prod guardians read) > probe

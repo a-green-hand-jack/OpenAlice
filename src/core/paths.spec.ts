@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { resolve } from 'node:path'
+import { homedir } from 'node:os'
 
 /**
  * paths.ts reads env into module-level consts at import time, so each
@@ -46,9 +47,9 @@ describe('dataPath', () => {
     expect(dataPath('brain', 'persona.md')).toBe('/tmp/oa-test/data/brain/persona.md')
   })
 
-  it('falls back to process.cwd() when OPENALICE_HOME is unset', async () => {
+  it('falls back to ~/.openalice when OPENALICE_HOME is unset', async () => {
     const { dataPath } = await loadPaths()
-    expect(dataPath('config')).toBe(resolve(process.cwd(), 'data/config'))
+    expect(dataPath('config')).toBe(resolve(homedir(), '.openalice', 'data/config'))
   })
 
   it('returns the base data dir when called with no parts', async () => {
@@ -106,7 +107,7 @@ describe('two homes are independent', () => {
   it('setting OPENALICE_APP_HOME does not move USER_DATA_HOME', async () => {
     const { dataPath, defaultPath } = await loadPaths({ OPENALICE_APP_HOME: '/tmp/resources' })
     expect(defaultPath('x')).toBe('/tmp/resources/default/x')
-    expect(dataPath('config')).toBe(resolve(process.cwd(), 'data/config'))
+    expect(dataPath('config')).toBe(resolve(homedir(), '.openalice', 'data/config'))
   })
 
   it('both env vars can be set together (packaged-app shape)', async () => {
@@ -131,9 +132,10 @@ describe('userDataHome / appResourcesHome exports', () => {
     expect(m.appResourcesHome).toBe('/tmp/app-home')
   })
 
-  it('fall back to cwd when env unset (matches helper fallback)', async () => {
+  it('fall back to defaults when env unset (user data: ~/.openalice; app resources: cwd)', async () => {
     const m = await loadPaths()
-    expect(m.userDataHome).toBe(process.cwd())
+    expect(m.userDataHome).toBe(resolve(homedir(), '.openalice'))
+    expect(m.userDataHome).toBe(m.defaultUserDataHome)
     expect(m.appResourcesHome).toBe(process.cwd())
   })
 })

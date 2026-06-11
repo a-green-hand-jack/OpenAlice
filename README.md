@@ -354,7 +354,8 @@ login screen on first browser visit, the session cookie lasts 7 days.
 docker logs openalice 2>&1 | grep -A1 'admin token'
 ```
 
-**Rotate the token** — delete `data/config/auth.json` and restart. The
+**Rotate the token** — delete `~/.openalice/data/config/auth.json` (in
+Docker: `<volume>/data/config/auth.json`) and restart. The
 next boot prints a fresh token and revokes all existing sessions.
 
 **Escape hatch** — `OPENALICE_DISABLE_AUTH=1` turns the gate off. Only
@@ -466,7 +467,7 @@ mutating API calls.
 
 ## Configuration
 
-All config lives in `data/config/` as JSON files with Zod validation. Missing files fall back to sensible defaults. You can edit these files directly or use the Web UI.
+All config lives in `~/.openalice/data/config/` as JSON files with Zod validation — one global store shared by dev checkouts and the desktop app (the `OPENALICE_HOME` env var overrides the root; Docker uses the mounted volume). Missing files fall back to sensible defaults. You can edit these files directly or use the Web UI — except `accounts.json`, which is sealed (encrypted at rest) and managed through the UI.
 
 **AI Provider** — The model runs inside the workspace CLI using its own login — e.g. your local Claude Code or Codex login, no API key needed. For api-key providers (Anthropic, OpenAI, Google, GLM, MiniMax, Kimi, DeepSeek, …), add credentials in the Web UI's **AI Provider** vault; each credential declares the wire shapes it speaks and gets injected into workspaces, picking the shape the target agent uses. Subscription logins stay in the CLI.
 
@@ -488,9 +489,9 @@ All config lives in `data/config/` as JSON files with Zod validation. Missing fi
 
 The persona prompt uses a **default + user override** pattern:
 
-| Default (git-tracked) | User override (gitignored) |
+| Default (git-tracked) | User override |
 |------------------------|---------------------------|
-| `default/persona.default.md` | `data/brain/persona.md` |
+| `default/persona.default.md` | `~/.openalice/data/brain/persona.md` |
 
 On first run, defaults are auto-copied to the user override path. Edit the user files to customize without touching version control.
 

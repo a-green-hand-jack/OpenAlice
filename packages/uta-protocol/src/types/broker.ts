@@ -351,7 +351,14 @@ export interface IBroker<TMeta = unknown> {
   getAccount(): Promise<AccountInfo>
   getPositions(): Promise<Position[]>
   getOrders(orderIds: string[]): Promise<OpenOrder[]>
-  getOrder(orderId: string): Promise<OpenOrder | null>
+  /**
+   * Look up a single order. `symbolHint` is the broker-native localSymbol
+   * recorded with the order's git operation — brokers whose order-lookup
+   * API is symbol-scoped (CCXT fetchOrder) use it to survive process
+   * restarts, where any in-memory orderId→symbol cache is gone. Brokers
+   * with globally-unique order ids may ignore it.
+   */
+  getOrder(orderId: string, symbolHint?: string): Promise<OpenOrder | null>
   getQuote(contract: Contract): Promise<Quote>
   getMarketClock(): Promise<MarketClock>
 

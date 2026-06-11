@@ -96,6 +96,11 @@ async function fetchHealth(utaPort: number): Promise<UtaHealth | null> {
 
 async function main(): Promise<void> {
   const root = process.cwd()
+  // Pin the user-data home to the checkout so the smoke harness and the
+  // Guardian under test agree on where data/control/ lives, independent of
+  // the production default (~/.openalice). The SOFT restart check below
+  // watches this flag path — if the two sides ever derived different roots,
+  // that check would silently stop testing anything.
   const flagPath = resolve(root, 'data/control/restart-uta.flag')
 
   // ── Spawn the full stack ──────────────────────────────────
@@ -105,7 +110,7 @@ async function main(): Promise<void> {
   // does internally).
   const child: ChildProcess = spawn('pnpm', ['dev'], {
     cwd: root,
-    env: process.env,
+    env: { ...process.env, OPENALICE_HOME: root },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: !IS_WIN,
     shell: IS_WIN,

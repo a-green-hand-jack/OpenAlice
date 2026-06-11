@@ -30,6 +30,7 @@ export default defineConfig({
         test: {
           name: 'node',
           environment: 'node',
+          setupFiles: ['./vitest.setup.ts'],
           include: ['src/**/*.spec.*', 'packages/**/*.spec.*', 'services/**/*.spec.*', 'apps/**/*.spec.*', 'scripts/**/*.spec.*'],
           exclude: ['**/*.e2e.spec.*', '**/*.bbProvider.spec.*', '**/node_modules/**'],
         },

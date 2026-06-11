@@ -275,9 +275,24 @@ ui/                            # React frontend (Vite). auth/ holds the
                                # login gate; lives outside `src/` because
                                # it ships separately.
 
-data/                          # All persistent state (gitignored).
-                               # config/, sessions/, trading/, control/
-                               # (UTA restart flag), backups, etc.
+data/                          # All persistent state. Lives at
+                               # ~/.openalice/data by default — ONE global
+                               # store shared by pnpm dev / pnpm start /
+                               # the packaged app (configure brokers once,
+                               # not per checkout). OPENALICE_HOME overrides
+                               # the root: Docker sets /data; use
+                               # OPENALICE_HOME="$PWD" pnpm dev to pin a
+                               # checkout-local store when an experimental
+                               # branch shouldn't touch real data (its
+                               # migrations run against the real store
+                               # otherwise!). accounts.json is sealed at
+                               # rest (src/core/sealing.ts; key at
+                               # ~/.openalice/sealing.key, outside data/).
+                               # e2e suites read broker creds from the
+                               # global store — adopt a legacy checkout's
+                               # data/ first (the dev banner shows the mv).
+                               # Layout: config/, sessions/, trading/,
+                               # control/ (UTA restart flag), backups, etc.
 ```
 
 ## Key Architecture

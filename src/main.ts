@@ -4,6 +4,7 @@ import { dirname } from 'path'
 // as of 0.40 — the model loop runs inside the native workspace CLIs; autonomous
 // runs go through headless workspace dispatch (cron → workspace).
 import { loadConfig } from './core/config.js'
+import { printLegacyDataNotice } from './core/legacy-data-notice.js'
 import { dataPath, defaultPath } from '@/core/paths.js'
 import type { Plugin, EngineContext } from './core/types.js'
 import { McpPlugin } from './server/mcp.js'
@@ -67,6 +68,11 @@ async function readWithDefault(target: string, defaultFile: string): Promise<str
 }
 
 async function main() {
+  // Before migrations create the new config dir: if this checkout carries a
+  // pre-global-root data/ store, tell the user how to adopt it (covers bare
+  // `pnpm start`; guardian children get OPENALICE_HOME so this stays quiet).
+  printLegacyDataNotice('[alice]')
+
   const config = await loadConfig()
 
   // ==================== Event Log ====================

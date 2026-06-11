@@ -443,19 +443,19 @@ describe('MemorySessionStore', () => {
 describe('SessionStore', () => {
   let tmpDir: string
 
-  // HACK: SessionStore uses SESSIONS_DIR = join(process.cwd(), 'data', 'sessions') which is
-  // a module-level constant, so we can't redirect it. We test using the default path
-  // by cleaning up after ourselves instead.
-  // To keep tests isolated we use a custom sessionId that won't clash.
+  // SessionStore's SESSIONS_DIR is a module-level dataPath('sessions') const;
+  // vitest.setup.ts pins OPENALICE_HOME to a temp dir, so writes land in the
+  // sandbox. A unique sessionId keeps parallel files from clashing; cleanup
+  // sweeps the same dataPath the store writes to.
 
   const testId = `test-session-${Date.now()}`
 
   afterEach(async () => {
     // Clean up session file written during test
-    const { join: pathJoin } = await import('node:path')
+    const { dataPath } = await import('@/core/paths.js')
     const { rm: fsRm } = await import('node:fs/promises')
     try {
-      await fsRm(pathJoin(process.cwd(), 'data', 'sessions', `${testId}.jsonl`), { force: true })
+      await fsRm(dataPath('sessions', `${testId}.jsonl`), { force: true })
     } catch { /* ignore */ }
   })
 
