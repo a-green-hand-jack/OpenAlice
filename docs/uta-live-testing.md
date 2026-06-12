@@ -158,7 +158,22 @@ dead ends.*
   (Alpaca replaceOrder does)? After modify, the NEW id must be tracked and
   the OLD id must resolve — no ghost pending.
 - Error messages from the venue must reach the user (no swallowed response
-  bodies — the Alpaca opaque-422 lesson).
+  bodies — the Alpaca opaque-422 lesson; IBKR's >=2000 "informational"
+  blanket that swallowed 10xxx real errors).
+- Hub/leaf: if the venue's search returns directory rows (see S13), wire
+  them through the nativeKey grammar + expandContract rather than letting
+  them mis-resolve or vanish.
+
+**S13 — Hub/leaf identity (venues with directory-style search results).**
+Search must classify rows: LEAVES carry a tradeable aliceId; DIRECTORIES
+(bond issuers, FX families) are marked `expandable: true` and their aliceId
+must REFUSE quote/trade with a message pointing at `contract expand`.
+Expand each hub kind: FX family → concrete pairs (auto, at search); bond
+issuer → individual bonds; underlying + expiry → concrete option contracts;
+underlying without expiry → option parameter grid. Every leaf that comes out
+must round-trip: aliceId → quote (or a LOUD entitlement error) → place/track/
+cancel. *Guards: the symbol-key-assumes-STK mis-resolution, directory rows
+dying as unaddressable search noise.*
 
 ## Scoreboard so far
 

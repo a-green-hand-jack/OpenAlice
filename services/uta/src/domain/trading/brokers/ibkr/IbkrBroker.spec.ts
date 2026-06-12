@@ -53,3 +53,39 @@ describe('IbkrBroker — attached TP/SL refusal gate', () => {
     }).not.toThrow(/gate tripped/)
   })
 })
+
+describe('IbkrBroker — nativeKey grammar (hub/leaf identity)', () => {
+  // conId = canonical leaf; issuer: = bond-issuer directory; bare symbol =
+  // STK convenience. Hubs must REFUSE resolution (directories aren't
+  // tradeable) instead of the old silent assume-STK.
+  it('getNativeKey prefers conId, falls back to issuer: for bond hubs, then symbol', () => {
+    const b = bareBroker()
+
+    const leaf = new Contract()
+    leaf.conId = 265598
+    leaf.symbol = 'AAPL'
+    expect(b.getNativeKey(leaf)).toBe('265598')
+
+    const bondHub = new Contract()
+    bondHub.secType = 'BOND'
+    bondHub.issuerId = 'e1400789'
+    expect(b.getNativeKey(bondHub)).toBe('issuer:e1400789')
+
+    const symbolOnly = new Contract()
+    symbolOnly.symbol = 'AAPL'
+    expect(b.getNativeKey(symbolOnly)).toBe('AAPL')
+  })
+
+  it('resolveNativeKey refuses issuer: directories with an actionable message', () => {
+    const b = bareBroker()
+    expect(() => b.resolveNativeKey('issuer:e1400789')).toThrow(/directory.*expand|expand.*directory/i)
+  })
+
+  it('resolveNativeKey round-trips conId and keeps the STK symbol convenience', () => {
+    const b = bareBroker()
+    expect(b.resolveNativeKey('265598').conId).toBe(265598)
+    const sym = b.resolveNativeKey('AAPL')
+    expect(sym.symbol).toBe('AAPL')
+    expect(sym.secType).toBe('STK')
+  })
+})

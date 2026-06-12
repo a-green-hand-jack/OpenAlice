@@ -39,6 +39,8 @@ import type {
   StagePlaceOrderParams,
   StageModifyOrderParams,
   StageClosePositionParams,
+  ExpandContractFilters,
+  ContractExpansion,
 } from '@traderalice/uta-protocol'
 import type { Contract, ContractDescription, ContractDetails } from '@traderalice/ibkr'
 
@@ -145,6 +147,14 @@ export class UTAAccountSDK {
 
   getMarketClock(): Promise<MarketClock> {
     return this.client.get<MarketClock>(`/api/trading/uta/${encodeURIComponent(this.id)}/market-clock`)
+  }
+
+  /** Hub → leaves expansion (bond issuers, option chains, futures months). */
+  expandContract(aliceId: string, filters?: ExpandContractFilters): Promise<ContractExpansion> {
+    return this.client.post<ContractExpansion>(
+      `/api/trading/uta/${encodeURIComponent(this.id)}/contract/expand`,
+      { aliceId, filters },
+    )
   }
 
   /**

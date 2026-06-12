@@ -425,7 +425,37 @@ export class RequestBridge extends DefaultEWrapper {
     this.pushCollector(reqId, cd)
   }
 
+  // Bonds arrive via their own callback (TWS quirk) — same collector.
+  override bondContractDetails(reqId: number, cd: ContractDetails): void {
+    this.pushCollector(reqId, cd)
+  }
+
   override contractDetailsEnd(reqId: number): void {
+    this.resolveCollector(reqId)
+  }
+
+  // ---- Option chain parameters (collector) ----
+
+  override securityDefinitionOptionParameter(
+    reqId: number,
+    exchange: string,
+    underlyingConId: number,
+    tradingClass: string,
+    multiplier: string,
+    expirations: Set<string>,
+    strikes: Set<number>,
+  ): void {
+    this.pushCollector(reqId, {
+      exchange,
+      underlyingConId,
+      tradingClass,
+      multiplier,
+      expirations: [...expirations].sort(),
+      strikes: [...strikes].sort((a, b) => a - b),
+    })
+  }
+
+  override securityDefinitionOptionParameterEnd(reqId: number): void {
     this.resolveCollector(reqId)
   }
 

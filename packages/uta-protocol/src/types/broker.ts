@@ -128,6 +128,49 @@ export interface PlaceOrderResult {
   legs?: PlaceOrderLeg[]
 }
 
+// ==================== Contract expansion (hub → leaves) ====================
+
+/**
+ * Filters narrowing a contract expansion. Venue search returns two species:
+ * LEAVES (tradeable, conId-keyed) and HUBS (directories — a bond issuer, an
+ * FX currency family, an option chain behind a stock). Expansion turns a hub
+ * (or a leaf's derivative family) into concrete tradeable leaves.
+ */
+export interface ExpandContractFilters {
+  /** Option/future expiry (YYYYMMDD or YYYYMM). For options, switches the
+   *  expansion from the parameter grid to concrete contracts. */
+  expiry?: string
+  /** Option right: C or P. */
+  right?: 'C' | 'P'
+  strikeMin?: number
+  strikeMax?: number
+  /** Which derivative family to expand on an underlying leaf (default OPT). */
+  secType?: 'OPT' | 'FUT'
+  /** Max leaves returned (default 60, capped at 200). `total` always reports the full count. */
+  limit?: number
+}
+
+/** One exchange's option-chain parameter set (expirations × strikes). */
+export interface OptionGridEntry {
+  exchange: string
+  tradingClass: string
+  multiplier: string
+  expirations: string[]
+  strikes: number[]
+}
+
+export interface ContractExpansion {
+  kind: 'contracts' | 'optionGrid'
+  /** kind=contracts — concrete tradeable leaves, each with its own conId-based aliceId. */
+  contracts?: Contract[]
+  /** Full match count before `limit` was applied (never silently truncate). */
+  total?: number
+  /** kind=optionGrid — pick an expiry (+ right / strike range) and expand again. */
+  grid?: OptionGridEntry[]
+  /** Next-step guidance for the agent. */
+  hint?: string
+}
+
 /** An open/completed order triplet as returned by getOrders(). */
 export interface OpenOrder {
   contract: Contract
@@ -347,6 +390,14 @@ export interface IBroker<TMeta = unknown> {
 
   searchContracts(pattern: string): Promise<ContractDescription[]>
   getContractDetails(query: Contract): Promise<ContractDetails | null>
+
+  /**
+   * Expand a directory-style nativeKey (bond issuer, FX family) or a leaf's
+   * derivative family (option chain, futures months) into tradeable leaves.
+   * Optional — venues without hub semantics leave it undefined; the UTA
+   * layer loud-refuses.
+   */
+  expandContract?(nativeKey: string, filters?: ExpandContractFilters): Promise<ContractExpansion>
 
   /**
    * Refresh the broker's local catalog cache from upstream.

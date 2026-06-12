@@ -19,7 +19,7 @@ import {
   Order,
   OrderCancel,
   OrderState,
-  type ContractDescription,
+  ContractDescription,
   type ContractDetails,
 } from '@traderalice/ibkr'
 import {
@@ -34,6 +34,8 @@ import {
   type MarketClock,
   type BrokerConfigField,
   type TpSlParams,
+  type ExpandContractFilters,
+  type ContractExpansion,
 } from '../types.js'
 import '../../contract-ext.js'
 import { aggregateAccountFromPositions } from '../../position-math.js'
@@ -134,23 +136,177 @@ export class IbkrBroker implements IBroker {
 
   // ==================== Contract search ====================
 
+  /**
+   * Symbol search, hub-aware. TWS's reqMatchingSymbols returns ENTITIES, not
+   * always contracts: stock rows carry their conId (1:1 with a contract), but
+   * FX rows are a currency FAMILY (conId=0, no quote currency yet) and BOND
+   * rows are an ISSUER directory (conId=0, identity = issuerId). Leaves pass
+   * through; CASH hubs are expanded inline into concrete pairs (small
+   * fan-out, optionally narrowed by a ".USD" pattern suffix); BOND issuer
+   * hubs pass through and become `issuer:` aliceIds (expand explicitly).
+   */
   async searchContracts(pattern: string): Promise<ContractDescription[]> {
     if (!pattern) return []
     const reqId = this.bridge.allocReqId()
     const promise = this.bridge.request<ContractDescription[]>(reqId)
-    this.client.reqMatchingSymbols(reqId, pattern)
-    return promise
+    // TWS matches on the base symbol — strip an FX-style ".USD" suffix for
+    // the request, keep it as a pair filter for the expansion below.
+    const dot = pattern.indexOf('.')
+    const base = dot > 0 ? pattern.slice(0, dot) : pattern
+    const pairCurrency = dot > 0 ? pattern.slice(dot + 1).toUpperCase() : ''
+    this.client.reqMatchingSymbols(reqId, base)
+    const rows = await promise
+
+    const out: ContractDescription[] = []
+    for (const row of rows) {
+      const c = row.contract
+      if (c.secType === 'CASH' && !c.conId) {
+        out.push(...await this.expandCashHub(c, pairCurrency))
+        continue
+      }
+      // Everything else passes through — leaves carry conId; BOND issuer
+      // hubs carry issuerId (addressable, not tradeable); anything without
+      // either stays visible rather than being silently dropped.
+      out.push(row)
+    }
+    return out
+  }
+
+  /** CASH family row → concrete currency pairs (each with its own conId). */
+  private async expandCashHub(hub: Contract, pairCurrency: string): Promise<ContractDescription[]> {
+    const q = new Contract()
+    q.symbol = hub.symbol
+    q.secType = 'CASH'
+    if (pairCurrency) q.currency = pairCurrency
+    try {
+      const details = await this.contractDetailsQuery(q)
+      return details.map((d) => {
+        const cd = new ContractDescription()
+        cd.contract = d.contract
+        cd.derivativeSecTypes = []
+        return cd
+      })
+    } catch (err) {
+      console.warn(`IbkrBroker[${this.id}]: CASH hub expansion failed for ${hub.symbol}: ${err instanceof Error ? err.message : err}`)
+      return []
+    }
   }
 
   async getContractDetails(query: Contract): Promise<ContractDetails | null> {
-    if (!query.exchange) query.exchange = 'SMART'
-    if (!query.currency) query.currency = 'USD'
+    const results = await this.contractDetailsQuery(query)
+    return results[0] ?? null
+  }
+
+  /** All matching contract details (a conId resolves to one; a family query
+   *  like EUR/CASH or an issuerId resolves to many). */
+  private async contractDetailsQuery(query: Contract): Promise<ContractDetails[]> {
+    // Routing defaults are for SYMBOL-form STK queries only. A conId (or
+    // issuerId) resolves globally, and non-STK secTypes don't live on SMART
+    // (EUR.USD is on IDEALPRO; conId+SMART → TWS error 200, found live).
+    // Forcing USD would also narrow a CASH family query to one pair.
+    if (!query.conId && !query.issuerId && (!query.secType || query.secType === 'STK')) {
+      if (!query.exchange) query.exchange = 'SMART'
+      if (!query.currency) query.currency = 'USD'
+    }
 
     const reqId = this.bridge.allocReqId()
     const promise = this.bridge.requestCollector<ContractDetails>(reqId)
     this.client.reqContractDetails(reqId, query)
-    const results = await promise
-    return results[0] ?? null
+    return promise
+  }
+
+  /**
+   * Hub → leaves expansion (see nativeKey grammar at getNativeKey):
+   *   issuer:eXXX        → the issuer's individual bonds (each conId-keyed)
+   *   <conId> (no expiry) → option-chain parameter grid for the underlying
+   *   <conId> + expiry    → concrete option contracts for that expiry
+   *   <conId> secType=FUT → futures contract months
+   */
+  async expandContract(nativeKey: string, filters: ExpandContractFilters = {}): Promise<ContractExpansion> {
+    const limit = Math.max(1, Math.min(filters.limit ?? 60, 200))
+
+    if (nativeKey.startsWith('issuer:')) {
+      const q = new Contract()
+      q.secType = 'BOND'
+      q.issuerId = nativeKey.slice('issuer:'.length)
+      const details = await this.contractDetailsQuery(q)
+      // A bond Contract's own fields are opaque (localSymbol "IBCID…") —
+      // the human identity (coupon, maturity) lives on ContractDetails.
+      const all = details.map((d) => {
+        const c = d.contract
+        if (!c.description) {
+          const coupon = d.coupon ? `${d.coupon}%` : ''
+          const maturity = d.maturity ? ` ${d.maturity}` : ''
+          const label = `${coupon}${maturity}`.trim()
+          if (label) c.description = label
+        }
+        if (d.maturity && !c.lastTradeDateOrContractMonth) c.lastTradeDateOrContractMonth = d.maturity
+        return c
+      })
+      all.sort((a, b) => (a.lastTradeDateOrContractMonth || '').localeCompare(b.lastTradeDateOrContractMonth || ''))
+      return {
+        kind: 'contracts',
+        contracts: all.slice(0, limit),
+        total: all.length,
+        ...(all.length > limit ? { hint: `${all.length} bonds match; showing the first ${limit}. Raise limit to see more.` } : {}),
+      }
+    }
+
+    const asNum = parseInt(nativeKey, 10)
+    if (isNaN(asNum) || String(asNum) !== nativeKey) {
+      throw new BrokerError('EXCHANGE',
+        `Cannot expand "${nativeKey}" — expansion takes a conId aliceId (an underlying from search) or an issuer: directory key.`)
+    }
+    const underlying = await this.getContractDetails(Object.assign(new Contract(), { conId: asNum }))
+    if (!underlying?.contract) {
+      throw new BrokerError('EXCHANGE', `conId ${asNum} did not resolve to a contract`)
+    }
+    const u = underlying.contract
+
+    const famSecType = filters.secType ?? 'OPT'
+    if (famSecType === 'FUT' || filters.expiry) {
+      // Concrete leaves for one family/expiry
+      const q = new Contract()
+      q.symbol = u.symbol
+      q.secType = famSecType
+      q.currency = u.currency
+      if (famSecType === 'OPT') q.exchange = 'SMART'
+      if (filters.expiry) q.lastTradeDateOrContractMonth = filters.expiry
+      if (filters.right) q.right = filters.right
+      const details = await this.contractDetailsQuery(q)
+      let all = details.map((d) => d.contract)
+      if (filters.strikeMin != null) all = all.filter((c) => c.strike >= filters.strikeMin!)
+      if (filters.strikeMax != null) all = all.filter((c) => c.strike <= filters.strikeMax!)
+      all.sort((a, b) =>
+        (a.lastTradeDateOrContractMonth || '').localeCompare(b.lastTradeDateOrContractMonth || '')
+        || (a.strike - b.strike)
+        || (a.right || '').localeCompare(b.right || ''))
+      return {
+        kind: 'contracts',
+        contracts: all.slice(0, limit),
+        total: all.length,
+        ...(all.length > limit ? { hint: `${all.length} contracts match; showing the first ${limit}. Narrow with right/strikeMin/strikeMax or raise limit.` } : {}),
+      }
+    }
+
+    // OPT without expiry → parameter grid (expirations × strikes per exchange)
+    const reqId = this.bridge.allocReqId()
+    const promise = this.bridge.requestCollector<{
+      exchange: string; underlyingConId: number; tradingClass: string;
+      multiplier: string; expirations: string[]; strikes: number[]
+    }>(reqId)
+    this.client.reqSecDefOptParams(reqId, u.symbol, '', u.secType, u.conId)
+    const grids = await promise
+    if (grids.length === 0) {
+      return { kind: 'optionGrid', grid: [], hint: `No option chain found for ${u.symbol}.` }
+    }
+    // SMART grid first — it aggregates the listings an order would route to.
+    grids.sort((a, b) => Number(b.exchange === 'SMART') - Number(a.exchange === 'SMART'))
+    return {
+      kind: 'optionGrid',
+      grid: grids,
+      hint: 'Pick an expiry (and optionally right / strike range), then expand again with expiry to get tradeable contracts.',
+    }
   }
 
   // ==================== Trading operations ====================
@@ -388,8 +544,9 @@ export class IbkrBroker implements IBroker {
   private readonly conIdContracts = new Map<number, Contract>()
 
   async getQuote(contract: Contract): Promise<Quote> {
-    if (!contract.exchange) contract.exchange = 'SMART'
-    if (!contract.currency) contract.currency = 'USD'
+    // Enrichment must run BEFORE routing defaults: a premature SMART poisons
+    // the conId details lookup for anything not on SMART (EUR.USD@IDEALPRO).
+    // The enriched contract carries its real exchange/currency.
 
     // TWS rejects reqMktData on a bare conId (error 321: symbol/localSymbol/
     // secId required) even though the wire carries conId — resolution by
@@ -406,6 +563,9 @@ export class IbkrBroker implements IBroker {
       }
       contract = full
     }
+
+    if (!contract.exchange) contract.exchange = 'SMART'
+    if (!contract.currency) contract.currency = 'USD'
 
     const reqId = this.bridge.allocReqId()
     const promise = this.bridge.requestSnapshot(reqId)
@@ -466,13 +626,28 @@ export class IbkrBroker implements IBroker {
 
   // ==================== Contract identity ====================
 
+  /**
+   * IBKR nativeKey grammar (the broker's uniqueness primitives, layered):
+   *   "265598"          conId — canonical for every tradeable contract
+   *   "issuer:e1400789" bond-issuer DIRECTORY — addressable, NOT tradeable
+   *   "AAPL"            bare symbol — STK convenience for hand-typed ids
+   * Hubs (directories) live in their own prefixed namespace so trading
+   * surfaces can refuse them loudly instead of mis-resolving.
+   */
   getNativeKey(contract: Contract): string {
     // conId is IBKR's globally unique contract identifier
     if (contract.conId) return String(contract.conId)
+    if (contract.secType === 'BOND' && contract.issuerId) return `issuer:${contract.issuerId}`
     return contract.symbol
   }
 
   resolveNativeKey(nativeKey: string): Contract {
+    if (nativeKey.startsWith('issuer:')) {
+      throw new Error(
+        `"${nativeKey}" is a bond-issuer directory, not a tradeable contract — ` +
+        `expand it (contract expand) to list the issuer's individual bonds; each bond has its own conId aliceId.`,
+      )
+    }
     const c = new Contract()
     const asNum = parseInt(nativeKey, 10)
     if (!isNaN(asNum) && String(asNum) === nativeKey) {

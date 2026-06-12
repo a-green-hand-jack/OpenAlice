@@ -158,6 +158,12 @@ export function createTradingTools(manager: UTAManagerSDK): Record<string, Tool>
       description: `Search broker accounts for tradeable contracts matching a pattern.
 This is a BROKER-LEVEL search — it queries your connected trading accounts.
 
+Results are either LEAVES (tradeable, use aliceId with getQuote/placeOrder) or
+DIRECTORIES (expandable: true — e.g. a bond issuer): call expandContract on
+those to list the tradeable contracts inside. Stock rows with
+derivativeSecTypes (OPT/FUT…) can also be expanded into their option chain /
+futures months via expandContract.
+
 Pass \`assetClass\` when known (especially "crypto" or "currency") so the
 data-vendor symbol is normalized into a broker-friendly pattern — e.g. a
 search for "BTCUSD" with assetClass="crypto" is rewritten to "BTC" before
@@ -183,7 +189,14 @@ hitting the broker, which otherwise expects the bare base ticker.`,
         )
         for (const r of settled) {
           if (r.status !== 'fulfilled') continue
-          for (const desc of r.value.results) all.push({ source: r.value.id, ...desc, contract: compactContract((desc as { contract?: unknown }).contract) })
+          for (const desc of r.value.results) {
+            const contract = compactContract((desc as { contract?: unknown }).contract)
+            // Directory rows (bond issuers, …) are addressable but NOT
+            // tradeable — flag them so the agent reaches for expandContract
+            // instead of placeOrder.
+            const expandable = typeof contract['aliceId'] === 'string' && (contract['aliceId'] as string).includes('|issuer:')
+            all.push({ source: r.value.id, ...desc, contract, ...(expandable ? { expandable: true } : {}) })
+          }
         }
         if (all.length === 0) return { results: [], message: `No contracts found matching "${brokerPattern}" (input: "${pattern}").` }
         return all
@@ -382,6 +395,59 @@ If this tool returns an error with transient=true, wait a few seconds and retry 
           const contract = Object.assign(new Contract(), { aliceId })
           const quote = await uta.getQuote(contract)
           return { source: uta.id, ...quote, contract: compactContract(quote.contract) }
+        } catch (err) {
+          return handleBrokerError(err)
+        }
+      },
+    }),
+
+    expandContract: tool({
+      description: `Expand a directory-style contract into tradeable leaves.
+Venue search returns two species: LEAVES (tradeable, with conId-style aliceId) and HUBS (directories).
+- Bond issuer hub (aliceId like "ibkr-x|issuer:e1400789"): expands to the issuer's individual bonds.
+- Stock underlying (numeric aliceId): no expiry → option-chain parameter grid (expirations × strikes); with expiry → concrete option contracts for that expiry.
+- secType=FUT on an underlying: futures contract months.
+Every returned leaf carries its own aliceId usable with getQuote / placeOrder.`,
+      inputSchema: z.object({
+        aliceId: z.string().describe('Hub or underlying contract ID (format: accountId|nativeKey, from searchContracts)'),
+        expiry: z.string().optional().describe('Expiry YYYYMMDD or YYYYMM — switches option expansion from the grid to concrete contracts'),
+        right: z.enum(['C', 'P']).optional().describe('Option right filter'),
+        strikeMin: z.number().optional().describe('Lowest strike to include'),
+        strikeMax: z.number().optional().describe('Highest strike to include'),
+        secType: z.enum(['OPT', 'FUT']).optional().describe('Derivative family to expand on an underlying (default OPT)'),
+        limit: z.number().int().positive().optional().describe('Max leaves returned (default 60). total always reports the full count.'),
+      }).meta({ examples: [
+        { aliceId: 'ibkr-tws|265598' },
+        { aliceId: 'ibkr-tws|265598', expiry: '20260717', right: 'C', strikeMin: 280, strikeMax: 310 },
+        { aliceId: 'ibkr-tws|issuer:e1400789' },
+      ] }),
+      execute: async ({ aliceId, ...filters }) => {
+        const parsed = parseAliceId(aliceId)
+        if (!parsed) {
+          return { error: `Invalid aliceId "${aliceId}". Expected format: "accountId|nativeKey".` }
+        }
+        try {
+          const uta = await manager.resolveOne(parsed.utaId)
+          const result = await uta.expandContract(aliceId, filters)
+          if (result.kind === 'contracts') {
+            return {
+              source: uta.id,
+              total: result.total,
+              contracts: (result.contracts ?? []).map(compactContract),
+              ...(result.hint ? { hint: result.hint } : {}),
+            }
+          }
+          return {
+            source: uta.id,
+            grid: (result.grid ?? []).map((g) => ({
+              exchange: g.exchange,
+              tradingClass: g.tradingClass,
+              multiplier: g.multiplier,
+              expirations: g.expirations,
+              strikes: g.strikes,
+            })),
+            ...(result.hint ? { hint: result.hint } : {}),
+          }
         } catch (err) {
           return handleBrokerError(err)
         }

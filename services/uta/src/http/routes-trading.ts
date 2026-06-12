@@ -309,6 +309,19 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
     }
   })
 
+  // Hub → leaves expansion (bond issuers, option chains, futures months).
+  // Body: { aliceId, filters?: ExpandContractFilters }.
+  app.post('/uta/:id/contract/expand', async (c) => {
+    const account = resolveAccount(ctx, c)
+    if (!account) return c.json({ error: 'Account not found' }, 404)
+    try {
+      const body = await c.req.json().catch(() => ({}))
+      return c.json(await account.expandContract(String(body.aliceId ?? ''), body.filters ?? {}))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
   // Historical OHLCV bars. Body: { contract: <Contract|{aliceId}>, params: BarParams }.
   // start/end arrive as ISO strings over the wire — revive to Date (the only
   // Date fields in BarParams) before the broker call.

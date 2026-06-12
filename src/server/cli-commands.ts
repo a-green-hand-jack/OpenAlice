@@ -163,6 +163,7 @@ export const CLI_EXPORTS: Record<string, CliExport> = {
         search: 'searchContracts',
         details: 'getContractDetails',
         quote: 'getQuote',
+        expand: 'expandContract',
       },
       order: {
         list: 'getOrders',

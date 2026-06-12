@@ -9,7 +9,7 @@
 
 import Decimal from 'decimal.js'
 import { Contract, Order, ContractDescription, ContractDetails, UNSET_DECIMAL, UNSET_INTEGER, UNSET_DOUBLE } from '@traderalice/ibkr'
-import { BrokerError, type IBroker, type AccountInfo, type Position, type OpenOrder, type PlaceOrderResult, type Quote, type MarketClock, type AccountCapabilities, type BrokerHealth, type BrokerHealthInfo, type UTAReach, type UTATier, type TpSlParams, type Bar, type BarParams } from './brokers/types.js'
+import { BrokerError, type IBroker, type AccountInfo, type Position, type OpenOrder, type PlaceOrderResult, type Quote, type MarketClock, type AccountCapabilities, type BrokerHealth, type BrokerHealthInfo, type UTAReach, type UTATier, type TpSlParams, type Bar, type BarParams, type ExpandContractFilters, type ContractExpansion } from './brokers/types.js'
 
 const REACH_RANK: Record<UTAReach, number> = { down: 0, connected: 1, readable: 2 }
 import { TradingGit } from './git/TradingGit.js'
@@ -908,6 +908,29 @@ export class UnifiedTradingAccount {
 
   getMarketClock(): Promise<MarketClock> {
     return this._callBroker(() => this.broker.getMarketClock())
+  }
+
+  /**
+   * Hub → leaves expansion (bond issuers, option chains, futures months).
+   * Loud-refuses when the broker has no hub semantics. Accepts a full
+   * aliceId; hub keys (issuer:…) are passed to the broker verbatim — they
+   * deliberately do NOT go through resolveNativeKey, which refuses them
+   * (directories are not tradeable contracts).
+   */
+  async expandContract(aliceId: string, filters?: ExpandContractFilters): Promise<ContractExpansion> {
+    if (typeof this.broker.expandContract !== 'function') {
+      throw new BrokerError('CONFIG', `Account "${this.label}" does not support contract expansion.`)
+    }
+    const parsed = UnifiedTradingAccount.parseAliceId(aliceId)
+    if (!parsed) {
+      throw new Error(`Invalid aliceId "${aliceId}" — expected format: accountId|nativeKey`)
+    }
+    if (parsed.utaId !== this.id) {
+      throw new Error(`aliceId "${aliceId}" belongs to UTA "${parsed.utaId}", not "${this.id}".`)
+    }
+    const result = await this._callBroker(() => this.broker.expandContract!(parsed.nativeKey, filters))
+    for (const c of result.contracts ?? []) this.stampAliceId(c)
+    return result
   }
 
   async searchContracts(pattern: string): Promise<ContractDescription[]> {
