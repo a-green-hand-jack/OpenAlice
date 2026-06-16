@@ -14,7 +14,7 @@ import { EventEmitter } from 'node:events';
 import * as childProcess from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { runScript } from './workspace-creator.js';
+import { resolveCreateAgents, runScript } from './workspace-creator.js';
 
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
@@ -41,6 +41,37 @@ function makeFakeChild(): FakeChild {
 function setPlatform(value: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', { value, configurable: true });
 }
+
+describe('resolveCreateAgents — single home of the agent policy', () => {
+  const ALL = ['claude', 'codex', 'opencode', 'pi'];
+
+  it('enables EVERY registered adapter when the caller pins nothing', () => {
+    // The quick-chat bug: it called create() with no explicit set, so it used
+    // to get only the template head (claude+codex). Policy now expands here.
+    expect(resolveCreateAgents(undefined, ['claude', 'codex'], ALL)).toEqual(ALL);
+  });
+
+  it('honors template defaultAgents only as the ORDER head (agents[0] default)', () => {
+    // A template that wants codex first still gets all four, codex leading.
+    expect(resolveCreateAgents(undefined, ['codex'], ALL)).toEqual([
+      'codex', 'claude', 'opencode', 'pi',
+    ]);
+  });
+
+  it('first-wins dedupes when the head repeats a registered id', () => {
+    expect(resolveCreateAgents(undefined, ['pi', 'claude'], ALL)).toEqual([
+      'pi', 'claude', 'codex', 'opencode',
+    ]);
+  });
+
+  it('an explicit non-empty request wins verbatim (subset pinning)', () => {
+    expect(resolveCreateAgents(['claude'], ['claude', 'codex'], ALL)).toEqual(['claude']);
+  });
+
+  it('treats an empty explicit request as "not pinned" → full expansion', () => {
+    expect(resolveCreateAgents([], ['claude', 'codex'], ALL)).toEqual(ALL);
+  });
+});
 
 describe('runScript platform branching', () => {
   const originalPlatform = process.platform;

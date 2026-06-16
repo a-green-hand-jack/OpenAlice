@@ -52,6 +52,30 @@ export type CreateResult =
 const TAG_RE = /^[a-z0-9][a-z0-9_-]{0,32}$/;
 
 /**
+ * Resolve the adapter set a new workspace is created with. This is the single
+ * home of the agent policy, so every create path — the form, quick-chat,
+ * headless — converges on it:
+ *
+ * - An explicit `agentsRequested` (a caller pinning a subset) wins verbatim.
+ * - Otherwise a workspace gets EVERY registered adapter enabled; restricting
+ *   it was a create-time decision with no first-action basis. The template's
+ *   `defaultAgents` is honored only as the HEAD of the list (first-wins
+ *   dedupe), so `agents[0]` — the "spawn a new session" default — follows
+ *   template intent without limiting what's available.
+ *
+ * This used to live in the frontend create hook alone, which silently left
+ * backend-only callers (quick-chat) on the bare-`defaultAgents` set.
+ */
+export function resolveCreateAgents(
+  agentsRequested: readonly string[] | undefined,
+  templateDefaultAgents: readonly string[],
+  allAdapterIds: readonly string[],
+): readonly string[] {
+  if (agentsRequested && agentsRequested.length > 0) return agentsRequested;
+  return [...new Set([...templateDefaultAgents, ...allAdapterIds])];
+}
+
+/**
  * Creates a workspace by invoking the template's bootstrap script.
  *
  * The launcher itself knows nothing about git, branches, or results.tsv —
@@ -87,9 +111,13 @@ export class WorkspaceCreator {
       };
     }
 
-    const agents = agentsRequested && agentsRequested.length > 0
-      ? agentsRequested
-      : template.defaultAgents;
+    // Agent policy lives in `resolveCreateAgents` (this file) so every create
+    // path — form, quick-chat, headless — converges on it.
+    const agents = resolveCreateAgents(
+      agentsRequested,
+      template.defaultAgents,
+      this.opts.adapterRegistry.list().map((a) => a.id),
+    );
 
     // Validate every requested adapter exists in the registry.
     for (const a of agents) {

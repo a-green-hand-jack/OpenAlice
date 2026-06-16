@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw'
-import { demoWorkspaces, demoTemplates } from '../fixtures/workspaces'
+import { demoChatWorkspace, demoWorkspaces, demoTemplates } from '../fixtures/workspaces'
 import { demoWorkspaceFiles } from '../fixtures/inbox'
 
 export const workspacesHandlers = [
@@ -64,13 +64,13 @@ export const workspacesHandlers = [
   // Quick-chat launch — reuse the first demo chat workspace and hand back the
   // scripted demo session (the Terminal short-circuits to DemoTerminalReplay).
   http.post('/api/workspaces/quick-chat', () => {
-    const ws = demoWorkspaces[0]
+    const ws = demoChatWorkspace
     return HttpResponse.json(
       {
         workspace: ws,
         session: {
           sessionId: 'demo-session',
-          wsId: ws?.id ?? 'demo-ws',
+          wsId: ws.id,
           name: 'c1',
           pid: 0,
           startedAt: Date.now(),

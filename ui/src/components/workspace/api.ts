@@ -78,15 +78,20 @@ export async function listWorkspaces(): Promise<Workspace[]> {
   return body.workspaces;
 }
 
+/**
+ * Create a workspace. `agents` is optional and normally omitted — the backend
+ * owns the "every registered adapter, template-headed" policy (see
+ * `WorkspaceCreator.create`). Pass an explicit set only to pin a subset.
+ */
 export async function createWorkspace(
   tag: string,
   template: string,
-  agents: readonly string[],
+  agents?: readonly string[],
 ): Promise<CreateResult> {
   const res = await fetch('/api/workspaces', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ tag, template, agents }),
+    body: JSON.stringify(agents && agents.length > 0 ? { tag, template, agents } : { tag, template }),
   });
   if (res.ok) {
     const body = (await res.json()) as { workspace: Workspace };

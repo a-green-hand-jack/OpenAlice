@@ -109,7 +109,6 @@ export function Sidebar(props: SidebarProps): ReactElement {
       {showCreate && (
         <CreateWorkspaceDialog
           templates={props.templates}
-          agents={props.agents}
           onCreated={(workspace) => {
             props.onChanged();
             props.onSelectWorkspace(workspace.id);

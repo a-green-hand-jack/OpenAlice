@@ -163,7 +163,6 @@ export function TemplateDetailPage({ spec }: Props) {
       {showCreate && (
         <CreateWorkspaceDialog
           templates={templates}
-          agents={agents}
           presetTemplate={template.name}
           onClose={() => setShowCreate(false)}
           onCreated={(workspace) => {

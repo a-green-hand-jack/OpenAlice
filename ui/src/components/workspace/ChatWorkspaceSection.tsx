@@ -145,7 +145,6 @@ export function ChatWorkspaceSection(): ReactElement | null {
       {showCreate && (
         <CreateWorkspaceDialog
           templates={ctx.templates}
-          agents={ctx.agents}
           presetTemplate={CHAT_TEMPLATE}
           onCreated={(workspace) => {
             ctx.refresh()
