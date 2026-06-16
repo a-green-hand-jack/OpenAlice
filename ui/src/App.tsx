@@ -104,7 +104,7 @@ function AppShell() {
   const mainContent = (
     <main className="flex flex-col min-w-0 min-h-0 bg-bg h-full">
       {/* Mobile header — visible only below md */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-bg-secondary shrink-0 md:hidden">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-border/80 bg-bg-secondary shrink-0 md:hidden">
         <button
           onClick={() => setSidebarOpen(true)}
           className="text-text-muted hover:text-text p-1 -ml-1"
@@ -163,7 +163,7 @@ function AppShell() {
                   <section.Secondary />
                 </Sidebar>
               </Panel>
-              <Separator className="w-px bg-border hover:bg-accent/40 active:bg-accent/60 transition-colors" />
+              <Separator className="w-px bg-border/80 hover:bg-accent/40 active:bg-accent/60 transition-colors" />
             </>
           )}
           <Panel id="main">

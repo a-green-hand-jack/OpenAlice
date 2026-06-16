@@ -100,10 +100,20 @@ export function ChatLandingPage() {
   }
 
   return (
-    <div className="h-full w-full overflow-auto bg-bg flex flex-col items-center justify-center px-6 py-10">
-      <div className="w-full max-w-2xl flex flex-col gap-5">
+    <div className="relative h-full w-full overflow-auto bg-bg flex flex-col items-center justify-center px-4 py-8 md:px-6 md:py-10">
+      {/* Ask-Alice backdrop — full-bleed, responsive-only layers (gradient wash
+          + faint grid). The #302 mock's %-positioned circle / diagonal bars were
+          dropped: they drift on portrait and read as pixel-placed art, not a
+          responsive surface. pointer-events-none so it never intercepts clicks. */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-white/[0.035] to-transparent" />
+        <div className="absolute inset-x-0 bottom-0 h-[38%] bg-gradient-to-t from-black/35 to-transparent" />
+        <div className="absolute inset-0 opacity-[0.06] [background-image:linear-gradient(to_right,#ffffff_1px,transparent_1px),linear-gradient(to_bottom,#ffffff_1px,transparent_1px)] [background-size:96px_96px]" />
+      </div>
+
+      <div className="relative z-10 w-full max-w-2xl flex flex-col gap-5">
         <div className="text-center space-y-1.5">
-          <h1 className="text-2xl font-semibold text-text">{t('chatLanding.heading')}</h1>
+          <h1 className="text-xl md:text-2xl font-semibold text-text">{t('chatLanding.heading')}</h1>
           <p className="text-sm text-text-muted">{t('chatLanding.subheading')}</p>
         </div>
 
