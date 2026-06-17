@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { TrendingUp, Hash } from 'lucide-react'
 import { entitiesLive } from '../live/entities'
 import { useTrackedSelection } from '../live/tracked-selection'
+import { SidebarRow } from './SidebarRow'
 
 /**
  * Tracked sidebar — the watchlist. A flat list of entities (assets + topics),
@@ -50,27 +51,24 @@ export function TrackedSidebar() {
         const active = e.name === selected
         const Icon = e.type === 'asset' ? TrendingUp : Hash
         return (
-          <button
+          <SidebarRow
             key={e.name}
-            type="button"
+            active={active}
             onClick={() => select(e.name)}
             title={e.description}
-            className={`group relative flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
-              active ? 'bg-bg-tertiary text-text' : 'text-text hover:bg-bg-tertiary/50'
-            }`}
-          >
-            {active && <span aria-hidden className="absolute left-0 top-0 bottom-0 w-[2px] bg-accent" />}
-            <Icon size={13} strokeWidth={1.75} className="shrink-0 text-text-muted/70" aria-hidden />
-            <span className="flex-1 truncate font-mono text-[12px]">{e.name}</span>
-            {e.backlinkCount > 0 && (
-              <span
-                className="shrink-0 text-[10px] text-text-muted/60 tabular-nums"
-                title={t('tracked.backlinksTooltip', { count: e.backlinkCount })}
-              >
-                {e.backlinkCount}
-              </span>
-            )}
-          </button>
+            icon={<Icon size={13} strokeWidth={1.75} className="text-text-muted/70" aria-hidden />}
+            label={<span className="font-mono text-[12px]">{e.name}</span>}
+            trail={
+              e.backlinkCount > 0 ? (
+                <span
+                  className="text-[10px] text-text-muted/60 tabular-nums"
+                  title={t('tracked.backlinksTooltip', { count: e.backlinkCount })}
+                >
+                  {e.backlinkCount}
+                </span>
+              ) : undefined
+            }
+          />
         )
       })}
     </div>

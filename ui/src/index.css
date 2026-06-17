@@ -453,7 +453,9 @@ body {
 }
 .code-block-wrapper .code-copy-btn:hover {
   color: var(--color-text);
-  background: rgba(255, 255, 255, 0.06);
+  /* Theme-aware wash — navy in Daybreak, white in Midnight. The old
+     hardcoded rgba(255,255,255,…) was invisible in light mode. */
+  background: var(--color-overlay-strong);
 }
 .code-block-wrapper .code-copy-btn.copied {
   color: var(--color-green);

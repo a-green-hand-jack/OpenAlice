@@ -23,20 +23,34 @@ export type Page =
   | 'trading-as-git'
   | 'settings' | 'dev'
 
-/** Track whether we're at a desktop viewport (md+ in Tailwind = ≥768px). */
-function useIsDesktop(): boolean {
-  const query = '(min-width: 768px)'
+/** Subscribe to a CSS media query, SSR-safe (defaults to matched). */
+function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia(query).matches : true,
   )
   useEffect(() => {
     const mq = window.matchMedia(query)
     const handler = () => setMatches(mq.matches)
+    setMatches(mq.matches) // re-sync in case the query changed between renders
     mq.addEventListener('change', handler)
     return () => mq.removeEventListener('change', handler)
-  }, [])
+  }, [query])
   return matches
 }
+
+/**
+ * Two breakpoints drive a three-tier responsive shell:
+ *  - <768  (phone):  rail = drawer (hamburger), sidebar = drawer (drill-in)
+ *  - 768–1024 (tablet/narrow): rail = static column, sidebar = drawer
+ *    (tap a rail icon to slide it in) — keeps the main pane full-width-
+ *    minus-rail so its `md:` content layouts have real room
+ *  - ≥1024 (desktop): rail + sidebar both static (classic 3-pane)
+ * The middle tier is what kills the old 768–~1000px dead zone where two
+ * static left columns (216+200) crushed the main pane and its md:-keyed
+ * content (stat grids, tables) overflowed/overlapped.
+ */
+const useIsDesktop = () => useMediaQuery('(min-width: 768px)') // rail static
+const useIsWide = () => useMediaQuery('(min-width: 1024px)') // sidebar static
 
 export function App() {
   return (
@@ -56,8 +70,9 @@ function AppShell() {
   const selectedSidebar = useWorkspace((state) => state.selectedSidebar)
   const focusedTabId = useWorkspace((state) => getFocusedTab(state)?.id ?? null)
   const section = findSectionForActivity(selectedSidebar)
-  const isDesktop = useIsDesktop()
-  const showSidebarPanel = isDesktop && section != null
+  const isDesktop = useIsDesktop() // ≥768 — rail is a static column
+  const isWide = useIsWide() // ≥1024 — sidebar is a static panel
+  const showSidebarPanel = isWide && section != null
 
   // Auto-close the mobile secondary drawer once the user picks a sub-item.
   // We snapshot the focused tab at drawer-open time (see openSecondaryDrawer
@@ -76,14 +91,27 @@ function AppShell() {
     }
   }, [focusedTabId, secondaryOpen])
 
-  // If we cross into desktop while a mobile drawer is open, drop the drawer
-  // state — the static columns now own the rendering.
+  // When a tier's static column takes over, drop its drawer state. The rail
+  // goes static at ≥768 (drop the activity drawer); the sidebar goes static
+  // at ≥1024 (drop the secondary drawer). Kept as two effects so the middle
+  // tier — rail static, sidebar still a drawer — settles correctly.
   useEffect(() => {
-    if (isDesktop) {
-      setSidebarOpen(false)
-      setSecondaryOpen(false)
-    }
+    if (isDesktop) setSidebarOpen(false)
   }, [isDesktop])
+  useEffect(() => {
+    if (isWide) setSecondaryOpen(false)
+  }, [isWide])
+
+  // Lock body scroll while a drawer is open so the page behind doesn't drift
+  // under the backdrop. Restores the previous value on close/unmount.
+  useEffect(() => {
+    if (!sidebarOpen && !secondaryOpen) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = prev
+    }
+  }, [sidebarOpen, secondaryOpen])
 
   // Persist the user's resized layout to localStorage. `panelIds` scopes the
   // saved layout to the current panel set — sidebar+main and main-only get
@@ -130,12 +158,14 @@ function AppShell() {
         <ActivityBar
           open={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
+          sidebarVisible={showSidebarPanel || secondaryOpen}
           onItemActivated={(landedOn) => {
-            // Mobile drill-down: close the activity drawer and slide in the
-            // secondary navigator for the landed-on section. If the user
-            // toggled the current section off (landedOn === null), just close.
+            // Drill-down for any viewport without a static sidebar (<1024):
+            // close the activity drawer and slide in the secondary navigator
+            // for the landed-on section. If the user toggled the current
+            // section off (landedOn === null), just close.
             setSidebarOpen(false)
-            if (!isDesktop && landedOn != null) {
+            if (!isWide && landedOn != null) {
               // Snapshot post-click state — `defaultTab` may have just changed
               // the focused tab synchronously via Zustand, and we want THAT to
               // be the baseline (not the pre-click value the closure captured).
@@ -155,7 +185,13 @@ function AppShell() {
         >
           {showSidebarPanel && section && (
             <>
-              <Panel id="sidebar" defaultSize={20} minSize="200px" maxSize="500px">
+              <Panel
+                id="sidebar"
+                defaultSize={20}
+                minSize="200px"
+                maxSize="420px"
+                groupResizeBehavior="preserve-pixel-size"
+              >
                 <Sidebar
                   title={t(section.titleKey)}
                   actions={section.Actions ? <section.Actions /> : undefined}
@@ -171,18 +207,21 @@ function AppShell() {
           </Panel>
         </Group>
 
-        {/* Mobile-only secondary sidebar drawer — drills in after the user
-            picks an activity in the ActivityBar drawer. Desktop renders the
-            sidebar as a static Panel above; this branch is gated on !isDesktop
+        {/* Secondary sidebar drawer for any non-wide viewport (<1024) —
+            drills in after the user picks an activity (from the rail drawer
+            on phones, or the static rail at 768–1024). At ≥1024 the sidebar
+            renders as a static Panel above; this branch is gated on !isWide
             so the two never co-exist. */}
-        {!isDesktop && section && (
+        {!isWide && section && (
           <MobileSecondaryDrawer
             open={secondaryOpen}
             section={section}
             onClose={() => setSecondaryOpen(false)}
             onBack={() => {
               setSecondaryOpen(false)
-              setSidebarOpen(true)
+              // Only re-open the rail drawer when the rail is itself a drawer
+              // (<768). At 768–1024 the rail is static, so just close.
+              if (!isDesktop) setSidebarOpen(true)
             }}
           />
         )}
@@ -205,7 +244,7 @@ function MobileSecondaryDrawer({ open, section, onClose, onBack }: MobileSeconda
   return (
     <>
       <div
-        className={`fixed inset-0 bg-black/50 z-40 md:hidden transition-opacity duration-200 ${
+        className={`fixed inset-0 bg-black/50 z-40 lg:hidden transition-opacity duration-200 ${
           open ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
         onClick={onClose}
@@ -213,7 +252,7 @@ function MobileSecondaryDrawer({ open, section, onClose, onBack }: MobileSeconda
       <div
         className={`
           fixed top-0 left-0 z-50 h-full w-[280px] max-w-[85vw]
-          md:hidden
+          lg:hidden
           transition-transform duration-200
           ${open ? 'translate-x-0' : '-translate-x-full'}
         `}

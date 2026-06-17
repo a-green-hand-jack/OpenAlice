@@ -341,7 +341,7 @@ function CredentialModal({ mode, cred, presets, onClose, onSaved }: {
   const staleResult = gate.result && !gate.matchesCurrent(testKey)
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
       <div className="bg-bg border border-border rounded-xl shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <h2 className="text-[15px] font-semibold text-text">{title}</h2>
@@ -352,7 +352,7 @@ function CredentialModal({ mode, cred, presets, onClose, onSaved }: {
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
           {!preset ? (
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {presets.map((p) => (
                 <button
                   key={p.id}

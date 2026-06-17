@@ -34,6 +34,15 @@ interface ActivityBarProps {
   open: boolean
   onClose: () => void
   /**
+   * Whether the secondary sidebar is actually on screen right now (a static
+   * panel on wide, or the open drawer on narrow). Re-clicking the active
+   * item only *collapses* the sidebar when it's visible; if it's hidden
+   * (e.g. landed on /portfolio at a tablet width with the drawer closed),
+   * re-clicking re-opens it instead of toggling the selection off. Defaults
+   * to true so the collapse gesture works when the prop isn't wired.
+   */
+  sidebarVisible?: boolean
+  /**
    * Called after the user activates an item. Receives the activity the user
    * landed on (or null if they collapsed the current one by re-clicking it).
    * The parent uses this on mobile to drill into the secondary sidebar drawer
@@ -149,19 +158,23 @@ const NAV_SECTIONS: NavSection[] = [
 // ==================== ActivityBar ====================
 
 /**
- * Linear-style left nav. 200px wide on all viewports; on mobile (<md)
- * it slides in over the page from the left, on desktop it's a static
- * column. Top section (no header) is the pinned-nav block — Chat,
- * Inbox, Workspaces, etc. — always visible. Labeled sections (Agent,
- * System) get collapsible chevron headers; collapse state persists
- * to localStorage.
+ * Linear-style left nav. 200px wide on desktop; on mobile (<md) it
+ * slides in over the page from the left as a 280px drawer (matching
+ * the secondary drawer so a drill-in doesn't jump width), on desktop
+ * it's a static column. The recessed-rail look comes from bg-tertiary
+ * (one elevation step up from the secondary Sidebar and the base main
+ * pane) — rail → sidebar → main read as three distinct tiers. Top
+ * section (no header) is the pinned-nav block — Chat, Inbox,
+ * Workspaces, etc. — always visible. Labeled sections (Agent, System)
+ * get collapsible chevron headers; collapse state persists to
+ * localStorage.
  *
  * The wider layout (vs VS Code's 56px icon-only column) is deliberate
  * for OpenAlice's current phase: items in the bar live in different
  * lifecycle stages and the section labels are how we'll later
  * communicate that. Mostly-icon view would hide the differentiation.
  */
-export function ActivityBar({ open, onClose, onItemActivated }: ActivityBarProps) {
+export function ActivityBar({ open, onClose, onItemActivated, sidebarVisible = true }: ActivityBarProps) {
   const { t } = useTranslation()
   const selectedSidebar = useWorkspace((state) => state.selectedSidebar)
   const setSidebar = useWorkspace((state) => state.setSidebar)
@@ -185,20 +198,21 @@ export function ActivityBar({ open, onClose, onItemActivated }: ActivityBarProps
        *  page with backdrop. Desktop: static column flush left. */}
       <aside
         className={`
-          w-[216px] h-full flex flex-col shrink-0
-          bg-bg-secondary
+          w-[280px] md:w-[200px] h-full flex flex-col shrink-0
+          bg-bg-tertiary
           border-r border-border/80
           fixed z-50 top-0 left-0 transition-transform duration-200
           ${open ? 'translate-x-0' : '-translate-x-full'}
           md:static md:translate-x-0 md:z-auto md:transition-none
         `}
       >
-        {/* Branding */}
-        <div className="px-5 py-4 flex items-center gap-2.5">
+        {/* Branding — h-10 to line up with the Sidebar header + TabStrip
+            (all three top surfaces share the 40px header rhythm). */}
+        <div className="h-10 px-4 flex items-center gap-2.5 shrink-0">
           <img
             src="/alice.ico"
             alt="Alice"
-            className="w-7 h-7 rounded-full ring-1 ring-border shadow-[0_0_14px_var(--color-accent-dim)]"
+            className="w-6 h-6 rounded-full ring-1 ring-border shadow-[0_0_14px_var(--color-accent-dim)]"
             draggable={false}
           />
           <h1 className="min-w-0 flex-1 truncate text-[15px] font-semibold text-text">OpenAlice</h1>
@@ -245,10 +259,13 @@ export function ActivityBar({ open, onClose, onItemActivated }: ActivityBarProps
                       const hasSidebar = findSectionForActivity(sec) != null
                       const handleClick = () => {
                         let landedOn: ActivitySection | null
-                        if (selectedSidebar === sec && hasSidebar) {
-                          // Same section re-clicked: toggle sidebar off. Don't
-                          // touch the focused tab — collapsing the sidebar
-                          // shouldn't change what's in the editor.
+                        if (selectedSidebar === sec && hasSidebar && sidebarVisible) {
+                          // Same section re-clicked while the sidebar is on
+                          // screen: collapse it. Don't touch the focused tab —
+                          // collapsing the sidebar shouldn't change the editor.
+                          // (When the sidebar is hidden — e.g. a closed drawer
+                          // at tablet width — we fall through to the else branch
+                          // and re-open it instead of toggling selection off.)
                           setSidebar(null)
                           landedOn = null
                         } else {
@@ -275,7 +292,7 @@ export function ActivityBar({ open, onClose, onItemActivated }: ActivityBarProps
                           title={t(item.labelKey)}
                           className={`relative flex items-center gap-3 px-3 py-1.5 rounded-md text-[13px] transition-colors text-left ${
                             isActive
-                              ? 'bg-bg-tertiary text-text shadow-[inset_0_0_0_1px_var(--color-overlay)]'
+                              ? 'bg-accent-dim text-text'
                               : 'text-text-muted hover:text-text hover:bg-overlay'
                           }`}
                         >
@@ -316,8 +333,10 @@ export function ActivityBar({ open, onClose, onItemActivated }: ActivityBarProps
           })}
         </nav>
 
-        {/* Footer — global toggles pinned to the bottom of the rail. */}
-        <div className="shrink-0 border-t border-border px-3 py-2">
+        {/* Footer — global toggles pinned to the bottom of the rail.
+            py-1.5 matches the nav-item rhythm above (the top border
+            already provides the separation). */}
+        <div className="shrink-0 border-t border-border px-3 py-1.5">
           <ThemeToggle />
         </div>
       </aside>

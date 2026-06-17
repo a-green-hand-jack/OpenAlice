@@ -67,7 +67,7 @@ export function QuoteHeader({ symbol }: Props) {
 
       {/* Bid / ask intentionally omitted — they're real-time L1 quote data
           that belongs at the execution layer (UTA), not in analysis. */}
-      <dl className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-x-4 gap-y-1 text-[11px]">
+      <dl className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-x-4 gap-y-1 text-[11px]">
         <Field label="Open"      value={fmtNumber(quote?.open)} />
         <Field label="Prev"      value={fmtNumber(quote?.prev_close)} />
         <Field label="High"      value={fmtNumber(quote?.high)} />
