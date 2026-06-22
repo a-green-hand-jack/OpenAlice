@@ -54,6 +54,14 @@ export function ChatLandingPage() {
   // missing value as installed (older backend / don't gate on a stale shape).
   const isInstalled = (a: { installed?: boolean }) => a.installed !== false
   const anyInstalled = cliAgents.some(isInstalled)
+  // Whether the `/agents` fetch has actually landed. Before it does, `agents`
+  // is `[]` and `anyInstalled` is falsely false — which would flash the
+  // "nothing installed, go install something" nudge on every page load until
+  // the request resolves. The backend registers claude/codex/opencode/pi/shell
+  // unconditionally, so a loaded list always has ≥1 CLI agent; an empty
+  // `cliAgents` means "still loading" (or the fetch failed) — in both cases we
+  // must NOT assert that the host is missing its runtimes.
+  const agentsKnown = cliAgents.length > 0
 
   // Default to the first INSTALLED CLI until the user picks one — so a fresh
   // box that only has, say, codex doesn't silently default to a missing claude.
@@ -226,8 +234,9 @@ export function ChatLandingPage() {
         {/* Runtime install guidance — the conversion nudge. Shows when no agent
             CLI is installed at all, or the selected one is missing from PATH.
             Detection is a hint, not a gate, so send stays enabled (PATH probing
-            can be wrong); this just tells the user what to install. */}
-        {!anyInstalled ? (
+            can be wrong); this just tells the user what to install. Gated on
+            `agentsKnown` so it never flashes during the initial /agents load. */}
+        {agentsKnown && !anyInstalled ? (
           <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-[12px] space-y-1.5">
             <div className="font-medium text-text">{t('chatLanding.noAgentsTitle')}</div>
             <p className="text-text-muted">{t('chatLanding.noAgentsBody')}</p>
