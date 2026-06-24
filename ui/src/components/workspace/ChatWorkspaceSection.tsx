@@ -299,7 +299,7 @@ function ChatWorkspaceRow(props: ChatWorkspaceRowProps): ReactElement {
         </span>
       </div>
       {expanded && w.sessions.length > 0 && (
-        <ul className="sidebar-children chat-ws-children-list">
+        <div className="ml-[18px] border-l border-border/50">
           {w.sessions.map((s) => (
             <SessionRow
               key={s.id}
@@ -311,7 +311,7 @@ function ChatWorkspaceRow(props: ChatWorkspaceRowProps): ReactElement {
               onDelete={() => props.onDeleteSession(s.id)}
             />
           ))}
-        </ul>
+        </div>
       )}
     </li>
   )
