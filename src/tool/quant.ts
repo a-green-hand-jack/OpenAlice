@@ -95,9 +95,10 @@ switch source, or fix the barId), and tell the user if data is simply unavailabl
       inputSchema: z.object({
         script: z.string().describe('The quant script (let-bindings + a final result expression).'),
         precision: z.number().int().min(0).max(10).optional().describe('Decimal places (default 4).'),
+        dates: z.stringbool().optional().describe('Opt-in: also return each source\'s date axis (dates[barId] = ["YYYY-MM-DD", …]) so a dumped series can be mapped to dates. Off by default. For a full dated snapshot, prefer marketSnapshot.'),
       }).meta({ examples: [{ script: 's = bars("yfinance|AAPL", "1d", count=250, asset="equity")\nsma(s.close, 50)' }] }),
-      execute: async ({ script, precision }) => {
-        return runScript(script, deps, precision ?? 4)
+      execute: async ({ script, precision, dates }) => {
+        return runScript(script, deps, precision ?? 4, { withDates: dates ?? false })
       },
     }),
   }

@@ -71,6 +71,17 @@ export interface BarMeta {
   barId?: string
   provider?: string
   barCapability?: BarCapability
+  // ---- freshness contract ----
+  // The point-in-time the request was anchored to (opts.end ?? asOf ?? today),
+  // and whether the data actually REACHES it. A delayed vendor silently
+  // stopping a day behind "now" is the failure mode this makes loud: never let
+  // a stale `to` masquerade as the current price.
+  /** Effective anchor of the request (YYYY-MM-DD): explicit end/asOf, else today. */
+  asOf?: string
+  /** True when the last bar reaches `asOf` (no trading-day gap); false = stale. */
+  isLatestActual?: boolean
+  /** Trading-day gap between the last bar and `asOf` (0 when current). */
+  staleTradingDays?: number
 }
 
 export interface BarSourceCandidate {

@@ -55,6 +55,8 @@ export const CLI_EXPORTS: Record<string, CliExport> = {
       rss: {
         glob: 'globRss',
         grep: 'grepRss',
+        // window: date-bounded, oldest-first — for aligning catalysts to a price path.
+        window: 'windowRss',
         read: 'readRss',
       },
       market: {
@@ -63,6 +65,10 @@ export const CLI_EXPORTS: Record<string, CliExport> = {
       analysis: {
         'search-bars': 'searchBars',
         quant: 'calculateQuant',
+        // Honest as-of read (dated bars, no-lookahead, freshness contract) + a
+        // path-dependent backtest. The Retrospective / Time-Machine primitives.
+        snapshot: 'marketSnapshot',
+        simulate: 'simulate',
       },
       think: {
         calc: 'calculate',

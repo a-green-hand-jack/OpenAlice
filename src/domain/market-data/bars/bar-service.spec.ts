@@ -83,6 +83,16 @@ describe('getBars — vendor branch', () => {
     expect(bars.map((b) => b.date)).toEqual(['2024-01-02', '2024-01-03'])
   })
 
+  it('freshness contract: marks data stale when it does not reach the asOf anchor', async () => {
+    const svc = createBarService(makeDeps())
+    // RAW ends 2024-01-03. Anchor AT the last bar → current.
+    const cur = await svc.getBars({ symbol: 'AAPL', assetClass: 'equity' }, { interval: '1d', end: '2024-01-03' })
+    expect(cur.meta).toMatchObject({ asOf: '2024-01-03', isLatestActual: true, staleTradingDays: 0 })
+    // Anchor a week later (3 trading days past the last bar) → stale + LOUD.
+    const stale = await svc.getBars({ symbol: 'AAPL', assetClass: 'equity' }, { interval: '1d', end: '2024-01-08' })
+    expect(stale.meta).toMatchObject({ asOf: '2024-01-08', isLatestActual: false, staleTradingDays: 3 })
+  })
+
   it('caps at MAX_BARS', async () => {
     const big = Array.from({ length: 6000 }, (_, i) => ({
       date: `2000-01-01T${String(i).padStart(5, '0')}`, open: 1, high: 1, low: 1, close: 1, volume: 1,
@@ -138,6 +148,23 @@ describe('getBars — UTA branch', () => {
     ])
     expect(meta).toMatchObject({ source: 'uta', sourceId: 'alpaca-paper', barId: 'alpaca-paper|AAPL', barCapability: 'realtime' })
     expect(getHistorical).toHaveBeenCalledWith({ aliceId: 'alpaca-paper|AAPL' }, expect.objectContaining({ interval: '1d' }))
+  })
+
+  it('renders a daily broker bar date-only even when stamped at the session open (no 05:00 / DST noise)', async () => {
+    // Alpaca stamps a daily bar at the premarket open (04:00/05:00 ET in UTC),
+    // which also flips an hour across DST — render the calendar day, not an instant.
+    const dailyWire = [
+      { timestamp: '2026-02-17T05:00:00.000Z', open: '1', high: '2', low: '0.5', close: '1.5', volume: '100' },
+      { timestamp: '2026-06-25T04:00:00.000Z', open: '2', high: '3', low: '1', close: '2.5', volume: '200' },
+    ] as unknown as Bar[]
+    const utaManager: UtaBarGateway = {
+      has: async (id) => id === 'alpaca-paper',
+      get: async () => ({ getHistorical: async () => dailyWire }),
+      searchContracts: async () => [],
+    }
+    const svc = createBarService(makeDeps({ utaManager }))
+    const { bars } = await svc.getBars({ barId: 'alpaca-paper|AAPL' }, { interval: '1d' })
+    expect(bars.map((b) => b.date)).toEqual(['2026-02-17', '2026-06-25']) // date-only, no time, no DST flip
   })
 
   it('count-only request becomes a START WINDOW, not a broker `limit` (alpaca count-anchoring bug)', async () => {

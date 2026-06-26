@@ -25,6 +25,8 @@ import type { EquityClientLike, CryptoClientLike, CurrencyClientLike, EtfClientL
 import { buildSDKCredentials } from './domain/market-data/credential-map.js'
 import { createMarketSearchTools } from './tool/market.js'
 import { createQuantTools } from './tool/quant.js'
+import { createSnapshotTools } from './tool/snapshot.js'
+import { createSimulateTools } from './tool/simulate.js'
 import { createBarService } from './domain/market-data/bars/index.js'
 import { createReferenceData } from './domain/market-data/reference/service.js'
 import { createSectorRotationTools } from './tool/sector-rotation.js'
@@ -219,6 +221,8 @@ async function main() {
   // — calculateQuant (v2, barId-keyed) supersedes it and the two descriptions
   // confused the model / bloated context. The code remains for now.
   toolCenter.register(createQuantTools({ barService }), 'quant')
+  toolCenter.register(createSnapshotTools(barService), 'snapshot')
+  toolCenter.register(createSimulateTools(barService), 'simulate')
   toolCenter.register(createSectorRotationTools(equityClient, config.marketData.hub), 'sector-rotation')
   if (derivativesClient) {
     toolCenter.register(createDerivativesTools(derivativesClient), 'derivatives')

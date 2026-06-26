@@ -71,7 +71,7 @@ index them** (`sma(s.close, 50)`, not `sma(...)[-1]`).
 ## Panels — batch many computations in one call
 
 The result can be a **labeled dict** or a **positional list** (each entry a single
-value, max 50). Use this instead of calling the tool N times:
+value, max 200). Use this instead of calling the tool N times:
 
 ```python
 h1  = bars("binance-readonly|BTC/USDT", "1h",  count=250)
@@ -80,6 +80,23 @@ h12 = bars("binance-readonly|BTC/USDT", "12h", count=250)
 { "1h": rsi(h1.close, 14), "4h": rsi(h4.close, 14), "12h": rsi(h12.close, 14) }
 ```
 → `{ "1h": 53.2, "4h": 48.9, "12h": 61.4 }`
+
+## Sibling verbs — dated reads & backtests
+
+`quant` returns latest scalars with no dates. When you need the time axis or a
+hypothetical trade, reach for these instead (see the `retrospective` skill for
+the full workflow):
+
+- **`alice analysis snapshot --query XLE [--asOf YYYY-MM-DD]`** — the honest
+  as-of read: DATED bars (never past `asOf` — no lookahead), the latest print
+  (close + vs-prevClose + day high/low + amplitude), compact levels, and a
+  **freshness contract** (`isLatestActual` / `staleTradingDays`). Use this for
+  "what does/did X look like", not a hand-rolled quant dump.
+- **`alice analysis simulate --query XLE --entryDate … --exitRule …`** —
+  backtest one entry + one exit (`trailing_stop`/`ma_break`/`stop`/`target`/
+  `hold`); returns entry/exit, returnPct, MFE/MAE.
+- **`alice analysis quant … --dates`** — opt-in date axis on a quant result
+  (`dates[barId]`), to map a dumped series back to days.
 
 ## Function catalog
 
