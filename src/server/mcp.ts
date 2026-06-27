@@ -130,7 +130,7 @@ export class McpPlugin implements Plugin {
     app.use('*', cors({
       origin: '*',
       allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-      allowHeaders: ['Content-Type', 'mcp-session-id', 'Last-Event-ID', 'mcp-protocol-version', 'x-openalice-run'],
+      allowHeaders: ['Content-Type', 'mcp-session-id', 'Last-Event-ID', 'mcp-protocol-version', 'x-openalice-run', 'x-openalice-session'],
       exposeHeaders: ['mcp-session-id', 'mcp-protocol-version'],
     }))
 
@@ -152,10 +152,19 @@ export class McpPlugin implements Plugin {
       const meta = svc.registry.get(wsId)
       if (!meta) return c.text('unknown workspace', 404)
 
-      // Out-of-band run identity (agent never sees it): the spawn-injected
-      // AQ_RUN_ID rides this header from native-MCP server config, resolved
-      // server-side to an authoritative origin and baked into the tools.
-      const origin = resolveInboxOrigin(c.req.header('x-openalice-run'), getWorkspaceService)
+      // Out-of-band identity (agent never sees it): the spawn-injected AQ_RUN_ID
+      // (headless) / AQ_SESSION_ID (interactive) rides these mutually-exclusive
+      // headers, resolved server-side to an authoritative origin and baked into
+      // the tools. The session header is validated against THIS workspace's
+      // session registry.
+      const origin = resolveInboxOrigin(
+        {
+          run: c.req.header('x-openalice-run'),
+          session: c.req.header('x-openalice-session'),
+          wsId: meta.id,
+        },
+        getWorkspaceService,
+      )
 
       const transport = new WebStandardStreamableHTTPServerTransport()
       const mcp = createWorkspaceMcpServer(meta.id, meta.tag, origin)

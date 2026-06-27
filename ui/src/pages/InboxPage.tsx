@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatRelativeTime, getIntlLocale } from '../lib/intl'
-import { ArrowRight, Bot, ChevronRight, ListChecks, MessageSquare, Trash2 } from 'lucide-react'
+import { ArrowRight, Bot, ChevronRight, ListChecks, MessageSquare, Terminal, Trash2 } from 'lucide-react'
 import { PageHeader } from '../components/PageHeader'
 import { MarkdownContent } from '../components/MarkdownContent'
 import { FileContentView } from '../components/FileContentView'
@@ -155,6 +155,10 @@ function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }
   // (there's no per-run detail surface to open).
   const origin = entry.origin
   const issueId = origin?.issueId
+  // Interactive provenance — the human-attended session this push came from
+  // (server-stamped from AQ_SESSION_ID, validated against the session registry).
+  // Navigable: opens/focuses that exact session tab.
+  const sessionId = origin?.kind === 'interactive' ? origin.sessionId : undefined
   // Resolve the issue id (a filename stem) to its display title via the warm,
   // process-cached board snapshot — a cheap path (no extra fetch on the hot
   // line). Falls back to the stem when the board hasn't resolved it.
@@ -178,6 +182,16 @@ function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }
     if (!issueId) return
     setSidebar('issue')
     openOrFocus({ kind: 'issue-detail', params: { wsId: entry.workspaceId, id: issueId } })
+  }
+
+  // Jump to the originating interactive session — reuses the same
+  // workspace-tab open/focus wiring as the reply bar, pinned to the session id
+  // (WorkspaceView focuses the matching session record). Switch the sidebar to
+  // Workspaces so the sessions list shows alongside the tab.
+  const openSession = () => {
+    if (!wsAlive || !sessionId) return
+    setSidebar('workspaces')
+    openOrFocus({ kind: 'workspace', params: { wsId: entry.workspaceId, sessionId } })
   }
 
   return (
@@ -204,6 +218,17 @@ function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }
           >
             <ListChecks size={12} strokeWidth={1.75} className="shrink-0" />
             <span className="truncate max-w-[220px]">from {issueTitle ?? issueId}</span>
+          </button>
+        ) : sessionId ? (
+          <button
+            type="button"
+            onClick={openSession}
+            disabled={!wsAlive}
+            title={`From session ${sessionId}`}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-text-muted/80 hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-50 disabled:hover:text-text-muted/80 disabled:hover:bg-transparent disabled:cursor-default"
+          >
+            <Terminal size={12} strokeWidth={1.75} className="shrink-0" />
+            <span className="truncate max-w-[220px]">from session{origin?.agent ? ` · ${origin.agent}` : ''}</span>
           </button>
         ) : origin?.runId ? (
           <span

@@ -13,10 +13,11 @@ export interface InboxDoc {
  * cross-references on — an inbox card → its originating run/issue, an issue
  * detail → the inbox reports it produced.
  *
- * First cut is issue/run-level, headless only (`kind:'headless'`): `runId` is
- * set for every dispatched run, `issueId` when a scheduled issue fired it,
- * `agent` from the run record. `sessionId` + `kind:'interactive'` are reserved
- * for Phase 2. Absent on interactive/manual pushes → `origin` is undefined.
+ * Two live kinds: `kind:'headless'` (a dispatched run — `runId` always, `issueId`
+ * when a scheduled issue fired it) and `kind:'interactive'` (a human-attended
+ * session — `sessionId`, the pre-allocated record id, navigable to that session
+ * tab). `agent` (claude/codex/…) comes off the authoritative record in both.
+ * Absent on manual pushes that carried no header → `origin` is undefined.
  */
 export type InboxOriginKind = 'headless' | 'interactive' | 'manual'
 
@@ -26,7 +27,7 @@ export interface InboxOrigin {
   runId?: string
   /** The scheduled issue that fired the run, when applicable (filename stem). */
   issueId?: string
-  /** Reserved for Phase 2 interactive sessions (pre-allocated record id). */
+  /** The interactive session's pre-allocated record id (navigable to its tab). */
   sessionId?: string
   /** The agent CLI id (claude/codex/…) from the run record. */
   agent?: string

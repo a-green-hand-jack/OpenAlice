@@ -318,11 +318,15 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     adapter: CliAdapter,
     resume: SessionFactoryContext['resume'],
     initialPrompt?: string,
-    // Per-spawn env on TOP of the shared base — used ONLY by the headless path to
-    // inject AQ_RUN_ID (the run's taskId). Deliberately a param, NOT folded into
-    // baseEnv: interactive/probe spawns must NOT carry a run identity, and merging
-    // it before adapter.composeEnv() lets an MCP-config adapter (opencode) read it
-    // and emit the out-of-band header.
+    // Per-spawn env on TOP of the shared base — the identity-injection seam.
+    // Two MUTUALLY-EXCLUSIVE uses (a spawn carries AQ_RUN_ID XOR AQ_SESSION_ID):
+    //   - the headless path injects AQ_RUN_ID (the run's taskId);
+    //   - the interactive POOL factory injects AQ_SESSION_ID (the pre-allocated
+    //     SessionRegistry record id).
+    // Deliberately a param, NOT folded into baseEnv: the probe spawn must carry
+    // NEITHER, and the two live spawns each carry exactly one. Merging it before
+    // adapter.composeEnv() lets an MCP-config adapter (opencode) read it and emit
+    // the matching out-of-band header.
     extraEnv?: Record<string, string>,
   ): {
     command: readonly string[];
@@ -745,6 +749,15 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
         // Seed only on a genuinely fresh spawn (not a resume that an id-assigning
         // adapter rewrote into a `{ sessionId }` intent).
         isFresh ? ctx.initialPrompt : undefined,
+        // INTERACTIVE-only session identity: the pre-allocated SessionRegistry
+        // record id (= what the pool keys by). Mirrors the headless path's
+        // AQ_RUN_ID, but injected HERE in the pool factory — the sole interactive
+        // PTY-spawn seam. The headless dispatch and the offline probe call
+        // composeSpawnInputs directly (NOT through the pool), so neither ever
+        // carries AQ_SESSION_ID; a spawn carries AQ_RUN_ID XOR AQ_SESSION_ID. The
+        // `alice` shim forwards it as the `x-openalice-session` header, resolved
+        // server-side against the session registry — agent never sees it.
+        { AQ_SESSION_ID: ctx.recordId },
       );
 
       // path.trace — single line capturing every path the spawn touches. The

@@ -199,6 +199,12 @@ describe('CLI gateway — agent-invisible origin (x-openalice-run → registry)'
             ? { taskId: 'run-7', issueId: 'macro-scan', agent: 'opencode' }
             : null,
       },
+      sessionRegistry: {
+        get: (wsId: string, id: string) =>
+          wsId === 'ws1' && id === 'sess-1'
+            ? { id: 'sess-1', wsId: 'ws1', agent: 'claude' }
+            : undefined,
+      },
     }
     const wtc = new WorkspaceToolCenter()
     wtc.register(inboxPushFactory)
@@ -245,6 +251,33 @@ describe('CLI gateway — agent-invisible origin (x-openalice-run → registry)'
     await pushWith(app, { 'x-openalice-run': 'ghost' })
     const { entries } = await inboxStore.read({ workspaceId: 'ws1' })
     expect(entries[0].origin).toBeUndefined()
+  })
+
+  it('stamps an interactive origin from a valid session header (validated against the registry)', async () => {
+    const { app, inboxStore } = makeOriginApp()
+    const res = await pushWith(app, { 'x-openalice-session': 'sess-1' })
+    expect(res.status).toBe(200)
+    const { entries } = await inboxStore.read({ workspaceId: 'ws1' })
+    expect(entries[0].origin).toEqual({ kind: 'interactive', sessionId: 'sess-1', agent: 'claude' })
+  })
+
+  it('a forged session id resolves to no origin (registry is the authority)', async () => {
+    const { app, inboxStore } = makeOriginApp()
+    await pushWith(app, { 'x-openalice-session': 'forged' })
+    const { entries } = await inboxStore.read({ workspaceId: 'ws1' })
+    expect(entries[0].origin).toBeUndefined()
+  })
+
+  it('the run header wins when both run and session headers are present', async () => {
+    const { app, inboxStore } = makeOriginApp()
+    await pushWith(app, { 'x-openalice-run': 'run-7', 'x-openalice-session': 'sess-1' })
+    const { entries } = await inboxStore.read({ workspaceId: 'ws1' })
+    expect(entries[0].origin).toEqual({
+      kind: 'headless',
+      runId: 'run-7',
+      issueId: 'macro-scan',
+      agent: 'opencode',
+    })
   })
 
   it('inbox_push input schema has NO origin / runId / issueId param (agent never self-identifies)', () => {

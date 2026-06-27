@@ -213,6 +213,27 @@ describe('opencodeAdapter AI-config', () => {
     });
   });
 
+  it('stamps x-openalice-run on the workspace server when AQ_RUN_ID is present (headless)', () => {
+    const env = opencodeAdapter.composeEnv!({ cwd: dir, env: { ...mcpEnv, AQ_RUN_ID: 'run-7' } });
+    const cfg = JSON.parse(env['OPENCODE_CONFIG_CONTENT']!);
+    expect(cfg.mcp['openalice-workspace'].headers).toEqual({ 'x-openalice-run': 'run-7' });
+    // never on the global server
+    expect(cfg.mcp.openalice.headers).toBeUndefined();
+  });
+
+  it('stamps x-openalice-session on the workspace server when AQ_SESSION_ID is present (interactive)', () => {
+    const env = opencodeAdapter.composeEnv!({ cwd: dir, env: { ...mcpEnv, AQ_SESSION_ID: 'rec-9' } });
+    const cfg = JSON.parse(env['OPENCODE_CONFIG_CONTENT']!);
+    expect(cfg.mcp['openalice-workspace'].headers).toEqual({ 'x-openalice-session': 'rec-9' });
+    expect(cfg.mcp.openalice.headers).toBeUndefined();
+  });
+
+  it('run header wins when both are present (mutually exclusive, matching the shim)', () => {
+    const env = opencodeAdapter.composeEnv!({ cwd: dir, env: { ...mcpEnv, AQ_RUN_ID: 'run-7', AQ_SESSION_ID: 'rec-9' } });
+    const cfg = JSON.parse(env['OPENCODE_CONFIG_CONTENT']!);
+    expect(cfg.mcp['openalice-workspace'].headers).toEqual({ 'x-openalice-run': 'run-7' });
+  });
+
   it('composeEnv throws loud when MCP url is missing from spawn env', () => {
     expect(() => opencodeAdapter.composeEnv!({ cwd: dir, env: {} })).toThrow(/OPENALICE_MCP_URL/);
   });

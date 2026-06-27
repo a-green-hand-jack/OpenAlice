@@ -50,12 +50,13 @@ export interface InboxDoc {
  * link the UI cross-references on: an inbox card → its originating run/issue,
  * an issue detail → the inbox reports it produced.
  *
- * First cut is issue/run-level, headless only (`kind:'headless'`): `runId` is
- * set for every dispatched run, `issueId` when a scheduled issue fired it,
- * `agent` from the run record. `sessionId` + `kind:'interactive'` are reserved
- * for Phase 2 (a pre-allocated session record id via a future AQ_SESSION_ID) —
- * the object is structured now so it grows without reshaping. Absent on
- * interactive/manual pushes that carry no run header → `origin` is undefined.
+ * Two live kinds: `kind:'headless'` (a dispatched run — `runId` always, set from
+ * the spawn-injected AQ_RUN_ID and resolved against the HeadlessTaskRegistry;
+ * `issueId` when a scheduled issue fired it) and `kind:'interactive'` (a
+ * human-attended PTY session — `sessionId`, the pre-allocated SessionRegistry
+ * record id, set from the spawn-injected AQ_SESSION_ID and resolved against the
+ * session registry). `agent` comes off the authoritative record in both. Absent
+ * on manual pushes that carry no header → `origin` is undefined.
  */
 export interface InboxOrigin {
   kind: 'headless' | 'interactive' | 'manual'
@@ -63,7 +64,7 @@ export interface InboxOrigin {
   runId?: string
   /** The scheduled issue that fired the run, when applicable. */
   issueId?: string
-  /** Reserved for Phase 2 interactive sessions (pre-allocated record id). */
+  /** The interactive session's pre-allocated SessionRegistry record id. */
   sessionId?: string
   /** The agent CLI id (claude/codex/…) from the run record. */
   agent?: string

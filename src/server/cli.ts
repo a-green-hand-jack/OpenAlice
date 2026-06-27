@@ -178,10 +178,19 @@ export function registerCliRoutes(app: Hono, deps: CliGatewayDeps): void {
     if (!mappedToolNames(c.req.param('export')).has(toolName)) {
       return c.json({ error: `Unknown CLI command tool: ${toolName || '(none)'}` }, 404)
     }
-    // Out-of-band run identity (agent never sees it): the `alice` shim forwards
-    // the spawn-injected AQ_RUN_ID here, resolved server-side to an authoritative
-    // origin and baked into the scoped tools (e.g. inbox_push auto-link).
-    const origin = resolveInboxOrigin(c.req.header('x-openalice-run'), getWorkspaceService)
+    // Out-of-band identity (agent never sees it): the `alice` shim forwards the
+    // spawn-injected AQ_RUN_ID (headless) / AQ_SESSION_ID (interactive) here as
+    // mutually-exclusive headers, resolved server-side to an authoritative origin
+    // and baked into the scoped tools (e.g. inbox_push auto-link). The session
+    // header is validated against THIS workspace's session registry.
+    const origin = resolveInboxOrigin(
+      {
+        run: c.req.header('x-openalice-run'),
+        session: c.req.header('x-openalice-session'),
+        wsId: r.ws.id,
+      },
+      getWorkspaceService,
+    )
     const tool = exportCatalog(r.exp, r.ws, origin).resolve(toolName)
     if (!tool) return c.json({ error: `Tool not available: ${toolName}` }, 404)
 
