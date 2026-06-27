@@ -1,5 +1,6 @@
 import type { HeadlessTaskRecord } from '../../api/headless'
 import type { IssueDetail, IssuePriority, IssueSnapshot, IssueStatus } from '../../api/issues'
+import { demoInboxEntries } from './inbox'
 
 // GET /api/issues aggregates every workspace's declared issues by SCANNING
 // each workspace's `.alice/issues/<id>.md` dir (one markdown file per issue) —
@@ -411,6 +412,13 @@ export function demoIssueDetail(wsId: string, id: string): IssueDetail | null {
       ...(extras?.agent ? { agent: extras.agent } : {}),
     },
     runs: extras?.runs ?? [],
+    // issue→inbox direction of the cross-link: every inbox report this issue
+    // produced (server-stamped origin.issueId === id, this workspace), newest
+    // first. Mirrors the real route's `inboxReportsFor` (webui/routes/issues.ts).
+    // demoInboxEntries is already newest-first, so the filter preserves order.
+    inboxReports: demoInboxEntries.filter(
+      (e) => e.workspaceId === wsId && e.origin?.issueId === id,
+    ),
   }
 }
 

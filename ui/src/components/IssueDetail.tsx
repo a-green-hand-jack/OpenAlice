@@ -1,8 +1,9 @@
 import { useCallback, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ArrowLeft, Hash, ListChecks, TrendingUp, X } from 'lucide-react'
+import { ArrowLeft, Hash, Inbox, ListChecks, TrendingUp, X } from 'lucide-react'
 
 import type { HeadlessTaskRecord, HeadlessTaskStatus } from '../api/headless'
+import type { InboxEntry } from '../api/inbox'
 import type {
   IssueDetail as IssueDetailData,
   IssueDetailIssue,
@@ -15,6 +16,9 @@ import { issuesApi } from '../api/issues'
 import { useIssueDetail } from '../hooks/useIssueDetail'
 import { useIssues } from '../hooks/useIssues'
 import { formatRelativeTime } from '../lib/intl'
+import { useInboxRead } from '../live/inbox-read'
+import { useInboxSelection } from '../live/inbox-selection'
+import { previewForEntry } from '../live/inbox-threads'
 import { useWikilinkHandler } from '../live/wikilink'
 import { useWorkspace } from '../tabs/store'
 import { CadencePill, PriorityIndicator, STATUS_META } from './IssuesBoard'
@@ -357,6 +361,54 @@ function ActivityFeed({ runs }: { runs: HeadlessTaskRecord[] }) {
   )
 }
 
+// ==================== Inbox reports (issue → inbox) ====================
+
+/**
+ * The inbox reports this issue produced — the issue→inbox direction of the
+ * cross-link (each entry's server-stamped `origin.issueId` is this issue). The
+ * run→issue direction is the Activity feed above. Each row jumps to the Inbox,
+ * selecting + marking-read that entry. Rendered only when there are reports
+ * (the Activity feed already establishes the run history; an empty inbox list
+ * would just be noise).
+ */
+function InboxReportsSection({
+  reports,
+  onOpen,
+}: {
+  reports: InboxEntry[]
+  onOpen: (entryId: string) => void
+}) {
+  if (reports.length === 0) return null
+  return (
+    <section className="mt-8">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted/70">Inbox reports</h3>
+      <ul className="space-y-2">
+        {reports.map((entry) => (
+          <li key={entry.id}>
+            <button
+              type="button"
+              onClick={() => onOpen(entry.id)}
+              title="Open in Inbox"
+              className="group flex w-full items-center gap-2.5 rounded-lg border border-border bg-bg-secondary px-3 py-2.5 text-left transition-colors hover:border-accent/40 hover:bg-bg-tertiary"
+            >
+              <Inbox size={14} className="shrink-0 text-muted/70 transition-colors group-hover:text-accent" aria-hidden />
+              <span className="min-w-0 flex-1 truncate text-[12px] text-text/80">
+                {previewForEntry(entry) || '(empty push)'}
+              </span>
+              <span
+                className="ml-auto shrink-0 text-xs text-muted"
+                title={new Date(entry.ts).toLocaleString()}
+              >
+                {formatRelativeTime(entry.ts)}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 // ==================== Wikilink disambiguation picker ====================
 
 /**
@@ -462,6 +514,9 @@ export function IssueDetail({ wsId, id }: { wsId: string; id: string }) {
   const { data, error, loading, mutate } = useIssueDetail(wsId, id)
   const { data: board } = useIssues()
   const openOrFocus = useWorkspace((s) => s.openOrFocus)
+  const setSidebar = useWorkspace((s) => s.setSidebar)
+  const selectInboxEntry = useInboxSelection((s) => s.select)
+  const markInboxRead = useInboxRead((s) => s.markRead)
   // Reuse the canonical `[[name]]` navigation (jump to Tracked + select the
   // entity) — see live/wikilink. We only override the click to first RESOLVE
   // the token across both namespaces (entity + issues).
@@ -477,6 +532,18 @@ export function IssueDetail({ wsId, id }: { wsId: string; id: string }) {
       openOrFocus({ kind: 'issue-detail', params: { wsId: ref.wsId, id: ref.id } })
     },
     [openOrFocus],
+  )
+
+  // Open the Inbox at a specific entry (the issue→inbox cross-link). Mirrors the
+  // sidebar's select-and-read, then surfaces the Inbox tab + sidebar.
+  const gotoInbox = useCallback(
+    (entryId: string) => {
+      selectInboxEntry(entryId)
+      markInboxRead(entryId)
+      setSidebar('inbox')
+      openOrFocus({ kind: 'inbox', params: {} })
+    },
+    [selectInboxEntry, markInboxRead, setSidebar, openOrFocus],
   )
 
   // Clicking a `[[name]]` in the body resolves it across BOTH namespaces. A
@@ -559,6 +626,7 @@ export function IssueDetail({ wsId, id }: { wsId: string; id: string }) {
   }
 
   const { issue, runs } = data
+  const inboxReports = data.inboxReports ?? []
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-5 md:px-6">
@@ -579,6 +647,7 @@ export function IssueDetail({ wsId, id }: { wsId: string; id: string }) {
           </div>
           <CommentComposer wsId={wsId} id={id} onPosted={mutate} />
           <ActivityFeed runs={runs} />
+          <InboxReportsSection reports={inboxReports} onOpen={gotoInbox} />
         </main>
         <PropertiesRail
           issue={issue}

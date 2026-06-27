@@ -194,7 +194,9 @@ work and surfaces nothing has vanished. So:
 - If the run produces something the user should see — a brief, a finding, a
   result — **push it to the Inbox**, the only channel a headless run has:
   `alice-workspace inbox push --comments "…"` (attach files with repeatable
-  `--doc <path>`; run `alice-workspace --help` for the flags).
+  `--doc <path>`; run `alice-workspace --help` for the flags). A report pushed
+  during a scheduled run is automatically linked back to the issue that
+  triggered it — you don't pass any id.
 - If the run is a **check that didn't trigger** (condition not met, nothing
   changed), **exit silently — that is the correct outcome**, not a failure.
   Don't manufacture noise.

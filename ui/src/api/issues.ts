@@ -1,6 +1,7 @@
 import { fetchJson, headers } from './client'
 import type { Entity } from './entities'
 import type { HeadlessTaskRecord } from './headless'
+import type { InboxEntry } from './inbox'
 import type { ScheduleWhen } from './schedule'
 
 /**
@@ -130,6 +131,14 @@ export interface IssueDetail {
   issue: IssueDetailIssue
   /** This issue's headless runs (wsId + issueId match), newest first. */
   runs: HeadlessTaskRecord[]
+  /**
+   * The inbox reports this issue produced — every inbox entry from this
+   * workspace whose server-stamped `origin.issueId` is this issue, newest-first.
+   * The issue→inbox direction of the cross-link (the run→issue direction is
+   * `runs`). Optional on the client: legacy/demo payloads may omit it, and an
+   * issue with no reports yields an empty array.
+   */
+  inboxReports?: InboxEntry[]
 }
 
 export const issuesApi = {

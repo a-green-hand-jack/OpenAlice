@@ -310,6 +310,12 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     adapter: CliAdapter,
     resume: SessionFactoryContext['resume'],
     initialPrompt?: string,
+    // Per-spawn env on TOP of the shared base — used ONLY by the headless path to
+    // inject AQ_RUN_ID (the run's taskId). Deliberately a param, NOT folded into
+    // baseEnv: interactive/probe spawns must NOT carry a run identity, and merging
+    // it before adapter.composeEnv() lets an MCP-config adapter (opencode) read it
+    // and emit the out-of-band header.
+    extraEnv?: Record<string, string>,
   ): {
     command: readonly string[];
     cwd: string;
@@ -342,6 +348,10 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       GIT_AUTHOR_EMAIL: `${ws.id}@workspace.local`,
       GIT_COMMITTER_NAME: ws.tag,
       GIT_COMMITTER_EMAIL: `${ws.id}@workspace.local`,
+      // Headless-only run identity (see extraEnv above). Merged here so it's
+      // visible to adapter.composeEnv() below (opencode's inline MCP config) and
+      // to the spawned process's env (the `alice` shim reads it).
+      ...(extraEnv ?? {}),
     }, ws.dir);
     const baseCtx = {
       ...(resume !== undefined ? { resume } : {}),
@@ -435,8 +445,18 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       throw new Error(`adapter "${adapter.id}" has no headless mode`);
     }
     // Reuse a fresh interactive spawn's env/cwd (identical MCP injection),
-    // then swap the interactive command for the one-shot headless argv.
-    const { cwd, env } = composeSpawnInputs(ws, adapter, undefined);
+    // then swap the interactive command for the one-shot headless argv. Inject
+    // AQ_RUN_ID = this run's taskId so the agent's inbox pushes self-link to the
+    // run server-side (via the `alice` shim header / opencode's MCP header) —
+    // headless-only, agent never sees it. The taskId is the registry key the
+    // route resolves issueId/agent from.
+    const { cwd, env } = composeSpawnInputs(
+      ws,
+      adapter,
+      undefined,
+      undefined,
+      opts.taskId ? { AQ_RUN_ID: opts.taskId } : undefined,
+    );
     const command = adapter.composeHeadlessCommand(config.command, { cwd, env }, prompt);
     const logPaths = opts.taskId ? headlessLogPaths(headlessLogsDir, opts.taskId) : null;
     return runHeadlessTask({

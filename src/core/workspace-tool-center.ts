@@ -25,7 +25,7 @@
  */
 
 import type { Tool } from 'ai'
-import type { IInboxStore } from './inbox-store.js'
+import type { IInboxStore, InboxOrigin } from './inbox-store.js'
 import type { IEntityStore } from './entity-store.js'
 
 // ==================== Context handed to factories ====================
@@ -52,6 +52,12 @@ export interface WorkspaceToolContext {
    *  it needs the live WorkspaceService (created after this center); the two
    *  build sites (cli.ts, mcp.ts) inject a lazy closure, tests may omit it. */
   resolveWorkspace?: (id: string) => { id: string; dir: string; tag: string } | null
+  /** Agent-INVISIBLE run provenance, resolved server-side from the
+   *  `x-openalice-run` header by the MCP / CLI route (never supplied by the
+   *  agent). Factories pass it through to call sites (e.g. inbox_push →
+   *  inboxStore.append) so a pushed entry self-links to its originating run /
+   *  issue. Absent (interactive session, or no header) → undefined. */
+  origin?: InboxOrigin
 }
 
 // ==================== Factory shape ====================
