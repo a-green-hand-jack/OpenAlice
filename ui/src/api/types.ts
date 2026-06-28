@@ -337,6 +337,13 @@ export interface Position {
     symbol?: string
     secType?: string
     exchange?: string
+    /** Primary listing exchange (e.g. NASDAQ, SEHK) — distinct from the
+     *  routing `exchange` (often SMART). Populated for equities; empty for
+     *  crypto. */
+    primaryExchange?: string
+    /** Instrument long-name (e.g. "Apple Inc"). Populated where the broker
+     *  exposes it (IBKR, Alpaca catalog); empty otherwise. */
+    description?: string
     currency?: string
     lastTradeDateOrContractMonth?: string
     strike?: number

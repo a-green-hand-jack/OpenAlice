@@ -137,6 +137,9 @@ export class AlpacaBroker implements IBroker {
    * null) means "we tried and got nothing" — null means "haven't tried yet".
    */
   private catalog: AlpacaAssetRaw[] | null = null
+  /** symbol → asset, derived from `catalog` for O(1) name/exchange joins on
+   *  position & order rows (issue #340). Rebuilt whenever the catalog loads. */
+  private catalogBySymbol: Map<string, AlpacaAssetRaw> | null = null
 
   constructor(config: AlpacaBrokerConfig) {
     this.config = config
@@ -219,6 +222,7 @@ export class AlpacaBroker implements IBroker {
       // contract the broker won't accept orders for.
       const next = (raw ?? []).filter((a) => a.tradable !== false)
       this.catalog = next
+      this.catalogBySymbol = new Map(next.map((a) => [a.symbol, a]))
       console.log(`AlpacaBroker[${this.id}]: catalog loaded (${next.length} active tradable assets)`)
     } catch (err) {
       // Re-throw so the caller (init / cron) can decide whether to log or
@@ -435,12 +439,26 @@ export class AlpacaBroker implements IBroker {
     }
   }
 
+  /**
+   * Build a contract for `symbol`, enriched from the cached asset catalog with
+   * the instrument long-name (`description`) + primary listing exchange so
+   * position / order / trade rows can render them (issue #340). Falls back to a
+   * bare contract before the catalog has loaded.
+   */
+  private contractFor(symbol: string): Contract {
+    const contract = makeContract(symbol)
+    const asset = this.catalogBySymbol?.get(symbol)
+    if (asset?.name) contract.description = asset.name
+    if (asset?.exchange) contract.primaryExchange = asset.exchange
+    return contract
+  }
+
   async getPositions(): Promise<Position[]> {
     try {
       const raw = await this.client.getPositions() as AlpacaPositionRaw[]
 
       return raw.map(p => buildPosition({
-        contract: makeContract(p.symbol),
+        contract: this.contractFor(p.symbol),
         currency: 'USD',
         side: p.side === 'long' ? 'long' as const : 'short' as const,
         quantity: new Decimal(p.qty),
@@ -600,7 +618,7 @@ export class AlpacaBroker implements IBroker {
   // ---- Internal ----
 
   private mapOpenOrder(o: AlpacaOrderRaw): OpenOrder {
-    const contract = makeContract(o.symbol)
+    const contract = this.contractFor(o.symbol)
 
     const order = new Order()
     order.action = o.side.toUpperCase() // buy → BUY
