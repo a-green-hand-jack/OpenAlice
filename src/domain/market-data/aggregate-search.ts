@@ -12,12 +12,13 @@
  */
 import type { SymbolIndex } from './equity/symbol-index.js'
 import type { CommodityCatalog } from './commodity/commodity-catalog.js'
-import type { CryptoClientLike, CurrencyClientLike } from './client/types.js'
+import type { CryptoClientLike, CurrencyClientLike, EquityClientLike } from './client/types.js'
 
 export type AssetClass = 'equity' | 'crypto' | 'currency' | 'commodity'
 
 export interface MarketSearchDeps {
   symbolIndex: SymbolIndex
+  equityClient: EquityClientLike
   cryptoClient: CryptoClientLike
   currencyClient: CurrencyClientLike
   commodityCatalog: CommodityCatalog
@@ -69,6 +70,7 @@ export async function aggregateSymbolSearch(
   const q = query.trim()
   if (!q) return []
 
+  // Local SEC index — US-only, zero-latency, authoritative for US tickers.
   const equityResults = deps.symbolIndex
     .search(q, limit)
     .map((r) => ({ ...r, assetClass: 'equity' as const }))
@@ -77,9 +79,14 @@ export async function aggregateSymbolSearch(
     .search(q, limit)
     .map((r) => ({ ...r, assetClass: 'commodity' as const }))
 
-  const [cryptoSettled, currencySettled] = await Promise.allSettled([
+  const [cryptoSettled, currencySettled, equityOnlineSettled] = await Promise.allSettled([
     deps.cryptoClient.search({ query: q, provider: 'yfinance' }),
     deps.currencyClient.search({ query: q, provider: 'yfinance' }),
+    // Yahoo online search — reaches global exchanges (CN A-share .SS/.SZ, TW .TW,
+    // VN .VN, HK, …) the SEC index can't. Returned tickers are Yahoo-native, so
+    // they feed straight into getHistorical. Force yfinance regardless of the
+    // configured equity provider, same as crypto/currency above.
+    deps.equityClient.search({ query: q, provider: 'yfinance', is_symbol: false }),
   ])
 
   const cryptoResults = (cryptoSettled.status === 'fulfilled' ? cryptoSettled.value : []).map(
@@ -93,8 +100,26 @@ export async function aggregateSymbolSearch(
     })
     .map((r) => ({ ...r, assetClass: 'currency' as const }))
 
+  // Merge online equity hits, de-duped against the local SEC index by symbol —
+  // US names overlap both sources; keep the local entry (richer, authoritative).
+  const seenEquity = new Set(
+    equityResults.map((r) => String((r as Record<string, unknown>).symbol ?? '').toUpperCase()),
+  )
+  const equityOnlineResults = (equityOnlineSettled.status === 'fulfilled' ? equityOnlineSettled.value : [])
+    .filter((r) => {
+      const sym = String((r as Record<string, unknown>).symbol ?? '').toUpperCase()
+      if (!sym || seenEquity.has(sym)) return false
+      seenEquity.add(sym)
+      return true
+    })
+    .map((r) => {
+      const o = r as Record<string, unknown>
+      return { ...o, symbol: String(o.symbol), assetClass: 'equity' as const }
+    })
+
   const all: MarketSearchResult[] = [
     ...equityResults,
+    ...equityOnlineResults,
     ...cryptoResults,
     ...currencyResults,
     ...commodityResults,

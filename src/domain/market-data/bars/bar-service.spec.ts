@@ -26,6 +26,7 @@ function makeDeps(over: Partial<BarServiceDeps> = {}): BarServiceDeps {
   return {
     marketSearch: {
       symbolIndex: { search: () => [{ symbol: 'AAPL', name: 'Apple Inc.' }] },
+      equityClient: { search: async () => [] },
       cryptoClient: { search: async () => [] },
       currencyClient: { search: async () => [] },
       commodityCatalog: { search: () => [] },

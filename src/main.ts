@@ -171,7 +171,7 @@ async function main() {
   const commodityCatalog = new CommodityCatalog()
   commodityCatalog.load()
 
-  const marketSearch = { symbolIndex, cryptoClient, currencyClient, commodityCatalog }
+  const marketSearch = { symbolIndex, equityClient, cryptoClient, currencyClient, commodityCatalog }
 
   // Federated bar layer — vendor (OpenTypeBB) + broker (UTA) OHLCV behind one
   // barId-keyed interface. Vendor branch live now; UTA branch lands with Phase 1.
