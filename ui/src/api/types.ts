@@ -354,6 +354,14 @@ export interface Position {
   marketValue: string
   unrealizedPnL: string
   realizedPnL: string
+  /** Leveraged-derivative risk metadata (crypto perps/futures). Absent for
+   *  spot and brokers without per-position leverage. Mirrors uta-protocol's
+   *  PositionRisk. */
+  risk?: {
+    leverage?: string
+    liquidationPrice?: string
+    marginMode?: 'cross' | 'isolated'
+  }
 }
 
 export interface WalletCommitLog {

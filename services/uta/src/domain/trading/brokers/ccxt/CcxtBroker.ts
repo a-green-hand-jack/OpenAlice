@@ -9,7 +9,7 @@
 import { z } from 'zod'
 import ccxt from 'ccxt'
 import Decimal from 'decimal.js'
-import type { Exchange, Order as CcxtOrder } from 'ccxt'
+import type { Exchange, Order as CcxtOrder, Position as CcxtRawPosition } from 'ccxt'
 import { Contract, ContractDescription, ContractDetails, Order, OrderState, UNSET_DECIMAL } from '@traderalice/ibkr'
 import {
   BrokerError,
@@ -17,6 +17,7 @@ import {
   type AccountCapabilities,
   type AccountInfo,
   type Position,
+  type PositionRisk,
   type PlaceOrderResult,
   type OpenOrder,
   type Quote,
@@ -54,6 +55,56 @@ import {
 /** The implicit single wallet a unified-account venue (okx / bybit UTA) exposes
  *  — one plain fetchBalance() covers everything, so no selector is ever needed. */
 const UNIFIED_SUBACCOUNT: CcxtSubAccountDef = { id: 'default', label: 'Account', kind: 'unified', walletTypes: [] }
+
+/**
+ * Pull leveraged-derivative risk metadata (leverage / liquidation price /
+ * margin mode) off a raw CCXT position. Returns `undefined` when the venue
+ * reported none — so the built Position carries no `risk` key at all rather
+ * than a bag of undefineds (spot holdings, or exchanges that omit these).
+ *
+ * Zeroes are treated as absent: a real leveraged position never has
+ * `leverage === 0` or `liquidationPrice === 0` (CCXT reports 0 when the field
+ * isn't computed), and surfacing a 0 liquidation price would read as
+ * "liquidates at $0", which is worse than absent. Numeric fields are
+ * stringified for the same float-safety reason as Position's monetary fields.
+ */
+function ccxtPositionRisk(p: CcxtRawPosition): PositionRisk | undefined {
+  const risk: PositionRisk = {}
+  if (p.leverage != null && p.leverage > 0) risk.leverage = String(p.leverage)
+  if (p.liquidationPrice != null && p.liquidationPrice > 0) risk.liquidationPrice = String(p.liquidationPrice)
+  if (p.marginMode === 'cross' || p.marginMode === 'isolated') risk.marginMode = p.marginMode
+  return Object.keys(risk).length > 0 ? risk : undefined
+}
+
+/**
+ * Bridge the process's outbound-proxy env vars onto a CCXT exchange instance.
+ *
+ * CCXT's Node fetch path does NOT honor the shell's HTTP_PROXY/HTTPS_PROXY on
+ * its own — the proxy must be set explicitly on the instance
+ * (`exchange.httpsProxy` / `.httpProxy` / `.socksProxy`); Node's native fetch
+ * likewise ignores those env vars unless a global undici dispatcher is
+ * installed. So a user in a geo-restricted region whose shell already routes
+ * everything through a local proxy (the common Binance/Bitget case) would see
+ * the browser reach the exchange while UTA's connection silently fails. We
+ * mirror the standard env vars onto the instance here. No-op when none are
+ * set. See issue #384 (bakabird's repro confirmed the per-instance fix).
+ */
+function applyEnvProxy(exchange: Exchange): void {
+  // CCXT forbids setting more than ONE of httpProxy / httpsProxy / socksProxy
+  // on an instance — checkProxySettings() throws InvalidProxySettings on the
+  // first request if two are set. The common clash/v2ray setup exports BOTH
+  // HTTP_PROXY and HTTPS_PROXY pointing at the same local proxy, so we must
+  // collapse to a single property rather than set each from its own env var.
+  // Exchange REST is HTTPS, so the chosen proxy carries all traffic via
+  // httpsProxy (or socksProxy for a socks:// URL). Precedence:
+  // HTTPS_PROXY > HTTP_PROXY > ALL_PROXY.
+  const proxy = process.env.HTTPS_PROXY || process.env.https_proxy
+    || process.env.HTTP_PROXY || process.env.http_proxy
+    || process.env.ALL_PROXY || process.env.all_proxy
+  if (!proxy) return
+  if (/^socks/i.test(proxy)) exchange.socksProxy = proxy
+  else exchange.httpsProxy = proxy
+}
 
 // Treated as cash (1:1 to USD) when computing balances and as ineligible
 // for spot-position synthesis. Compared against `coin.toUpperCase()` so
@@ -194,6 +245,11 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       if (v !== undefined) credentials[field] = v
     }
     this.exchange = new ExchangeClass(credentials)
+
+    // Route through the process's outbound proxy (if any) BEFORE the first
+    // request — loadMarkets() in init() is the first network call. CCXT won't
+    // pick up HTTP(S)_PROXY env on its own. See issue #384.
+    applyEnvProxy(this.exchange)
 
     if (config.sandbox) {
       try {
@@ -993,6 +1049,10 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
           // multiplier is canonical 1 here.
           multiplier: '1',
           avgCostSource: 'broker',
+          // Leveraged-derivative risk picture (leverage / liq price / margin
+          // mode). Spot holdings below never get one — they go through
+          // fetchAssetHoldings, which doesn't pass `risk`.
+          risk: ccxtPositionRisk(p),
         }))
       }
 

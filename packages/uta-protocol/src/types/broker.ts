@@ -62,6 +62,31 @@ export class BrokerError extends Error {
 // ==================== Position ====================
 
 /**
+ * Venue risk metadata for a leveraged-derivative position (crypto perps /
+ * futures). Grouped into its own struct — rather than added as loose
+ * top-level fields — so the base Position stays aligned with IBKR's
+ * updatePortfolio() shape. IBKR itself keeps margin/leverage OFF the
+ * position: init/maint margin live on `OrderState`, and account-wide margin
+ * lives in the account-summary tags (ExcessLiquidity, MaintMarginReq, …),
+ * because there leverage is a cross-margin *account* concept, not a
+ * per-position one. On CCXT isolated/cross perps it genuinely IS
+ * per-position, so we surface it here.
+ *
+ * Absent (`Position.risk === undefined`) for spot holdings and for
+ * equity/cash brokers that don't expose per-position leverage. Numeric
+ * fields are strings for the same float-safety reason as the monetary
+ * fields on Position.
+ */
+export interface PositionRisk {
+  /** Effective leverage on the position, e.g. `'50'` for 50×. */
+  leverage?: string
+  /** Estimated liquidation price, denominated in the position's `currency`. */
+  liquidationPrice?: string
+  /** Margin mode the position runs under. */
+  marginMode?: 'cross' | 'isolated'
+}
+
+/**
  * Unified position/holding.
  * Field names aligned with IBKR EWrapper.updatePortfolio() parameters.
  */
@@ -101,6 +126,13 @@ export interface Position {
    * Undefined defaults to `'broker'` (current behavior, back-compat).
    */
   avgCostSource?: 'broker' | 'wallet'
+  /**
+   * Venue risk metadata for leveraged derivatives (see {@link PositionRisk}).
+   * Undefined for spot and for brokers without per-position leverage — so
+   * a consumer reading `position.risk?.leverage` gets `undefined` rather
+   * than a misleading implicit 1×.
+   */
+  risk?: PositionRisk
 }
 
 // ==================== Order result ====================

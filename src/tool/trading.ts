@@ -44,6 +44,33 @@ function handleBrokerError(err: unknown): { error: string; code: string; transie
   }
 }
 
+/** A per-account degradation marker: which account failed, and why. */
+type AccountFailure = { source: string } & ReturnType<typeof handleBrokerError>
+
+/**
+ * Run `fn` against every target account, tolerating per-account failure.
+ *
+ * Without this, one offline / region-blocked account (e.g. a `bybit-readonly`
+ * data source whose proxy exit node is geo-blocked) rejects the whole
+ * `Promise.all` and blanks EVERY healthy account's data — the user sees
+ * nothing instead of their real Binance/Bitget holdings (issue #390). Here a
+ * failed account degrades to a `{ source, ...error }` marker while the healthy
+ * ones still return.
+ */
+async function settlePerAccount<U extends { id: string }, T>(
+  targets: readonly U[],
+  fn: (uta: U) => Promise<T>,
+): Promise<{ ok: T[]; failed: AccountFailure[] }> {
+  const settled = await Promise.allSettled(targets.map((u) => fn(u)))
+  const ok: T[] = []
+  const failed: AccountFailure[] = []
+  settled.forEach((r, i) => {
+    if (r.status === 'fulfilled') ok.push(r.value)
+    else failed.push({ source: targets[i].id, ...handleBrokerError(r.reason) })
+  })
+  return { ok, failed }
+}
+
 /**
  * Summarize an OpenOrder for AI consumption. Uses the value-tolerant
  * compactors (NOT order.field.equals(...)) because over HTTP the Order's
@@ -236,33 +263,36 @@ hitting the broker, which otherwise expects the bare base ticker.`,
 
     getAccount: tool({
       description: `Query trading account info (netLiquidation, totalCashValue, buyingPower, unrealizedPnL, realizedPnL).
-If this tool returns an error with transient=true, wait a few seconds and retry once before reporting to the user.`,
+If this tool returns an error with transient=true, wait a few seconds and retry once before reporting to the user.
+When multiple accounts are queried, a healthy account appears with its balances and a failed one appears as an entry with an \`error\` field (and \`source\`). ALWAYS surface failed accounts to the user — an entry with transient=false is a permanent (credentials/config) failure they must fix, not retry.`,
       inputSchema: z.object({
         source: z.string().optional().describe(sourceDesc(false)),
         subAccountId: z.string().optional().describe('For multi-wallet venues (e.g. Binance: "spot" / "derivatives"), scope to one wallet. Omit for the aggregate across all wallets. Most brokers have a single wallet and ignore this.'),
       }).meta({ examples: [{ source: 'alpaca-paper' }] }),
       execute: async ({ source, subAccountId }) => {
-        const targets = await manager.resolve(source)
+        const targets = await manager.resolve(source, { tradingOnly: true })
         if (targets.length === 0) return await noAccountsError(manager, source)
-        try {
-          const results = await Promise.all(targets.map(async (uta) => ({ source: uta.id, ...compactAccountInfo(await uta.getAccount(subAccountId)) })))
-          return results.length === 1 ? results[0] : results
-        } catch (err) {
-          return handleBrokerError(err)
-        }
+        const { ok, failed } = await settlePerAccount(targets, async (uta) => ({ source: uta.id, ...compactAccountInfo(await uta.getAccount(subAccountId)) }))
+        // Single explicit account: keep the original shape (the account
+        // object, or the error directly).
+        if (targets.length === 1) return ok[0] ?? failed[0]
+        // Multi-account: healthy accounts + per-account error markers, so one
+        // offline broker can't blank the rest (issue #390).
+        return [...ok, ...failed]
       },
     }),
 
     getPortfolio: tool({
       description: `Query current portfolio holdings. IMPORTANT: If result is an empty array [], you have no holdings.
-If this tool returns an error with transient=true, wait a few seconds and retry once before reporting to the user.`,
+If this tool returns an error with transient=true, wait a few seconds and retry once before reporting to the user.
+If the result is an object with a \`degraded\` array, one or more accounts could not be read — the \`positions\` are only from the healthy accounts. ALWAYS tell the user which \`source\`(s) are degraded; an entry with transient=false is a permanent (credentials/config) failure they must fix, not retry.`,
       inputSchema: z.object({
         source: z.string().optional().describe(sourceDesc(false)),
         symbol: z.string().optional().describe('Filter by ticker, or omit for all'),
         subAccountId: z.string().optional().describe('For multi-wallet venues (e.g. Binance: "spot" / "derivatives"), scope to one wallet. Omit for holdings across all wallets.'),
       }).meta({ examples: [{ source: 'alpaca-paper' }] }),
       execute: async ({ source, symbol, subAccountId }) => {
-        const targets = await manager.resolve(source)
+        const targets = await manager.resolve(source, { tradingOnly: true })
         if (targets.length === 0) return { positions: [], ...(await noAccountsError(manager, source)) }
         // FX rates table — UTA's /fx-rates collects every currency in
         // use server-side and returns a flat lookup. Locally we treat
@@ -284,92 +314,105 @@ If this tool returns an error with transient=true, wait a few seconds and retry 
           const rate = fxLookup.get(currency) ?? 1
           return new Decimal(amount).mul(rate).toString()
         }
-        try {
-          const allPositions: Array<Record<string, unknown>> = []
-          const fxWarnings: string[] = []
-          for (const uta of targets) {
-            const positions = await uta.getPositions(subAccountId)
-            const accountInfo = await uta.getAccount(subAccountId)
+        // Per-account so one offline/region-blocked account degrades to a
+        // marker instead of zeroing every healthy account's holdings (#390).
+        const { ok, failed } = await settlePerAccount(targets, async (uta) => {
+          const positions = await uta.getPositions(subAccountId)
+          const accountInfo = await uta.getAccount(subAccountId)
 
-            // Convert position market values to USD for cross-currency percentage calculations
-            let totalMarketValueUsd = new Decimal(0)
-            const posUsdValues: Decimal[] = []
-            for (const pos of positions) {
-              posUsdValues.push(new Decimal(fxToUsd(pos.marketValue, pos.currency)))
-              totalMarketValueUsd = totalMarketValueUsd.plus(posUsdValues[posUsdValues.length - 1])
-            }
-
-            // Account netLiq in USD for equity percentage
-            const netLiqUsd = new Decimal(fxToUsd(accountInfo.netLiquidation, accountInfo.baseCurrency))
-
-            let idx = 0
-            for (const pos of positions) {
-              if (symbol && symbol !== 'all' && pos.contract.symbol !== symbol) { idx++; continue }
-              const mvUsd = posUsdValues[idx]
-              const percentOfEquity = netLiqUsd.gt(0) ? mvUsd.div(netLiqUsd).mul(100) : new Decimal(0)
-              const percentOfPortfolio = totalMarketValueUsd.gt(0) ? mvUsd.div(totalMarketValueUsd).mul(100) : new Decimal(0)
-              allPositions.push({
-                source: uta.id, symbol: pos.contract.symbol,
-                // secType + aliceId disambiguate same-symbol positions (ETH
-                // spot vs ETH perp render identically without them) and give
-                // the agent the exact id closePosition needs.
-                secType: pos.contract.secType,
-                aliceId: pos.contract.aliceId,
-                currency: pos.currency, side: pos.side,
-                quantity: pos.quantity.toString(), avgCost: price(pos.avgCost), marketPrice: price(pos.marketPrice),
-                marketValue: money(pos.marketValue), unrealizedPnL: money(pos.unrealizedPnL), realizedPnL: money(pos.realizedPnL),
-                percentageOfEquity: `${percentOfEquity.toFixed(1)}%`,
-                percentageOfPortfolio: `${percentOfPortfolio.toFixed(1)}%`,
-              })
-              idx++
-            }
+          // Convert position market values to USD for cross-currency percentage calculations
+          let totalMarketValueUsd = new Decimal(0)
+          const posUsdValues: Decimal[] = []
+          for (const pos of positions) {
+            posUsdValues.push(new Decimal(fxToUsd(pos.marketValue, pos.currency)))
+            totalMarketValueUsd = totalMarketValueUsd.plus(posUsdValues[posUsdValues.length - 1])
           }
-          if (allPositions.length === 0) return { positions: [], message: 'No open positions.' }
-          const allWarnings = [...new Set([...fxWarnings, ...fxWarningsFromRates])]
-          if (allWarnings.length > 0) return { positions: allPositions, fxWarnings: allWarnings }
-          return allPositions
-        } catch (err) {
-          return handleBrokerError(err)
+
+          // Account netLiq in USD for equity percentage
+          const netLiqUsd = new Decimal(fxToUsd(accountInfo.netLiquidation, accountInfo.baseCurrency))
+
+          const rows: Array<Record<string, unknown>> = []
+          let idx = 0
+          for (const pos of positions) {
+            if (symbol && symbol !== 'all' && pos.contract.symbol !== symbol) { idx++; continue }
+            const mvUsd = posUsdValues[idx]
+            const percentOfEquity = netLiqUsd.gt(0) ? mvUsd.div(netLiqUsd).mul(100) : new Decimal(0)
+            const percentOfPortfolio = totalMarketValueUsd.gt(0) ? mvUsd.div(totalMarketValueUsd).mul(100) : new Decimal(0)
+            rows.push({
+              source: uta.id, symbol: pos.contract.symbol,
+              // secType + aliceId disambiguate same-symbol positions (ETH
+              // spot vs ETH perp render identically without them) and give
+              // the agent the exact id closePosition needs.
+              secType: pos.contract.secType,
+              aliceId: pos.contract.aliceId,
+              currency: pos.currency, side: pos.side,
+              quantity: pos.quantity.toString(), avgCost: price(pos.avgCost), marketPrice: price(pos.marketPrice),
+              marketValue: money(pos.marketValue), unrealizedPnL: money(pos.unrealizedPnL), realizedPnL: money(pos.realizedPnL),
+              percentageOfEquity: `${percentOfEquity.toFixed(1)}%`,
+              percentageOfPortfolio: `${percentOfPortfolio.toFixed(1)}%`,
+              // Leveraged-derivative risk (crypto perps): leverage,
+              // liquidation price, margin mode. Present ⇒ this is NOT a 1×
+              // spot position — size the downside accordingly.
+              ...(pos.risk && { risk: pos.risk }),
+            })
+            idx++
+          }
+          return rows
+        })
+
+        const allPositions = ok.flat()
+        const allWarnings = [...new Set(fxWarningsFromRates)]
+        // Clean empty result only when nothing failed — don't report "no
+        // positions" when an account was actually unreachable.
+        if (allPositions.length === 0 && failed.length === 0 && allWarnings.length === 0) {
+          return { positions: [], message: 'No open positions.' }
         }
+        if (failed.length > 0 || allWarnings.length > 0) {
+          return {
+            positions: allPositions,
+            ...(allWarnings.length > 0 && { fxWarnings: allWarnings }),
+            ...(failed.length > 0 && { degraded: failed }),
+          }
+        }
+        return allPositions
       },
     }),
 
     getOrders: tool({
       description: `Query orders by ID. If no orderIds provided, queries all pending (submitted) orders.
 Use groupBy: "contract" to group orders by contract/aliceId (useful with many positions + TPSL).
-If this tool returns an error with transient=true, wait a few seconds and retry once before reporting to the user.`,
+If this tool returns an error with transient=true, wait a few seconds and retry once before reporting to the user.
+If the result is an object with a \`degraded\` array, one or more accounts could not be read — the orders are only from the healthy accounts. ALWAYS tell the user which \`source\`(s) are degraded; an entry with transient=false is a permanent (credentials/config) failure they must fix, not retry.`,
       inputSchema: z.object({
         source: z.string().optional().describe(sourceDesc(false)),
         orderIds: z.array(z.string()).optional().describe('Order IDs to query. If omitted, queries all pending orders.'),
         groupBy: z.enum(['contract']).optional().describe('Group orders by contract (aliceId)'),
       }).meta({ examples: [{ source: 'alpaca-paper' }] }),
       execute: async ({ source, orderIds, groupBy }) => {
-        const targets = await manager.resolve(source)
+        const targets = await manager.resolve(source, { tradingOnly: true })
         if (targets.length === 0) return []
-        try {
-          const summaries = (await Promise.all(targets.map(async (uta) => {
-            // SDK's getPendingOrderIds is a no-op returning []; the real
-            // UnifiedTradingAccount returns the actual pending list. Both
-            // satisfy the same call site so this works for Phase A's
-            // dual-impl world.
-            const ids = orderIds ?? uta.getPendingOrderIds().map(p => p.orderId)
-            const orders = await uta.getOrders(ids)
-            return orders.map((o, i) => summarizeOrder(o, uta.id, ids[i]))
-          }))).flat()
+        // Per-account so one offline account doesn't blank everyone's orders (#390).
+        const { ok, failed } = await settlePerAccount(targets, async (uta) => {
+          // SDK's getPendingOrderIds is a no-op returning []; the real
+          // UnifiedTradingAccount returns the actual pending list. Both
+          // satisfy the same call site so this works for Phase A's
+          // dual-impl world.
+          const ids = orderIds ?? uta.getPendingOrderIds().map(p => p.orderId)
+          const orders = await uta.getOrders(ids)
+          return orders.map((o, i) => summarizeOrder(o, uta.id, ids[i]))
+        })
+        const summaries = ok.flat()
 
-          if (groupBy === 'contract') {
-            const grouped: Record<string, { symbol: string; orders: ReturnType<typeof summarizeOrder>[] }> = {}
-            for (const s of summaries) {
-              const key = s.aliceId || s.symbol
-              if (!grouped[key]) grouped[key] = { symbol: s.symbol, orders: [] }
-              grouped[key].orders.push(s)
-            }
-            return grouped
+        if (groupBy === 'contract') {
+          const grouped: Record<string, { symbol: string; orders: ReturnType<typeof summarizeOrder>[] }> = {}
+          for (const s of summaries) {
+            const key = s.aliceId || s.symbol
+            if (!grouped[key]) grouped[key] = { symbol: s.symbol, orders: [] }
+            grouped[key].orders.push(s)
           }
-          return summaries
-        } catch (err) {
-          return handleBrokerError(err)
+          return failed.length > 0 ? { grouped, degraded: failed } : grouped
         }
+        return failed.length > 0 ? { orders: summaries, degraded: failed } : summaries
       },
     }),
 

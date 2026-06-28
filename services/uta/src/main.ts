@@ -41,6 +41,17 @@ async function main(): Promise<void> {
   const startedAt = new Date().toISOString()
   console.log(`[uta] bootstrap @ ${startedAt}`)
 
+  // Surface outbound-proxy config at startup so a user behind a proxy can
+  // confirm UTA saw it — CCXT exchange instances are bridged onto it per
+  // broker (see CcxtBroker.applyEnvProxy / issue #384). Credentials in the
+  // URL (user:pass@) are redacted.
+  const outboundProxy = process.env.HTTPS_PROXY || process.env.https_proxy
+    || process.env.HTTP_PROXY || process.env.http_proxy
+    || process.env.ALL_PROXY || process.env.all_proxy
+  if (outboundProxy) {
+    console.log(`[uta] outbound proxy detected (${outboundProxy.replace(/\/\/[^@/]*@/, '//***@')}) — bridging into CCXT exchanges`)
+  }
+
   const config = await loadConfig()
 
   // ==================== Trading-only dependencies ====================

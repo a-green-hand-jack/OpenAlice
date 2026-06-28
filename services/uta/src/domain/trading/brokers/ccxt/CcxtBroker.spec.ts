@@ -5,7 +5,7 @@
  * Tests focus on pure logic: searchContracts sorting/filtering, cancelOrder cache,
  * placeOrder notional conversion, and the constructor error path.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import Decimal from 'decimal.js'
 import { Contract, Order, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
 
@@ -108,6 +108,66 @@ describe('CcxtBroker — constructor', () => {
   it('defaults id to exchange-main', () => {
     const acc = makeAccount()
     expect(acc.id).toBe('bybit-main')
+  })
+
+  // ---- Env proxy bridging (issue #384) ----
+
+  describe('env proxy', () => {
+    const saved = { ...process.env }
+    beforeEach(() => {
+      for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) delete process.env[k]
+    })
+    afterEach(() => { process.env = { ...saved } })
+
+    // CCXT's checkProxySettings() throws InvalidProxySettings if MORE THAN ONE
+    // of httpProxy/httpsProxy/socksProxy is set, so the invariant we must hold
+    // is "at most one proxy property set".
+    const proxiesSet = (ex: any) => [ex.httpProxy, ex.httpsProxy, ex.socksProxy].filter(Boolean)
+
+    it('sets exactly one proxy property (httpsProxy) from HTTPS_PROXY', () => {
+      process.env.HTTPS_PROXY = 'http://127.0.0.1:7897'
+      const ex = (makeAccount() as any).exchange
+      expect(ex.httpsProxy).toBe('http://127.0.0.1:7897')
+      expect(proxiesSet(ex)).toHaveLength(1)
+    })
+
+    it('collapses the common HTTP_PROXY + HTTPS_PROXY pair to a single httpsProxy (no InvalidProxySettings)', () => {
+      // clash/v2ray etc. export BOTH to the same local proxy — must not set two props.
+      process.env.HTTP_PROXY = 'http://127.0.0.1:7890'
+      process.env.HTTPS_PROXY = 'http://127.0.0.1:7890'
+      const ex = (makeAccount() as any).exchange
+      expect(proxiesSet(ex)).toHaveLength(1)
+      expect(ex.httpsProxy).toBe('http://127.0.0.1:7890')
+      expect(ex.httpProxy).toBeUndefined()
+    })
+
+    it('uses HTTP_PROXY as httpsProxy when only HTTP_PROXY is set', () => {
+      process.env.HTTP_PROXY = 'http://127.0.0.1:7890'
+      const ex = (makeAccount() as any).exchange
+      expect(ex.httpsProxy).toBe('http://127.0.0.1:7890')
+      expect(proxiesSet(ex)).toHaveLength(1)
+    })
+
+    it('routes a socks-only ALL_PROXY to socksProxy alone', () => {
+      process.env.ALL_PROXY = 'socks5://127.0.0.1:7897'
+      const ex = (makeAccount() as any).exchange
+      expect(ex.socksProxy).toBe('socks5://127.0.0.1:7897')
+      expect(proxiesSet(ex)).toHaveLength(1)
+    })
+
+    it('prefers an http(s) proxy over a socks ALL_PROXY (single prop)', () => {
+      process.env.HTTPS_PROXY = 'http://127.0.0.1:7890'
+      process.env.ALL_PROXY = 'socks5://127.0.0.1:7897'
+      const ex = (makeAccount() as any).exchange
+      expect(ex.httpsProxy).toBe('http://127.0.0.1:7890')
+      expect(ex.socksProxy).toBeUndefined()
+      expect(proxiesSet(ex)).toHaveLength(1)
+    })
+
+    it('does not touch proxy props when no proxy env is set', () => {
+      const ex = (makeAccount() as any).exchange
+      expect(proxiesSet(ex)).toHaveLength(0)
+    })
   })
 })
 
@@ -1057,6 +1117,7 @@ describe('CcxtBroker — getPositions', () => {
         leverage: 5,
         initialMargin: 23200,
         liquidationPrice: 48000,
+        marginMode: 'isolated',
       },
     ])
 
@@ -1068,6 +1129,64 @@ describe('CcxtBroker — getPositions', () => {
     expect(positions[0].avgCost).toBe('58000')
     expect(positions[0].marketPrice).toBe('60000')
     expect(positions[0].avgCostSource).toBe('broker')
+  })
+
+  it('surfaces leverage/liquidationPrice/marginMode in position.risk', async () => {
+    const acc = makeAccount()
+    setInitialized(acc, { 'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT') })
+
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([
+      {
+        symbol: 'BTC/USDT:USDT', contracts: 0.002, contractSize: 1,
+        markPrice: 60000, entryPrice: 65790, unrealizedPnl: -11.49, side: 'long',
+        leverage: 50, liquidationPrice: 58800, marginMode: 'cross',
+      },
+    ])
+
+    const positions = await acc.getPositions()
+    expect(positions).toHaveLength(1)
+    // Numeric CCXT fields are stringified (float-safety, same as the
+    // monetary fields) and grouped under `risk`.
+    expect(positions[0].risk).toEqual({
+      leverage: '50',
+      liquidationPrice: '58800',
+      marginMode: 'cross',
+    })
+  })
+
+  it('omits risk when the venue reports no leverage data', async () => {
+    const acc = makeAccount()
+    setInitialized(acc, { 'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT') })
+
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([
+      // No leverage / liquidationPrice / marginMode at all.
+      { symbol: 'BTC/USDT:USDT', contracts: 1, contractSize: 1, markPrice: 60000, entryPrice: 58000, unrealizedPnl: 2000, side: 'long' },
+    ])
+
+    const positions = await acc.getPositions()
+    expect(positions).toHaveLength(1)
+    expect(positions[0].risk).toBeUndefined()
+  })
+
+  it('drops a zero liquidationPrice but keeps the other risk fields', async () => {
+    const acc = makeAccount()
+    setInitialized(acc, { 'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT') })
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([
+      // Cross perp: leverage + marginMode reported, liquidationPrice 0 (not computed).
+      { symbol: 'BTC/USDT:USDT', contracts: 1, contractSize: 1, markPrice: 60000, entryPrice: 58000, unrealizedPnl: 2000, side: 'long', leverage: 50, liquidationPrice: 0, marginMode: 'cross' },
+    ])
+    const positions = await acc.getPositions()
+    expect(positions[0].risk).toEqual({ leverage: '50', marginMode: 'cross' })
+  })
+
+  it('keeps marginMode alone when leverage and liqPrice are absent/zero', async () => {
+    const acc = makeAccount()
+    setInitialized(acc, { 'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT') })
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([
+      { symbol: 'BTC/USDT:USDT', contracts: 1, contractSize: 1, markPrice: 60000, entryPrice: 58000, unrealizedPnl: 2000, side: 'long', leverage: 0, marginMode: 'isolated' },
+    ])
+    const positions = await acc.getPositions()
+    expect(positions[0].risk).toEqual({ marginMode: 'isolated' })
   })
 
   it('skips zero-size positions', async () => {
@@ -1149,6 +1268,7 @@ describe('CcxtBroker — getPositions', () => {
     expect(btc.unrealizedPnL).toBe('0')
     expect(btc.contract.localSymbol).toBe('BTC/USDT')   // CCXT wire format (broker-native uniqueness)
     expect(btc.avgCostSource).toBe('wallet')           // signals UTA to reconstruct cost
+    expect(btc.risk).toBeUndefined()                   // spot holdings never carry leverage risk
   })
 
   it('combines free + used into spot quantity', async () => {
