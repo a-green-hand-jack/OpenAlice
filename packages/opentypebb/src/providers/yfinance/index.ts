@@ -15,6 +15,7 @@ import { YFinanceKeyMetricsFetcher } from './models/key-metrics.js'
 import { YFinancePriceTargetConsensusFetcher } from './models/price-target-consensus.js'
 import { YFinanceCryptoSearchFetcher } from './models/crypto-search.js'
 import { YFinanceCurrencySearchFetcher } from './models/currency-search.js'
+import { YFinanceEquitySearchFetcher } from './models/equity-search.js'
 import { YFinanceCryptoHistoricalFetcher } from './models/crypto-historical.js'
 import { YFinanceCurrencyHistoricalFetcher } from './models/currency-historical.js'
 import { YFinanceBalanceSheetFetcher } from './models/balance-sheet.js'
@@ -61,6 +62,7 @@ export const yfinanceProvider = new Provider({
     BalanceSheet: YFinanceBalanceSheetFetcher,
     IncomeStatement: YFinanceIncomeStatementFetcher,
     CashFlowStatement: YFinanceCashFlowStatementFetcher,
+    EquitySearch: YFinanceEquitySearchFetcher,
     CryptoSearch: YFinanceCryptoSearchFetcher,
     CurrencyPairs: YFinanceCurrencySearchFetcher,
     CryptoHistorical: YFinanceCryptoHistoricalFetcher,
