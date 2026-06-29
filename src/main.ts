@@ -215,9 +215,12 @@ async function main() {
 
   toolCenter.register(createThinkingTools(), 'thinking')
 
-  // One unified set of trading tools — routes via `source` parameter at runtime
+  // One unified set of trading tools — routes via `source` parameter at runtime.
+  // The getter reads `config.agent.allowAiTrading` live (config is mutated in
+  // place on Settings writes), so toggling AI trading takes effect without a
+  // restart.
   toolCenter.register(
-    createTradingTools(utaManager),
+    createTradingTools(utaManager, () => config.agent.allowAiTrading),
     'trading',
   )
 

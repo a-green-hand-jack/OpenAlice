@@ -173,7 +173,17 @@ async function stageAndMaybeCommit(
   }
 }
 
-export function createTradingTools(manager: UTAManagerSDK): Record<string, Tool> {
+/**
+ * @param manager        UTA SDK manager (account resolution + FX).
+ * @param allowAiTrading  Live getter for the `agent.allowAiTrading` master
+ *   switch. Read at call time (not captured) so toggling it in Settings takes
+ *   effect without a restart. Gates `tradingPush`: false ⇒ stage + ask the user
+ *   to approve in the Web UI; true ⇒ the AI pushes to the broker directly.
+ */
+export function createTradingTools(
+  manager: UTAManagerSDK,
+  allowAiTrading: () => boolean = () => false,
+): Record<string, Tool> {
   return {
     listUTAs: tool({
       description: 'List all registered trading accounts with their id, provider, label, and capabilities.',
@@ -692,7 +702,11 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
     }),
 
     tradingPush: tool({
-      description: 'Trading push requires manual approval — call tradingStatus to show the user what is pending, then ask them to approve it on the Web UI (Trading as Git page, or the account detail page).',
+      description: `Push committed operations to the broker — the final, real execution step.
+
+By DEFAULT this does NOT execute: it returns the pending operations and you must ask the user to approve them in the Web UI (Trading as Git page, or the account detail page).
+
+ONLY if the operator has enabled "Allow AI to push trades" in Settings does this execute directly — committed operations are sent to the broker as live orders. Use deliberately.`,
       inputSchema: z.object({
         source: z.string().optional().describe(sourceDesc(false, 'If omitted, checks all accounts.')),
       }).meta({ examples: [{ source: 'alpaca-paper' }] }),
@@ -710,13 +724,28 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
           }
           return { message: 'No committed operations to push.' }
         }
-        return {
-          message: 'Push requires manual approval. Tell the user to review and approve the pending operations in the Web UI (Trading as Git page, or the account detail page).',
-          pending: pending.map(({ uta, status }) => ({
-            source: uta.id,
-            ...compactStatus(status),
-          })),
+        // Gate: AI-initiated execution is OFF by default. Without the operator's
+        // explicit opt-in, surface the pending ops for manual Web-UI approval
+        // rather than sending live orders to the broker.
+        if (!allowAiTrading()) {
+          return {
+            message: 'Push requires manual approval (AI trading is disabled). Tell the user to review and approve the pending operations in the Web UI (Trading as Git page, or the account detail page).',
+            pending: pending.map(({ uta, status }) => ({
+              source: uta.id,
+              ...compactStatus(status),
+            })),
+          }
         }
+        // AI trading enabled — execute for real. Each push() sends the committed
+        // operations to the broker. Per-account failures degrade individually.
+        const results = await Promise.all(pending.map(async ({ uta }) => {
+          try {
+            return { source: uta.id, ...compactPushResult(await uta.push()) }
+          } catch (err) {
+            return { source: uta.id, ...handleBrokerError(err) }
+          }
+        }))
+        return { message: 'AI trading is enabled — pushed committed operations to the broker.', results }
       },
     }),
 

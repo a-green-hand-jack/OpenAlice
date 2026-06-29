@@ -201,7 +201,12 @@ export type AIProviderConfig = z.infer<typeof aiProviderSchema>
 
 const agentSchema = z.object({
   maxSteps: z.number().int().positive().default(20),
-  evolutionMode: z.boolean().default(false),
+  /** Master switch for AI-initiated trade execution. When false (default),
+   *  `tradingPush` only stages + asks the user to approve in the Web UI; when
+   *  true, the AI may push committed operations straight to the broker. Gated
+   *  in the UI behind a danger warning + double-confirm. Per-account `readOnly`
+   *  still wins (read-only accounts can't stage in the first place). */
+  allowAiTrading: z.boolean().default(false),
   claudeCode: z.object({
     allowedTools: z.array(z.string()).optional(),
     disallowedTools: z.array(z.string()).default([

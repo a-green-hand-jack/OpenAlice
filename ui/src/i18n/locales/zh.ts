@@ -54,10 +54,14 @@ export const zh: Resources = {
     },
     agent: {
       title: '智能体',
-      description: '控制 AI 的文件系统与工具权限。更改在下一次请求时生效。',
-      evolutionMode: '进化模式',
-      evolutionOn: '完整项目访问权——AI 可修改源代码',
-      evolutionOff: '沙盒模式——AI 只能编辑 data/brain/',
+      description: '控制 AI 可以代你做什么。更改在下一次请求时生效。',
+      allowAiTrading: '允许 AI 自动下单',
+      allowAiTradingOn: '开启——AI 可自行向券商发送订单，无需每次征求你的同意。',
+      allowAiTradingOff: '关闭——AI 可以暂存并提议交易，但每次 push 都需要你在 Web UI 中批准。',
+      allowAiTradingWarning: 'AI 自动交易已开启。AI 可自行下单、改单、撤单。每账户的只读设置仍然生效。',
+      allowAiTradingConfirmTitle: '开启 AI 自动交易？',
+      allowAiTradingConfirmBody: '开启后，AI 可在不征求你同意的情况下向券商发送真实订单。UTA 交易接口目前仍不稳定，可能存在精度或参数问题。强烈不建议在实盘账户上使用——请使用模拟 / demo 账户。',
+      allowAiTradingConfirmCta: '开启自动交易',
     },
     persona: {
       title: '人设',

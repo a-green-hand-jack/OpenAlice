@@ -162,7 +162,7 @@ export interface AIProviderConfig {
 export interface AppConfig {
   aiProvider: AIProviderConfig
   engine: Record<string, unknown>
-  agent: { evolutionMode: boolean; claudeCode: Record<string, unknown> }
+  agent: { allowAiTrading: boolean; claudeCode: Record<string, unknown> }
   compaction: { maxContextTokens: number; maxOutputTokens: number }
   snapshot: {
     enabled: boolean

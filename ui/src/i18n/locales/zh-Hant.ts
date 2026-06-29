@@ -62,10 +62,14 @@ export const zhHant: Resources = {
     },
     agent: {
       title: '智慧體',
-      description: '控制 AI 的檔案系統與工具權限。變更會在下一次請求時生效。',
-      evolutionMode: '進化模式',
-      evolutionOn: '完整專案存取權——AI 可修改原始碼',
-      evolutionOff: '沙箱模式——AI 只能編輯 data/brain/',
+      description: '控制 AI 可以代你做什麼。變更會在下一次請求時生效。',
+      allowAiTrading: '允許 AI 自動下單',
+      allowAiTradingOn: '開啟——AI 可自行向券商發送訂單，無需每次徵求你的同意。',
+      allowAiTradingOff: '關閉——AI 可以暫存並提議交易，但每次 push 都需要你在 Web UI 中核准。',
+      allowAiTradingWarning: 'AI 自動交易已開啟。AI 可自行下單、改單、撤單。每帳戶的唯讀設定仍然生效。',
+      allowAiTradingConfirmTitle: '開啟 AI 自動交易？',
+      allowAiTradingConfirmBody: '開啟後，AI 可在不徵求你同意的情況下向券商發送真實訂單。UTA 交易介面目前仍不穩定，可能存在精度或參數問題。強烈不建議在實盤帳戶上使用——請使用模擬 / demo 帳戶。',
+      allowAiTradingConfirmCta: '開啟自動交易',
     },
     persona: {
       title: '人設',

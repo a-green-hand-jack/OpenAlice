@@ -54,10 +54,14 @@ export const ja: Resources = {
     },
     agent: {
       title: 'エージェント',
-      description: 'AI のファイルシステムとツールの権限を制御します。変更は次のリクエストで反映されます。',
-      evolutionMode: '進化モード',
-      evolutionOn: 'プロジェクト全体へのアクセス——AI はソースコードを変更できます',
-      evolutionOff: 'サンドボックスモード——AI は data/brain/ のみ編集できます',
+      description: 'AI があなたの代わりに行えることを制御します。変更は次のリクエストで反映されます。',
+      allowAiTrading: 'AI による自動発注を許可',
+      allowAiTradingOn: 'ON——AI は毎回確認することなく、自分でブローカーに注文を送信できます。',
+      allowAiTradingOff: 'OFF——AI は取引をステージ・提案できますが、push のたびに Web UI での承認が必要です。',
+      allowAiTradingWarning: 'AI 自動取引が ON です。AI は自分で発注・変更・取消を行えます。口座ごとの読み取り専用設定は引き続き有効です。',
+      allowAiTradingConfirmTitle: 'AI 自動取引を有効にしますか？',
+      allowAiTradingConfirmBody: '有効にすると、AI は毎回確認することなくブローカーに実際の注文を送信できます。UTA の取引インターフェースはまだ不安定で、精度やパラメータの問題がある可能性があります。実資金の口座での使用は強く非推奨です——ペーパー / デモ口座を使用してください。',
+      allowAiTradingConfirmCta: '自動取引を有効化',
     },
     persona: {
       title: 'ペルソナ',
