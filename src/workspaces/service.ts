@@ -61,7 +61,7 @@ export class HeadlessCapacityError extends Error {
 import { ScrollbackStore } from './scrollback-store.js';
 import { SessionPool, type SessionFactoryContext } from './session-pool.js';
 import { SessionRegistry, type SessionRecord } from './session-registry.js';
-import { buildSpawnEnv } from './spawn-env.js';
+import { buildCliPath, buildSpawnEnv } from './spawn-env.js';
 import { readReadmeVersion, TemplateRegistry } from './template-registry.js';
 import { readWorkspaceMetadata } from './workspace-metadata.js';
 import { TranscriptWatcher } from './transcript-watcher.js';
@@ -811,9 +811,10 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
 
   const detectAgents = (): Record<string, AgentAvailability> => {
     const out: Record<string, AgentAvailability> = {};
+    const env = { ...process.env, PATH: buildCliPath(process.env) };
     for (const a of adapters.list()) {
       // No declared binary (shell → `$SHELL`) is always available.
-      out[a.id] = a.binary ? detectBinary(a.binary) : { installed: true, path: null };
+      out[a.id] = a.binary ? detectBinary(a.binary, { env }) : { installed: true, path: null };
     }
     return out;
   };

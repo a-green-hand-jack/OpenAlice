@@ -14,6 +14,10 @@
  * have, then announce ourselves with `TERM_PROGRAM=auto-quant-launcher`.
  */
 
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { delimiter, join } from 'node:path';
+
 const STRIP_EXACT = new Set<string>([
   'TERM_PROGRAM',
   'TERM_PROGRAM_VERSION',
@@ -32,6 +36,27 @@ const STRIP_PREFIXES = [
 ];
 
 const SELF_VERSION = '0.1.0';
+
+const POSIX_SYSTEM_BIN_DIRS = [
+  '/opt/homebrew/bin',
+  '/opt/homebrew/sbin',
+  '/usr/local/bin',
+  '/usr/local/sbin',
+  '/usr/bin',
+  '/bin',
+  '/usr/sbin',
+  '/sbin',
+] as const;
+
+const POSIX_USER_BIN_DIRS = [
+  '.local/bin',
+  '.npm-global/bin',
+  'Library/pnpm',
+  '.yarn/bin',
+  '.bun/bin',
+  '.cargo/bin',
+  '.volta/bin',
+] as const;
 
 export function buildSpawnEnv(
   parent: NodeJS.ProcessEnv,
@@ -68,7 +93,44 @@ export function buildSpawnEnv(
   for (const [k, v] of Object.entries(extras)) {
     out[k] = v;
   }
+  out['PATH'] = buildCliPath(out);
   return out;
+}
+
+/**
+ * Build a PATH suitable for launching user-installed agent CLIs from a GUI app.
+ *
+ * macOS apps launched from Finder do not inherit the user's login-shell PATH,
+ * so Homebrew / pnpm / ~/.local installs disappear even though `codex` or
+ * `claude` works in Terminal. Keep this pure and synchronous: it is used both
+ * for `/agents` availability probes and for the actual PTY spawn env.
+ */
+export function buildCliPath(env: NodeJS.ProcessEnv = process.env): string {
+  const path = env['PATH'] ?? env['Path'] ?? '';
+  if (process.platform === 'win32') return path;
+
+  const home = env['HOME'] ?? homedir();
+  const pathEntries = path.split(delimiter);
+  const candidates = [
+    ...(env['OPENALICE_EXTRA_AGENT_PATH'] ?? '').split(delimiter),
+    ...pathEntries,
+    env['PNPM_HOME'],
+    ...POSIX_USER_BIN_DIRS.map((p) => join(home, p)),
+    ...POSIX_SYSTEM_BIN_DIRS,
+  ];
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of candidates) {
+    const dir = raw?.trim();
+    if (!dir || seen.has(dir)) continue;
+    seen.add(dir);
+    // Keep existing PATH entries even if the directory is currently missing:
+    // they came from the host and may be intentional. For inferred fallbacks,
+    // include only real directories to avoid bloating every spawned shell.
+    if (pathEntries.includes(dir) || existsSync(dir)) out.push(dir);
+  }
+  return out.join(delimiter);
 }
 
 function shouldStrip(name: string): boolean {

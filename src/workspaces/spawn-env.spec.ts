@@ -1,5 +1,8 @@
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { delimiter, join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { buildSpawnEnv } from './spawn-env.js'
+import { buildCliPath, buildSpawnEnv } from './spawn-env.js'
 
 /**
  * Guards the precedence the git-identity injection leans on: per-workspace
@@ -52,5 +55,60 @@ describe('buildSpawnEnv', () => {
 
     const lcAll = buildSpawnEnv({ LC_ALL: 'C.UTF-8' })
     expect(lcAll['LC_CTYPE']).toBeUndefined()
+  })
+
+  it.skipIf(process.platform === 'win32')('adds common user CLI bins missing from GUI app PATH', () => {
+    const home = mkdtempSync(join(tmpdir(), 'openalice-home-'))
+    try {
+      const localBin = join(home, '.local/bin')
+      const pnpmHome = join(home, 'Library/pnpm')
+      mkdirSync(localBin, { recursive: true })
+      mkdirSync(pnpmHome, { recursive: true })
+
+      const path = buildCliPath({ HOME: home, PATH: '/usr/bin:/bin' })
+        .split(delimiter)
+
+      expect(path).toContain(localBin)
+      expect(path).toContain(pnpmHome)
+      expect(path).toContain('/usr/bin')
+      expect(path).toContain('/bin')
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')('honors OPENALICE_EXTRA_AGENT_PATH for custom CLI installs', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'openalice-agent-bin-'))
+    try {
+      const path = buildCliPath({
+        HOME: tmpdir(),
+        PATH: '/usr/bin:/bin',
+        OPENALICE_EXTRA_AGENT_PATH: dir,
+      }).split(delimiter)
+
+      expect(path[0]).toBe(dir)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')('augments an explicit PATH override from spawn extras', () => {
+    const home = mkdtempSync(join(tmpdir(), 'openalice-home-'))
+    try {
+      const localBin = join(home, '.local/bin')
+      mkdirSync(localBin, { recursive: true })
+
+      const out = buildSpawnEnv(
+        { HOME: home, PATH: '/usr/bin:/bin' },
+        { PATH: '/app/cli-bin:/usr/bin:/bin' },
+      )
+      const path = out['PATH'].split(delimiter)
+
+      expect(path).toContain('/app/cli-bin')
+      expect(path).toContain(localBin)
+      expect(path).toContain('/usr/bin')
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 })
