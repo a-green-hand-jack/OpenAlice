@@ -3,6 +3,7 @@ import type { Workspace } from '../components/workspace/api'
 import type { ViewKind, ViewSpec } from './types'
 
 import { PortfolioPage } from '../pages/PortfolioPage'
+import { TradingAsGitPage } from '../pages/TradingAsGitPage'
 import { IssuePage } from '../pages/IssuePage'
 import { IssueDetailPage } from '../pages/IssueDetailPage'
 import { TrackedIssueDetailPage } from '../pages/TrackedIssueDetailPage'
@@ -26,19 +27,26 @@ import { InboxPageShell } from '../pages/InboxPageShell'
 import { TrackedPage } from '../pages/TrackedPage'
 import { ChatLandingPage } from '../pages/ChatLandingPage'
 import { ChatPageShell } from '../pages/ChatPageShell'
+import { PageSidebarShell } from '../pages/PageSidebarShell'
 import { WorkspaceListPage } from '../pages/WorkspaceListPage'
 import { WorkspacePage } from '../pages/WorkspacePage'
 import { TemplateCatalogPage } from '../pages/TemplateCatalogPage'
 import { TemplateDetailPage } from '../pages/TemplateDetailPage'
 import { FileViewerPage } from '../pages/FileViewerPage'
+import { TrackedSidebar } from '../components/TrackedSidebar'
+import { WorkspacesSidebar } from '../components/workspace/WorkspacesSidebar'
+import { SettingsCategoryList } from '../components/SettingsCategoryList'
+import { DevCategoryList } from '../components/DevCategoryList'
+import { MarketSidebar } from '../components/MarketSidebar'
+import { PortfolioSidebar } from '../components/PortfolioSidebar'
+import { AutomationSidebar } from '../components/AutomationSidebar'
 
 /**
  * Central registry mapping each ViewKind to its render component and URL
  * projection. Adding a new view kind means adding one entry here.
  *
- * Sidebar selection is decoupled from view kind — it's driven by
- * ActivityBar via `selectedSidebar` in the workspace store. The registry
- * no longer knows which sidebar a view "belongs to".
+ * Page-owned sidebars live here with their pages. The app shell only owns the
+ * ActivityBar; each view kind decides whether it needs local navigation.
  */
 
 export interface TitleCtx {
@@ -80,7 +88,23 @@ const portfolioModule: ViewModule<'portfolio'> = {
   kind: 'portfolio',
   title: () => 'Portfolio',
   toUrl: () => '/portfolio',
-  Component: () => <PortfolioPage />,
+  Component: () => (
+    <PageSidebarShell
+      storageKey="portfolio"
+      titleKey="nav.item.portfolio"
+      defaultWidth={220}
+      sidebar={<PortfolioSidebar />}
+    >
+      <PortfolioPage />
+    </PageSidebarShell>
+  ),
+}
+
+const tradingAsGitModule: ViewModule<'trading-as-git'> = {
+  kind: 'trading-as-git',
+  title: () => 'Trading as Git',
+  toUrl: () => '/trading-as-git',
+  Component: () => <TradingAsGitPage />,
 }
 
 const issueModule: ViewModule<'issue'> = {
@@ -103,7 +127,16 @@ const trackedIssueDetailModule: ViewModule<'tracked-issue-detail'> = {
   title: (spec) => spec.params.id,
   toUrl: (spec) =>
     `/tracked/issues/${encodeURIComponent(spec.params.wsId)}/${encodeURIComponent(spec.params.id)}`,
-  Component: ({ spec }) => <TrackedIssueDetailPage spec={spec} />,
+  Component: ({ spec }) => (
+    <PageSidebarShell
+      storageKey="tracked"
+      titleKey="nav.item.tracked"
+      defaultWidth={232}
+      sidebar={<TrackedSidebar />}
+    >
+      <TrackedIssueDetailPage spec={spec} />
+    </PageSidebarShell>
+  ),
 }
 
 const automationSectionTitle: Record<
@@ -120,7 +153,16 @@ const automationModule: ViewModule<'automation'> = {
   kind: 'automation',
   title: (spec) => automationSectionTitle[spec.params.section],
   toUrl: (spec) => `/automation/${spec.params.section}`,
-  Component: AutomationPage,
+  Component: (props) => (
+    <PageSidebarShell
+      storageKey="automation"
+      titleKey="nav.item.automation"
+      defaultWidth={220}
+      sidebar={<AutomationSidebar />}
+    >
+      <AutomationPage {...props} />
+    </PageSidebarShell>
+  ),
 }
 
 const newsModule: ViewModule<'news'> = {
@@ -134,21 +176,48 @@ const marketListModule: ViewModule<'market-list'> = {
   kind: 'market-list',
   title: () => 'Market',
   toUrl: () => '/market',
-  Component: () => <MarketPage />,
+  Component: () => (
+    <PageSidebarShell
+      storageKey="market"
+      titleKey="nav.item.market"
+      defaultWidth={300}
+      sidebar={<MarketSidebar />}
+    >
+      <MarketPage />
+    </PageSidebarShell>
+  ),
 }
 
 const marketRotationModule: ViewModule<'market-rotation'> = {
   kind: 'market-rotation',
   title: () => 'Sector Rotation',
   toUrl: () => '/market/rotation',
-  Component: () => <MarketRotationPage />,
+  Component: () => (
+    <PageSidebarShell
+      storageKey="market"
+      titleKey="nav.item.market"
+      defaultWidth={300}
+      sidebar={<MarketSidebar />}
+    >
+      <MarketRotationPage />
+    </PageSidebarShell>
+  ),
 }
 
 const marketBoardModule: ViewModule<'market-board'> = {
   kind: 'market-board',
   title: (spec) => MARKET_BOARD_TITLES[spec.params.board],
   toUrl: (spec) => `/market/boards/${spec.params.board}`,
-  Component: MarketBoardPage,
+  Component: (props) => (
+    <PageSidebarShell
+      storageKey="market"
+      titleKey="nav.item.market"
+      defaultWidth={300}
+      sidebar={<MarketSidebar />}
+    >
+      <MarketBoardPage {...props} />
+    </PageSidebarShell>
+  ),
 }
 
 const marketDetailModule: ViewModule<'market-detail'> = {
@@ -157,7 +226,16 @@ const marketDetailModule: ViewModule<'market-detail'> = {
   toUrl: (spec) =>
     `/market/${spec.params.assetClass}/${encodeURIComponent(spec.params.symbol)}` +
     (spec.params.source ? `?source=${encodeURIComponent(spec.params.source)}` : ''),
-  Component: MarketDetailPage,
+  Component: (props) => (
+    <PageSidebarShell
+      storageKey="market"
+      titleKey="nav.item.market"
+      defaultWidth={300}
+      sidebar={<MarketSidebar />}
+    >
+      <MarketDetailPage {...props} />
+    </PageSidebarShell>
+  ),
 }
 
 const settingsCategoryTitle: Record<
@@ -190,14 +268,32 @@ const settingsModule: ViewModule<'settings'> = {
     spec.params.category === 'general'
       ? '/settings'
       : `/settings/${spec.params.category}`,
-  Component: SettingsRouter,
+  Component: (props) => (
+    <PageSidebarShell
+      storageKey="settings"
+      titleKey="nav.item.settings"
+      defaultWidth={220}
+      sidebar={<SettingsCategoryList />}
+    >
+      <SettingsRouter {...props} />
+    </PageSidebarShell>
+  ),
 }
 
 const utaDetailModule: ViewModule<'uta-detail'> = {
   kind: 'uta-detail',
   title: (spec) => `Account ${spec.params.id}`,
   toUrl: (spec) => `/settings/uta/${encodeURIComponent(spec.params.id)}`,
-  Component: UTADetailPage,
+  Component: (props) => (
+    <PageSidebarShell
+      storageKey="portfolio"
+      titleKey="nav.item.portfolio"
+      defaultWidth={220}
+      sidebar={<PortfolioSidebar />}
+    >
+      <UTADetailPage {...props} />
+    </PageSidebarShell>
+  ),
 }
 
 const devTabTitle: Record<Extract<ViewSpec, { kind: 'dev' }>['params']['tab'], string> = {
@@ -211,7 +307,16 @@ const devModule: ViewModule<'dev'> = {
   kind: 'dev',
   title: (spec) => devTabTitle[spec.params.tab],
   toUrl: (spec) => `/dev/${spec.params.tab}`,
-  Component: DevPage,
+  Component: (props) => (
+    <PageSidebarShell
+      storageKey="dev"
+      titleKey="nav.item.dev"
+      defaultWidth={220}
+      sidebar={<DevCategoryList />}
+    >
+      <DevPage {...props} />
+    </PageSidebarShell>
+  ),
 }
 
 const inboxModule: ViewModule<'inbox'> = {
@@ -229,7 +334,16 @@ const trackedModule: ViewModule<'tracked'> = {
   kind: 'tracked',
   title: () => 'Tracked',
   toUrl: () => '/tracked',
-  Component: () => <TrackedPage />,
+  Component: () => (
+    <PageSidebarShell
+      storageKey="tracked"
+      titleKey="nav.item.tracked"
+      defaultWidth={232}
+      sidebar={<TrackedSidebar />}
+    >
+      <TrackedPage />
+    </PageSidebarShell>
+  ),
 }
 
 const chatLandingModule: ViewModule<'chat-landing'> = {
@@ -251,7 +365,16 @@ const workspaceListModule: ViewModule<'workspace-list'> = {
   kind: 'workspace-list',
   title: () => 'Workspaces',
   toUrl: () => '/workspaces',
-  Component: () => <WorkspaceListPage />,
+  Component: () => (
+    <PageSidebarShell
+      storageKey="workspaces"
+      titleKey="nav.item.workspaces"
+      defaultWidth={300}
+      sidebar={<WorkspacesSidebar />}
+    >
+      <WorkspaceListPage />
+    </PageSidebarShell>
+  ),
 }
 
 const workspaceModule: ViewModule<'workspace'> = {
@@ -280,21 +403,48 @@ const workspaceModule: ViewModule<'workspace'> = {
           <WorkspacePage {...props} />
         </ChatPageShell>
       )
-      : <WorkspacePage {...props} />,
+      : (
+        <PageSidebarShell
+          storageKey="workspaces"
+          titleKey="nav.item.workspaces"
+          defaultWidth={300}
+          sidebar={<WorkspacesSidebar />}
+        >
+          <WorkspacePage {...props} />
+        </PageSidebarShell>
+      ),
 }
 
 const templateCatalogModule: ViewModule<'template-catalog'> = {
   kind: 'template-catalog',
   title: () => 'Templates',
   toUrl: () => '/workspaces/templates',
-  Component: () => <TemplateCatalogPage />,
+  Component: () => (
+    <PageSidebarShell
+      storageKey="workspaces"
+      titleKey="nav.item.workspaces"
+      defaultWidth={300}
+      sidebar={<WorkspacesSidebar />}
+    >
+      <TemplateCatalogPage />
+    </PageSidebarShell>
+  ),
 }
 
 const templateDetailModule: ViewModule<'template-detail'> = {
   kind: 'template-detail',
   title: (spec) => `Template · ${spec.params.name}`,
   toUrl: (spec) => `/workspaces/templates/${encodeURIComponent(spec.params.name)}`,
-  Component: ({ spec }) => <TemplateDetailPage spec={spec} />,
+  Component: ({ spec }) => (
+    <PageSidebarShell
+      storageKey="workspaces"
+      titleKey="nav.item.workspaces"
+      defaultWidth={300}
+      sidebar={<WorkspacesSidebar />}
+    >
+      <TemplateDetailPage spec={spec} />
+    </PageSidebarShell>
+  ),
 }
 
 const fileViewerModule: ViewModule<'file-viewer'> = {
@@ -303,13 +453,23 @@ const fileViewerModule: ViewModule<'file-viewer'> = {
   title: (spec) => spec.params.path.split('/').filter(Boolean).pop() ?? spec.params.path,
   toUrl: (spec) =>
     `/workspaces/${encodeURIComponent(spec.params.wsId)}/view/${encodeURIComponent(spec.params.path)}`,
-  Component: ({ spec }) => <FileViewerPage spec={spec} />,
+  Component: ({ spec }) => (
+    <PageSidebarShell
+      storageKey="workspaces"
+      titleKey="nav.item.workspaces"
+      defaultWidth={300}
+      sidebar={<WorkspacesSidebar />}
+    >
+      <FileViewerPage spec={spec} />
+    </PageSidebarShell>
+  ),
 }
 
 // ==================== Aggregate ====================
 
 const VIEWS = {
   portfolio: portfolioModule,
+  'trading-as-git': tradingAsGitModule,
   issue: issueModule,
   'issue-detail': issueDetailModule,
   'tracked-issue-detail': trackedIssueDetailModule,

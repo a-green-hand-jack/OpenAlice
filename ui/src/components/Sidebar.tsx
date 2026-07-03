@@ -12,13 +12,8 @@ interface SidebarProps {
 }
 
 /**
- * VS Code-style Side Bar — sits between the Activity Bar and the Editor area.
- * Hosts the activity-specific navigator (channel list, file tree, search results,
- * deploy panel, etc.). Desktop layout renders it as a static column; on mobile
- * the parent wraps it in a slide-in drawer (see App.tsx).
- *
- * Width and resize are managed by the surrounding Group (react-resizable-panels)
- * at the App layout level. This component is a pure content wrapper.
+ * Page sidebar chrome. Hosts the surface-specific navigator while the owning
+ * page layout decides whether it is static, resizable, or a mobile drawer.
  */
 export function Sidebar({ title, actions, children, leading }: SidebarProps) {
   return (

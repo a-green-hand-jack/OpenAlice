@@ -1,7 +1,6 @@
 import { type LucideIcon, MessageSquare, Inbox, Telescope, LineChart, GitBranch, BarChart3, Newspaper, Zap, Settings, Code2, TerminalSquare, ChevronDown, Info, ListChecks, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useState } from 'react'
 import { type Page } from '../App'
-import { findSectionForActivity } from '../sections'
 import { useWorkspace } from '../tabs/store'
 import type { ActivitySection, ViewSpec } from '../tabs/types'
 import { useUnreadInboxCount } from '../live/inbox-read'
@@ -38,22 +37,6 @@ interface ActivityBarProps {
   desktopStatic?: boolean
   /** Force the static rail into icon-only mode at narrow desktop widths. */
   compactRailForced?: boolean
-  /**
-   * Whether the secondary sidebar is actually on screen right now (a static
-   * panel on wide, or the open drawer on narrow). Re-clicking the active
-   * item only *collapses* the sidebar when it's visible; if it's hidden
-   * (e.g. landed on /portfolio at a tablet width with the drawer closed),
-   * re-clicking re-opens it instead of toggling the selection off. Defaults
-   * to true so the collapse gesture works when the prop isn't wired.
-   */
-  sidebarVisible?: boolean
-  /**
-   * Called after the user activates an item. Receives the activity the user
-   * landed on (or null if they collapsed the current one by re-clicking it).
-   * The parent uses this on mobile to drill into the secondary sidebar drawer
-   * instead of dismissing entirely. Desktop layouts can ignore it.
-   */
-  onItemActivated?: (section: ActivitySection | null) => void
 }
 
 // ==================== Nav item definitions ====================
@@ -68,19 +51,10 @@ interface NavLeaf {
   labelKey: NavItemKey
   icon: LucideIcon
   /**
-   * What tab opens when this ActivityBar item is clicked.
-   *
-   * - **Set**: clicking the icon both reveals the sidebar AND opens (or
-   *   focuses) this tab. Used for activities with a meaningful default
-   *   landing page — e.g. Portfolio's Overview, News, Automation.
-   * - **Omitted**: sidebar-only activity. Click reveals the sidebar; tabs
-   *   are created from sidebar interactions. Used when there's no canonical
-   *   "all of X" view (Chat, Settings, Dev) or no tab at all (Trading-as-Git).
-   *
-   * Same-section re-click always collapses the sidebar regardless of this
-   * field; the focused tab isn't touched on collapse.
+   * What page opens when this ActivityBar item is clicked. Local navigators
+   * are page-owned now, so every rail item has a concrete landing surface.
    */
-  defaultTab?: ViewSpec
+  defaultTab: ViewSpec
 }
 
 interface NavSection {
@@ -124,9 +98,9 @@ const NAV_SECTIONS: NavSection[] = [
       { page: 'inbox',      labelKey: 'nav.item.inbox',      icon: Inbox, defaultTab: { kind: 'inbox', params: {} } },
       { page: 'issue',      labelKey: 'nav.item.issue',      icon: ListChecks, defaultTab: { kind: 'issue', params: {} } },
       { page: 'tracked',    labelKey: 'nav.item.tracked',    icon: Telescope, defaultTab: { kind: 'tracked', params: {} } },
-      { page: 'market',     labelKey: 'nav.item.market',     icon: BarChart3 },
+      { page: 'market',     labelKey: 'nav.item.market',     icon: BarChart3, defaultTab: { kind: 'market-list', params: {} } },
       { page: 'news',       labelKey: 'nav.item.news',       icon: Newspaper, defaultTab: { kind: 'news', params: {} } },
-      { page: 'workspaces', labelKey: 'nav.item.workspaces', icon: TerminalSquare },
+      { page: 'workspaces', labelKey: 'nav.item.workspaces', icon: TerminalSquare, defaultTab: { kind: 'workspace-list', params: {} } },
     ],
   },
   // Beta — useful trading surfaces whose cross-broker state model and UX are
@@ -136,7 +110,7 @@ const NAV_SECTIONS: NavSection[] = [
     labelKey: 'nav.section.beta',
     descriptionKey: 'nav.betaDescription',
     items: [
-      { page: 'trading-as-git', labelKey: 'nav.item.tradingAsGit', icon: GitBranch },
+      { page: 'trading-as-git', labelKey: 'nav.item.tradingAsGit', icon: GitBranch, defaultTab: { kind: 'trading-as-git', params: {} } },
       { page: 'portfolio',      labelKey: 'nav.item.portfolio',    icon: LineChart, defaultTab: { kind: 'portfolio', params: {} } },
     ],
   },
@@ -149,8 +123,8 @@ const NAV_SECTIONS: NavSection[] = [
       // is the operations/plumbing side (headless runs, API, event bus) —
       // System chrome, not a daily-driver nav target.
       { page: 'automation', labelKey: 'nav.item.automation', icon: Zap, defaultTab: { kind: 'automation', params: { section: 'runs' } } },
-      { page: 'settings', labelKey: 'nav.item.settings', icon: Settings },
-      { page: 'dev',      labelKey: 'nav.item.dev',      icon: Code2 },
+      { page: 'settings', labelKey: 'nav.item.settings', icon: Settings, defaultTab: { kind: 'settings', params: { category: 'general' } } },
+      { page: 'dev',      labelKey: 'nav.item.dev',      icon: Code2, defaultTab: { kind: 'dev', params: { tab: 'tools' } } },
     ],
   },
 ]
@@ -167,16 +141,13 @@ const NAV_SECTIONS: NavSection[] = [
  * get collapsible chevron headers; collapse state persists to
  * localStorage.
  *
- * The wider layout (vs VS Code's 56px icon-only column) is deliberate
- * for OpenAlice's current phase: items in the bar live in different
- * lifecycle stages and the section labels are how we'll later
- * communicate that. Mostly-icon view would hide the differentiation.
+ * The ActivityBar owns only top-level area selection. Business navigation
+ * lives inside each page so surfaces can have their own layout and responsive
+ * behavior.
  */
 export function ActivityBar({
   open,
   onClose,
-  onItemActivated,
-  sidebarVisible = true,
   desktopStatic = true,
   compactRailForced = false,
 }: ActivityBarProps) {
@@ -272,38 +243,10 @@ export function ActivityBar({
                       const sec = activitySectionFor(item.page)
                       const isActive = selectedSidebar === sec
                       const Icon = item.icon
-                      // No legacy AppShell sidebar entry: either pure
-                      // navigation (Issues/News) or a migrated page-owned
-                      // sidebar (Ask Alice). In both cases the ActivityBar
-                      // only opens the route and keeps the section highlighted.
-                      const hasSidebar = findSectionForActivity(sec) != null
                       const handleClick = () => {
-                        let landedOn: ActivitySection | null
-                        if (selectedSidebar === sec && hasSidebar && sidebarVisible) {
-                          // Same section re-clicked while the sidebar is on
-                          // screen: collapse it. Don't touch the focused tab —
-                          // collapsing the sidebar shouldn't change the editor.
-                          // (When the sidebar is hidden — e.g. a closed drawer
-                          // at tablet width — we fall through to the else branch
-                          // and re-open it instead of toggling selection off.)
-                          setSidebar(null)
-                          landedOn = null
-                        } else {
-                          setSidebar(sec)
-                          // Activities with a meaningful default landing (e.g.
-                          // Portfolio overview) jump straight to it. Sidebar-only
-                          // activities (Chat, Settings, Trading-as-Git, …) leave
-                          // tab focus alone — user picks from the sidebar.
-                          if (item.defaultTab) openOrFocus(item.defaultTab)
-                          // Activities without an AppShell sidebar report null
-                          // so mobile dismisses instead of opening the legacy
-                          // secondary drawer.
-                          landedOn = hasSidebar ? sec : null
-                        }
-                        // Let parent decide the mobile transition (drill into
-                        // secondary drawer vs dismiss). Default: just close.
-                        if (onItemActivated) onItemActivated(landedOn)
-                        else onClose()
+                        setSidebar(sec)
+                        openOrFocus(item.defaultTab)
+                        onClose()
                       }
                       return (
                         <button

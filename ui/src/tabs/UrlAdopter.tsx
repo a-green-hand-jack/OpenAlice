@@ -52,8 +52,7 @@ export function UrlAdopter() {
             but keep it above the dynamic route for readability. */}
         <Route path="/market/boards/:board" element={<AdoptMarketBoard />} />
         <Route path="/market/:assetClass/:symbol" element={<AdoptMarketDetail />} />
-        {/* /trading-as-git no longer creates a tab — sidebar-only activity. */}
-        <Route path="/trading-as-git" element={<SetSidebarOnly section="trading-as-git" />} />
+        <Route path="/trading-as-git" element={<AdoptStatic spec={{ kind: 'trading-as-git', params: {} }} />} />
 
         {/* Settings — one entry per category */}
         <Route path="/settings" element={<AdoptStatic spec={{ kind: 'settings', params: { category: 'general' } }} />} />
@@ -91,7 +90,7 @@ export function UrlAdopter() {
         <Route path="/workspaces/:wsId" element={<AdoptWorkspace />} />
         <Route path="/workspaces/:wsId/s/:sessionId" element={<AdoptWorkspace />} />
 
-        {/* Legacy redirects — preserved from sections.tsx */}
+        {/* Legacy redirects */}
         <Route path="/logs" element={<Navigate to="/dev/logs" replace />} />
         <Route path="/events" element={<Navigate to="/dev/logs" replace />} />
         <Route path="/agent-status" element={<Navigate to="/dev/logs" replace />} />
@@ -244,22 +243,9 @@ function RedirectUtaDetail() {
 }
 
 /**
- * Some activities have no tab kind (e.g. trading-as-git is sidebar-only).
- * Visiting their URL should just open the sidebar; no tab gets created.
- */
-function SetSidebarOnly({ section }: { section: import('./types').ActivitySection }) {
-  const setSidebar = useWorkspace((state) => state.setSidebar)
-  useEffect(() => {
-    setSidebar(section)
-  }, [section, setSidebar])
-  return null
-}
-
-/**
  * Map a ViewSpec to the ActivitySection highlighted in the ActivityBar.
- * Legacy surfaces still use this to open an AppShell-owned secondary
- * sidebar; migrated surfaces such as Ask Alice keep the highlight but own
- * their local sidebar inside the page.
+ * Page-owned sidebars keep the highlight in sync while the app shell stays
+ * unaware of each surface's local navigation.
  *
  * `uta-detail` is intentionally Portfolio's sidebar: the URL lives
  * under /settings/uta/:id for historical reasons but the page is a
@@ -276,6 +262,7 @@ function specToSection(spec: ViewSpec): ActivitySection {
     case 'template-catalog':
     case 'template-detail':
     case 'file-viewer':        return 'workspaces'
+    case 'trading-as-git':     return 'trading-as-git'
     case 'portfolio':
     case 'uta-detail':         return 'portfolio'
     case 'issue':
