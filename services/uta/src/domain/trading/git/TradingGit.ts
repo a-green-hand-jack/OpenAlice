@@ -59,6 +59,7 @@ export class TradingGit implements ITradingGit {
 
   add(operation: Operation): AddResult {
     this.stagingArea.push(operation)
+    this.emitStateChange()
     return {
       staged: true,
       index: this.stagingArea.length - 1,
@@ -79,6 +80,7 @@ export class TradingGit implements ITradingGit {
       parentHash: this.head,
     })
     this.pendingMessage = message
+    this.emitStateChange()
 
     return {
       prepared: true,
@@ -133,12 +135,11 @@ export class TradingGit implements ITradingGit {
     this.commits.push(commit)
     this.head = hash
 
-    await this.config.onCommit?.(this.exportState())
-
     // Clear staging
     this.stagingArea = []
     this.pendingMessage = null
     this.pendingHash = null
+    await this.persistState()
 
     const rejected = results.filter((r) => !r.success)
     const submitted = results.filter((r) => r.success)
@@ -180,12 +181,12 @@ export class TradingGit implements ITradingGit {
 
     this.commits.push(commit)
     this.head = hash
-    await this.config.onCommit?.(this.exportState())
 
     // Clear staging
     this.stagingArea = []
     this.pendingMessage = null
     this.pendingHash = null
+    await this.persistState()
 
     return { hash, message, operationCount: operations.length }
   }
@@ -255,7 +256,7 @@ export class TradingGit implements ITradingGit {
     this.commits.push(commit)
     this.head = hash
 
-    await this.config.onCommit?.(this.exportState())
+    await this.persistState()
 
     return hash
   }
@@ -304,7 +305,7 @@ export class TradingGit implements ITradingGit {
     this.commits.push(commit)
     this.head = hash
 
-    await this.config.onCommit?.(this.exportState())
+    await this.persistState()
 
     return hash
   }
@@ -476,6 +477,9 @@ export class TradingGit implements ITradingGit {
     return {
       commits: this.commits.map((c) => this.projectCommit(c)),
       head: this.head,
+      stagingArea: this.stagingArea.map((op) => this.projectOperation(op)),
+      pendingMessage: this.pendingMessage,
+      pendingHash: this.pendingHash,
     }
   }
 
@@ -483,7 +487,78 @@ export class TradingGit implements ITradingGit {
     const git = new TradingGit(config)
     git.commits = state.commits.map(TradingGit.rehydrateCommit)
     git.head = state.head
+    TradingGit.restoreTransientState(git, state)
     return git
+  }
+
+  private emitStateChange(): void {
+    const result = this.config.onCommit?.(this.exportState())
+    if (result) {
+      void Promise.resolve(result).catch((error) => {
+        console.error('[TradingGit] Failed to persist git state after state change', error)
+      })
+    }
+  }
+
+  private async persistState(): Promise<void> {
+    await this.config.onCommit?.(this.exportState())
+  }
+
+  private static restoreTransientState(git: TradingGit, state: GitExportState): void {
+    const hasTransientFields =
+      Object.prototype.hasOwnProperty.call(state, 'stagingArea') ||
+      Object.prototype.hasOwnProperty.call(state, 'pendingMessage') ||
+      Object.prototype.hasOwnProperty.call(state, 'pendingHash')
+
+    if (!hasTransientFields) return
+
+    if (state.stagingArea !== undefined && !Array.isArray(state.stagingArea)) {
+      console.error('[TradingGit] Dropped malformed transient approval state during restore: stagingArea is not an array')
+      return
+    }
+
+    let stagingArea: Operation[]
+    try {
+      stagingArea = (state.stagingArea ?? []).map(TradingGit.rehydrateOperation)
+    } catch (error) {
+      console.error('[TradingGit] Dropped malformed transient approval state during restore: stagingArea could not be rehydrated', error)
+      return
+    }
+
+    const pendingMessage = state.pendingMessage ?? null
+    const pendingHash = state.pendingHash ?? null
+    const pendingMessageValid = pendingMessage === null || typeof pendingMessage === 'string'
+    const pendingHashValid = pendingHash === null || (
+      typeof pendingHash === 'string' && /^[a-f0-9]{8}$/.test(pendingHash)
+    )
+
+    git.stagingArea = stagingArea
+
+    if (!pendingMessageValid || !pendingHashValid) {
+      console.error('[TradingGit] Dropped malformed pending approval during restore: pendingMessage/pendingHash have invalid types or hash shape')
+      return
+    }
+
+    const hasPending = pendingMessage !== null || pendingHash !== null
+    if (!hasPending) {
+      if (stagingArea.length > 0) {
+        console.warn(
+          `[TradingGit] Restored ${stagingArea.length} staged (uncommitted) operation(s) from disk`,
+        )
+      }
+      return
+    }
+
+    if (pendingMessage === null || pendingHash === null || stagingArea.length === 0) {
+      console.error('[TradingGit] Dropped malformed pending approval during restore: pending approval requires stagingArea, pendingMessage, and pendingHash')
+      return
+    }
+
+    git.pendingMessage = pendingMessage
+    git.pendingHash = pendingHash
+    console.warn(
+      `[TradingGit] Restored pending approval ${pendingHash} with ${stagingArea.length} staged operation(s): ${pendingMessage}`,
+    )
   }
 
   /** Rehydrate Decimal fields lost during JSON round-trip. */
@@ -508,9 +583,37 @@ export class TradingGit implements ITradingGit {
           ...op,
           quantity: op.quantity != null ? new Decimal(String(op.quantity)) : op.quantity,
         }
+      case 'modifyOrder':
+        return {
+          ...op,
+          changes: TradingGit.rehydrateOrderChanges(op.changes),
+        }
       default:
         return op
     }
+  }
+
+  private static rehydrateOrderChanges(changes: Partial<Order>): Partial<Order> {
+    const rehydrated = { ...changes }
+    if (changes.totalQuantity != null) {
+      rehydrated.totalQuantity = new Decimal(String(changes.totalQuantity))
+    }
+    if (changes.lmtPrice != null) {
+      rehydrated.lmtPrice = new Decimal(String(changes.lmtPrice))
+    }
+    if (changes.auxPrice != null) {
+      rehydrated.auxPrice = new Decimal(String(changes.auxPrice))
+    }
+    if (changes.trailStopPrice != null) {
+      rehydrated.trailStopPrice = new Decimal(String(changes.trailStopPrice))
+    }
+    if (changes.trailingPercent != null) {
+      rehydrated.trailingPercent = new Decimal(String(changes.trailingPercent))
+    }
+    if (changes.cashQty != null) {
+      rehydrated.cashQty = new Decimal(String(changes.cashQty))
+    }
+    return rehydrated
   }
 
   private static rehydrateOrder(order: Order): Order {
@@ -594,7 +697,7 @@ export class TradingGit implements ITradingGit {
     this.commits.push(commit)
     this.head = hash
 
-    await this.config.onCommit?.(this.exportState())
+    await this.persistState()
 
     return { hash, updatedCount: updates.length, updates }
   }

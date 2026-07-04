@@ -159,6 +159,12 @@ export interface CommitLogEntry {
 export interface GitExportState {
   commits: GitCommit[]
   head: CommitHash | null
+  /** Staged-but-not-committed operations. Optional for pre-issue-15 commit.json files. */
+  stagingArea?: Operation[]
+  /** Awaiting-approval message. Optional for pre-issue-15 commit.json files. */
+  pendingMessage?: string | null
+  /** Awaiting-approval hash. Optional for pre-issue-15 commit.json files. */
+  pendingHash?: CommitHash | null
 }
 
 // ==================== Sync ====================
