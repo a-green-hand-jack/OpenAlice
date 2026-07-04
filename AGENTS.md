@@ -577,6 +577,9 @@ trailer (`Suggested-by:` / `Reported-by:` / `Reviewed-by: @handle`). Claude's
 
 ### Two collaboration modes — pick the right one first
 
+> **Fork-mode note**: on `a-green-hand-jack/OpenAlice` this section is
+> superseded — see *§ Fork mode* at the end of this file.
+
 The whole workflow forks on one question:
 
 | Mode | Who's working on this branch | Where |
