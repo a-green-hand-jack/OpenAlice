@@ -618,6 +618,60 @@ describe('TradingGit', () => {
       expect(Number.isNaN(Date.parse(commit.timestamp))).toBe(false)
     })
 
+    it('preserves guard verdicts through JSON round-trip', async () => {
+      const guardVerdicts = [
+        { guard: 'max-position-size', verdict: 'pass', metrics: { positionValuePct: 1, threshold: 25 } },
+        { guard: 'cooldown', verdict: 'pass', metrics: { msSinceLast: null, cooldownMs: 60_000 } },
+        { guard: 'symbol-whitelist', verdict: 'pass', metrics: { symbol: 'AAPL' } },
+      ]
+      const executeOperation = vi.fn().mockResolvedValue({
+        success: true,
+        orderId: 'guarded-order',
+        guardVerdicts,
+      })
+      const guardedGit = new TradingGit(makeConfig({ executeOperation }))
+
+      guardedGit.add(buyOp('AAPL'))
+      const prepared = guardedGit.commit('guarded buy')
+      await guardedGit.push()
+
+      const persisted = JSON.parse(JSON.stringify(guardedGit.exportState())) as GitExportState
+      const restored = TradingGit.restore(persisted, config)
+      const commit = restored.show(prepared.hash)!
+
+      expect(commit.results[0].guardVerdicts).toEqual(guardVerdicts)
+    })
+
+    it('restores old commit results without guard verdicts', async () => {
+      const guardVerdicts = [
+        { guard: 'symbol-whitelist', verdict: 'pass', metrics: { symbol: 'AAPL' } },
+      ]
+      const oldGit = new TradingGit(makeConfig({
+        executeOperation: vi.fn().mockResolvedValue({
+          success: true,
+          orderId: 'legacy-order',
+          guardVerdicts,
+        }),
+      }))
+
+      oldGit.add(buyOp('AAPL'))
+      const prepared = oldGit.commit('legacy buy')
+      await oldGit.push()
+
+      const persisted = JSON.parse(JSON.stringify(oldGit.exportState())) as GitExportState
+      delete persisted.commits[0].results[0].guardVerdicts
+
+      const restored = TradingGit.restore(persisted, config)
+      const commit = restored.show(prepared.hash)!
+      expect(commit.results[0].guardVerdicts).toBeUndefined()
+      expect(commit.results[0]).toMatchObject({
+        action: 'placeOrder',
+        success: true,
+        orderId: 'legacy-order',
+        status: 'submitted',
+      })
+    })
+
     it('rehydrates Decimal price fields through JSON round-trip', async () => {
       const contract = makeContract({ symbol: 'ETH' })
       const order = new Order()

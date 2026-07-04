@@ -1,4 +1,4 @@
-import type { OperationGuard, GuardContext } from './types.js'
+import type { OperationGuard, GuardContext, GuardEvaluation } from './types.js'
 import { getOperationSymbol } from '../git/types.js'
 
 export class SymbolWhitelistGuard implements OperationGuard {
@@ -14,12 +14,17 @@ export class SymbolWhitelistGuard implements OperationGuard {
   }
 
   check(ctx: GuardContext): string | null {
+    return this.evaluate(ctx).reason ?? null
+  }
+
+  evaluate(ctx: GuardContext): GuardEvaluation {
     const symbol = getOperationSymbol(ctx.operation)
-    if (symbol === 'unknown') return null
+    const metrics = { symbol }
+    if (symbol === 'unknown') return { metrics }
 
     if (!this.allowed.has(symbol)) {
-      return `Symbol ${symbol} is not in the allowed list`
+      return { reason: `Symbol ${symbol} is not in the allowed list`, metrics }
     }
-    return null
+    return { metrics }
   }
 }

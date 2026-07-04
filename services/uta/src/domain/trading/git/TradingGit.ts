@@ -23,6 +23,7 @@ import type {
   GitState,
   CommitLogEntry,
   GitExportState,
+  GuardVerdict,
   OperationSummary,
   PriceChangeInput,
   SimulatePriceChangeResult,
@@ -40,6 +41,13 @@ function generateCommitHash(content: object): CommitHash {
     .update(JSON.stringify(content))
     .digest('hex')
   return hash.slice(0, 8)
+}
+
+function extractGuardVerdicts(value: unknown): GuardVerdict[] | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const guardVerdicts = (value as { guardVerdicts?: unknown }).guardVerdicts
+  if (!Array.isArray(guardVerdicts) || guardVerdicts.length === 0) return undefined
+  return guardVerdicts as GuardVerdict[]
 }
 
 export class TradingGit implements ITradingGit {
@@ -109,11 +117,13 @@ export class TradingGit implements ITradingGit {
         const raw = await this.config.executeOperation(op)
         results.push(this.parseOperationResult(op, raw))
       } catch (error) {
+        const guardVerdicts = extractGuardVerdicts(error)
         results.push({
           action: op.action,
           success: false,
           status: 'rejected',
           error: error instanceof Error ? error.message : String(error),
+          ...(guardVerdicts ? { guardVerdicts } : {}),
         })
       }
     }
@@ -953,6 +963,7 @@ export class TradingGit implements ITradingGit {
     }
 
     const success = rawObj.success === true
+    const guardVerdicts = extractGuardVerdicts(rawObj)
 
     if (!success) {
       return {
@@ -960,6 +971,7 @@ export class TradingGit implements ITradingGit {
         success: false,
         status: 'rejected',
         error: (rawObj.error as string) ?? 'Unknown error',
+        ...(guardVerdicts ? { guardVerdicts } : {}),
         raw,
       }
     }
@@ -975,6 +987,7 @@ export class TradingGit implements ITradingGit {
       status: this.mapOrderStatus(orderState),
       orderState,
       ...(Array.isArray(legs) && legs.length > 0 ? { legs } : {}),
+      ...(guardVerdicts ? { guardVerdicts } : {}),
       raw,
     }
   }
