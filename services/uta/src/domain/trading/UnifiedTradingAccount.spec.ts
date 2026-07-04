@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import Decimal from 'decimal.js'
 import { Contract, Order, OrderState, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
 import { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
@@ -1206,6 +1209,50 @@ describe('UTA — guards', () => {
     const savedState = JSON.parse(JSON.stringify(uta.exportGitState()))
     const { uta: restored } = createUTA(new MockBroker(), { savedState })
     expect(restored.show(prepared.hash)?.results[0].guardVerdicts).toEqual(result.submitted[0].guardVerdicts)
+  })
+
+  it('records exactly six verdicts when all built-in guards are configured', async () => {
+    const broker = new MockBroker({
+      accountInfo: {
+        netLiquidation: '100000',
+        totalCashValue: '100000',
+        unrealizedPnL: '0',
+        realizedPnL: '0',
+      },
+    })
+    const { uta } = createUTA(broker, {
+      guardStateBaseDir: join(tmpdir(), `openalice-uta-guard-spec-${randomUUID()}`),
+      guards: [
+        { type: 'max-position-size', options: { maxPercentOfEquity: 25 } },
+        { type: 'cooldown', options: { minIntervalMs: 60_000 } },
+        { type: 'symbol-whitelist', options: { symbols: ['AAPL'] } },
+        { type: 'max-drawdown', options: { maxDrawdownPct: 10 } },
+        { type: 'daily-loss', options: { maxDailyLossPct: 5 } },
+        { type: 'concentration', options: { maxInstrumentPct: 25 } },
+      ],
+    })
+
+    uta.stagePlaceOrder({
+      aliceId: 'mock-paper|AAPL',
+      symbol: 'AAPL',
+      action: 'BUY',
+      orderType: 'MKT',
+      cashQty: '1000',
+    })
+    uta.commit('buy AAPL with all guard verdicts')
+    const result = await uta.push()
+
+    expect(result.rejected).toHaveLength(0)
+    expect(result.submitted).toHaveLength(1)
+    expect(result.submitted[0].guardVerdicts).toHaveLength(6)
+    expect(result.submitted[0].guardVerdicts?.map(v => v.guard)).toEqual([
+      'max-position-size',
+      'cooldown',
+      'symbol-whitelist',
+      'max-drawdown',
+      'daily-loss',
+      'concentration',
+    ])
   })
 
   it('keeps the legacy guard rejection error and records pass, reject, and skipped verdicts', async () => {

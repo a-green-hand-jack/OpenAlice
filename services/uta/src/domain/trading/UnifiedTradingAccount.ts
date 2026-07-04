@@ -51,6 +51,8 @@ export interface UnifiedTradingAccountOptions {
   /** Public-data-only account (no key) — no account/positions; excluded from
    *  equity aggregation. Implies readOnly. */
   keyless?: boolean
+  /** Test-only override for per-account guard state under data/trading/. */
+  guardStateBaseDir?: string
 }
 
 // ==================== Stage param types ====================
@@ -186,7 +188,10 @@ export class UnifiedTradingAccount {
           throw new Error(`Unknown operation action: ${(op as { action: string }).action}`)
       }
     }
-    const guards = resolveGuards(options.guards ?? [])
+    const guards = resolveGuards(options.guards ?? [], {
+      accountId: broker.id,
+      stateBaseDir: options.guardStateBaseDir,
+    })
     const guardedDispatcher = createGuardPipeline(dispatcher, broker, guards)
 
     const gitConfig = {

@@ -1,6 +1,7 @@
 import type { Operation } from '../git/types.js'
 import type { Position, AccountInfo } from '../brokers/types.js'
 import type { GuardMetrics } from '../git/types.js'
+import type { PortfolioGuardStateStore } from './portfolio-state.js'
 
 /** Read-only context assembled by the pipeline, consumed by guards. */
 export interface GuardContext {
@@ -21,8 +22,19 @@ export interface OperationGuard {
   evaluate?(ctx: GuardContext): Promise<GuardEvaluation> | GuardEvaluation
 }
 
+export interface GuardRuntimeOptions {
+  /** UTA/account id used for per-account guard persistence. */
+  accountId?: string
+  /** Test-only override for data/trading/ base directory. */
+  stateBaseDir?: string
+  /** Shared per-account state store; resolveGuards supplies this to portfolio guards. */
+  stateStore?: PortfolioGuardStateStore
+  /** Test-only clock injection. Production uses the system clock. */
+  now?: () => Date
+}
+
 /** Registry entry: type identifier + factory function. */
 export interface GuardRegistryEntry {
   type: string
-  create(options: Record<string, unknown>): OperationGuard
+  create(options: Record<string, unknown>, runtime?: GuardRuntimeOptions): OperationGuard
 }
