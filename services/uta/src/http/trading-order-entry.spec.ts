@@ -22,14 +22,16 @@ import type { UTAEngineContext } from '../types.js'
 
 interface CapturedCall { method: string; args: unknown[] }
 
-function makeMockUTA(opts: { stageThrows?: 'stage' | 'commit' | 'push' | null; pushResult?: unknown } = {}) {
+function makeMockUTA(opts: { stageThrows?: 'stage' | 'commit' | 'push' | null; pushResult?: unknown; pendingMessage?: string | null } = {}) {
   const calls: CapturedCall[] = []
-  let pendingMessage: string | null = null
+  let pendingMessage: string | null = opts.pendingMessage ?? null
   return {
     calls,
     uta: {
       id: 'mock-uta',
       label: 'Mock UTA',
+      log: vi.fn(() => []),
+      show: vi.fn(() => null),
       stagePlaceOrder: vi.fn((p: unknown) => {
         calls.push({ method: 'stagePlaceOrder', args: [p] })
         if (opts.stageThrows === 'stage') throw new Error('Invalid aliceId')
@@ -90,6 +92,36 @@ async function post(routes: ReturnType<typeof createTradingRoutes>, path: string
   const json = res.status === 204 ? null : await res.json().catch(() => null)
   return { status: res.status, body: json }
 }
+
+// ==================== manual wallet push ====================
+
+describe('POST /uta/:id/wallet/push', () => {
+  it('invokes account push for a committed wallet entry', async () => {
+    const mock = makeMockUTA({ pendingMessage: 'ready to push' })
+    const routes = makeRoutes(mock.uta)
+
+    const { status, body } = await post(routes, '/uta/mock-uta/wallet/push', {})
+
+    expect(status).toBe(200)
+    expect((body as { hash: string }).hash).toBe('abc123')
+    expect(mock.calls.map(c => c.method)).toEqual(['push'])
+  })
+
+  it('does not push from sibling wallet-git routes', async () => {
+    const mock = makeMockUTA({ pendingMessage: 'ready to review' })
+    const routes = makeRoutes(mock.uta)
+
+    await routes.request('/uta/mock-uta/wallet/status')
+    await routes.request('/uta/mock-uta/wallet/log')
+    await routes.request('/uta/mock-uta/wallet/show/missing')
+    await post(routes, '/uta/mock-uta/wallet/commit', { message: 'manual approval' })
+    await post(routes, '/uta/mock-uta/wallet/reject', { reason: 'not now' })
+    await post(routes, '/uta/mock-uta/wallet/stage-cancel-order', { orderId: 'ord-42' })
+
+    expect(mock.uta.push).not.toHaveBeenCalled()
+    expect(mock.calls.map(c => c.method)).toEqual(['commit', 'reject', 'stageCancelOrder'])
+  })
+})
 
 // ==================== place-order ====================
 

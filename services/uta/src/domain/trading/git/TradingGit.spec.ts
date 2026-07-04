@@ -536,6 +536,73 @@ describe('TradingGit', () => {
       expect(log[0].message).toBe('Buy AAPL')
     })
 
+    it('persists complete pushed commit fields through JSON round-trip', async () => {
+      const filledState = new OrderState()
+      filledState.status = 'Filled'
+      const executeOperation = vi.fn()
+        .mockResolvedValueOnce({ success: true, orderId: 'order-1', orderState: filledState })
+        .mockResolvedValueOnce({ success: true, orderId: 'order-2', orderState: filledState })
+      const secondState = makeGitState({
+        totalCashValue: '99750',
+        netLiquidation: '100250',
+        unrealizedPnL: '250',
+        realizedPnL: '25',
+        positions: [{
+          contract: makeContract({ symbol: 'AAPL' }),
+          currency: 'USD',
+          side: 'long',
+          quantity: new Decimal('2'),
+          avgCost: '100',
+          marketPrice: '125',
+          marketValue: '250',
+          unrealizedPnL: '50',
+          realizedPnL: '25',
+          multiplier: '1',
+        }],
+      })
+      const getGitState = vi.fn()
+        .mockResolvedValueOnce(makeGitState({ totalCashValue: '99900' }))
+        .mockResolvedValueOnce(secondState)
+      const onCommit = vi.fn()
+      const persistedGit = new TradingGit(makeConfig({ executeOperation, getGitState, onCommit }))
+
+      persistedGit.add(buyOp('AAPL'))
+      const first = persistedGit.commit('thesis: enter AAPL')
+      await persistedGit.push()
+      persistedGit.add(sellOp('AAPL'))
+      const second = persistedGit.commit('thesis: trim AAPL')
+      await persistedGit.push()
+
+      expect(onCommit).toHaveBeenCalledTimes(2)
+      const persisted = JSON.parse(JSON.stringify(onCommit.mock.calls[1][0]))
+      const restored = TradingGit.restore(persisted, config)
+      const commit = restored.show(second.hash)!
+
+      expect(persisted.head).toBe(second.hash)
+      expect(commit.hash).toBe(second.hash)
+      expect(commit.parentHash).toBe(first.hash)
+      expect(commit.message).toBe('thesis: trim AAPL')
+      expect(commit.operations).toHaveLength(1)
+      expect((commit.operations[0] as Extract<Operation, { action: 'closePosition' }>).contract.symbol).toBe('AAPL')
+      expect(commit.results).toHaveLength(1)
+      expect(commit.results[0]).toMatchObject({
+        action: 'closePosition',
+        success: true,
+        orderId: 'order-2',
+        status: 'filled',
+      })
+      expect(commit.stateAfter).toMatchObject({
+        totalCashValue: '99750',
+        netLiquidation: '100250',
+        unrealizedPnL: '250',
+        realizedPnL: '25',
+      })
+      expect(commit.stateAfter.positions).toHaveLength(1)
+      expect(commit.stateAfter.positions[0].quantity).toBeInstanceOf(Decimal)
+      expect(commit.stateAfter.positions[0].quantity.toFixed()).toBe('2')
+      expect(Number.isNaN(Date.parse(commit.timestamp))).toBe(false)
+    })
+
     it('rehydrates Decimal price fields through JSON round-trip', async () => {
       const contract = makeContract({ symbol: 'ETH' })
       const order = new Order()

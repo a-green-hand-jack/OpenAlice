@@ -55,3 +55,7 @@ packages/ibkr/ref/CMakeLists.txt
 .worktrees/
 reports/
 tmp/
+
+# Worktree sandbox roots (fork-workflow) — a git clean must never nuke a live sandbox
+.sandbox-home/
+.sandbox-ws/
