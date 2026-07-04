@@ -25,6 +25,23 @@ function getStagedPlaceOrder(uta: UnifiedTradingAccount) {
 // ==================== Read-only / keyless write guard ====================
 
 describe('UTA — read-only / keyless write guard', () => {
+  const readOnlyError = /Account "Mock Paper Account" is read-only.*trading operations are not allowed/s
+  const keylessError = /Account "Mock Paper Account" is read-only \(keyless public-data account\).*trading operations are not allowed/s
+  const placeAapl = () =>
+    ({ aliceId: 'mock-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: '1' } as never)
+
+  // Forges an in-place readOnly flip by bypassing the fields' `readonly`
+  // modifier. Today's production lifecycle cannot reach this state: a config
+  // flip goes through reconnectUTA, which builds a NEW account whose staging
+  // area is empty (see issue #15 — transient state is dropped on reconnect).
+  // The commit/push gates these tests pin are defense-in-depth (invariant I1),
+  // not a fix for a currently-exploitable race.
+  function markReadOnly(uta: UnifiedTradingAccount, keyless = false): void {
+    const flags = uta as unknown as { readOnly: boolean; keyless: boolean }
+    flags.readOnly = true
+    if (keyless) flags.keyless = true
+  }
+
   it('refuses stage operations on a read-only account', () => {
     const { uta } = createUTA(undefined, { readOnly: true })
     expect(uta.readOnly).toBe(true)
@@ -44,6 +61,66 @@ describe('UTA — read-only / keyless write guard', () => {
     const { uta } = createUTA()
     expect(uta.readOnly).toBe(false)
     expect(() => uta.stageCancelOrder({ orderId: 'x' })).not.toThrow()
+  })
+
+  it('refuses commit after a staged operation predates a read-only flip', () => {
+    const { uta } = createUTA()
+    uta.stagePlaceOrder(placeAapl())
+    markReadOnly(uta)
+
+    expect(() => uta.commit('buy AAPL')).toThrow(readOnlyError)
+    expect(uta.status().staged).toHaveLength(1)
+    expect(uta.status().pendingMessage).toBeNull()
+  })
+
+  it('refuses push after a pending commit predates a read-only flip', async () => {
+    const { uta, broker } = createUTA()
+    const spy = vi.spyOn(broker, 'placeOrder')
+    uta.stagePlaceOrder(placeAapl())
+    uta.commit('buy AAPL')
+    markReadOnly(uta)
+
+    await expect(uta.push()).rejects.toThrow(readOnlyError)
+    expect(spy).not.toHaveBeenCalled()
+    expect(uta.status().pendingMessage).toBe('buy AAPL')
+  })
+
+  it('refuses commit after a staged operation predates a keyless flip', () => {
+    const { uta } = createUTA()
+    uta.stagePlaceOrder(placeAapl())
+    markReadOnly(uta, true)
+
+    expect(() => uta.commit('buy AAPL')).toThrow(keylessError)
+    expect(uta.status().staged).toHaveLength(1)
+    expect(uta.status().pendingMessage).toBeNull()
+  })
+
+  it('refuses push after a pending commit predates a keyless flip', async () => {
+    const { uta, broker } = createUTA()
+    const spy = vi.spyOn(broker, 'placeOrder')
+    uta.stagePlaceOrder(placeAapl())
+    uta.commit('buy AAPL')
+    markReadOnly(uta, true)
+
+    await expect(uta.push()).rejects.toThrow(keylessError)
+    expect(spy).not.toHaveBeenCalled()
+    expect(uta.status().pendingMessage).toBe('buy AAPL')
+  })
+
+  it('allows rejecting a pending commit after a read-only flip', async () => {
+    const { uta, broker } = createUTA()
+    const spy = vi.spyOn(broker, 'placeOrder')
+    uta.stagePlaceOrder(placeAapl())
+    uta.commit('buy AAPL')
+    markReadOnly(uta)
+
+    await expect(uta.reject('stale staged write')).resolves.toMatchObject({
+      message: '[rejected] buy AAPL — stale staged write',
+      operationCount: 1,
+    })
+    expect(spy).not.toHaveBeenCalled()
+    expect(uta.status().staged).toHaveLength(0)
+    expect(uta.status().pendingMessage).toBeNull()
   })
 })
 

@@ -678,6 +678,7 @@ export class UnifiedTradingAccount {
   // ==================== Git flow ====================
 
   commit(message: string): CommitPrepareResult {
+    this._assertWritable()
     const result = this.git.commit(this._stampSubAccount(message))
     // Sub-account intent is now baked into the persisted message — clear the
     // transient tracker so the next staging batch starts clean.
@@ -695,6 +696,7 @@ export class UnifiedTradingAccount {
   }
 
   async push(): Promise<PushResult> {
+    this._assertWritable()
     if (this._disabled) {
       throw new BrokerError('CONFIG', `Account "${this.label}" is disabled due to configuration error.`)
     }
