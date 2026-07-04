@@ -577,6 +577,9 @@ trailer (`Suggested-by:` / `Reported-by:` / `Reviewed-by: @handle`). Claude's
 
 ### Two collaboration modes — pick the right one first
 
+> **Fork-mode note**: on `a-green-hand-jack/OpenAlice` this section is
+> superseded — see *§ Fork mode* at the end of this file.
+
 The whole workflow forks on one question:
 
 | Mode | Who's working on this branch | Where |
@@ -717,4 +720,37 @@ When `local` is ready to ship — either piecewise (one PR per coherent
 chunk, base `master`) or as a batch — that's a director decision, not a
 default. Ask the user before opening the PR.
 
+## Fork mode — a-green-hand-jack/OpenAlice
 
+This section applies ONLY when the checkout's `origin` is
+`a-green-hand-jack/OpenAlice` (the maintained fork; upstream =
+`TraderAlice/OpenAlice`). It SUPERSEDES the "Two collaboration modes"
+guidance above: in fork mode, **isolated local worktrees are the
+standard vehicle for non-trivial changes** (maintainer decision,
+2026-07-04) — not cloud sessions, not the shared `local` branch.
+Everything else in this file (branch safety, external-PR quarantine,
+migrations, pre-commit verification) still applies. Full process:
+[docs/fork-workflow.md](docs/fork-workflow.md).
+
+- **Branch model**: fork `master` = integration base. Every change is
+  issue-driven: GitHub issue → `feat/issue-N-<slug>` branch in a
+  `.worktrees/issue-N/` worktree → PR to fork `master` → CI green +
+  independent audit → merge (`--merge`, never `--delete-branch`) →
+  post-merge `pnpm test:smoke` → remove the worktree. `jieke/dev` is
+  the maintainer's manual scratch branch, outside the pipeline.
+  Upstream sync = a dedicated PR merging `upstream/master`.
+- **Worktree sandbox is non-negotiable**: every worktree that runs the
+  app or tests sets `OPENALICE_HOME=$PWD/.sandbox-home` and
+  `AQ_LAUNCHER_ROOT=$PWD/.sandbox-ws`; parallel stacks remap ports via
+  `OPENALICE_WEB_PORT` / `OPENALICE_MCP_PORT` / `OPENALICE_UTA_PORT` /
+  `OPENALICE_UI_PORT`. Without this, an experimental branch's
+  migrations mutate the real `~/.openalice` store.
+- **Separation of duties**: the agent that implements a change and the
+  agent that audits it are never the same. Audit reviews the diff
+  against the issue intent and the steward-plan invariants
+  (docs/steward-plan.zh.md, I1–I9) before merge.
+- **Agent task discipline**: no long-running foreground servers
+  (vite / `pnpm dev`) inside automated tasks — use `pnpm test:smoke`
+  or background-start + probe + kill. e2e / live scenario suites never
+  enter automated gates (they read real credentials from the global
+  store).
