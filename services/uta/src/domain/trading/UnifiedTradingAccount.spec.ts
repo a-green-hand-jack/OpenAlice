@@ -30,6 +30,12 @@ describe('UTA — read-only / keyless write guard', () => {
   const placeAapl = () =>
     ({ aliceId: 'mock-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: '1' } as never)
 
+  // Forges an in-place readOnly flip by bypassing the fields' `readonly`
+  // modifier. Today's production lifecycle cannot reach this state: a config
+  // flip goes through reconnectUTA, which builds a NEW account whose staging
+  // area is empty (see issue #15 — transient state is dropped on reconnect).
+  // The commit/push gates these tests pin are defense-in-depth (invariant I1),
+  // not a fix for a currently-exploitable race.
   function markReadOnly(uta: UnifiedTradingAccount, keyless = false): void {
     const flags = uta as unknown as { readOnly: boolean; keyless: boolean }
     flags.readOnly = true
