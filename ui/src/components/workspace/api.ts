@@ -533,7 +533,7 @@ export type AgentId = 'claude' | 'codex' | 'opencode' | 'pi';
 export type AgentCredentialSource =
   | 'runtime-login'
   | 'workspace-config'
-  | 'vault'
+  | 'launcher-vault'
   | 'missing'
   | 'unknown-agent'
   | 'disabled-agent';

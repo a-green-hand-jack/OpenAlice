@@ -19,7 +19,7 @@ export const LOGINLESS_AGENTS = new Set(['opencode', 'pi'])
 export type AgentCredentialSource =
   | 'runtime-login'
   | 'workspace-config'
-  | 'vault'
+  | 'launcher-vault'
   | 'missing'
   | 'unknown-agent'
   | 'disabled-agent'
@@ -165,7 +165,7 @@ export async function getAgentCredentialReadiness(opts: {
       agent: agentId,
       ready: true,
       requiresCredential: true,
-      source: 'vault',
+      source: 'launcher-vault',
       hasWorkspaceConfig: cfg !== null,
       hasUsableWorkspaceConfig: false,
       detectedCredentialSlug,
@@ -257,7 +257,7 @@ export async function ensureAgentCredentialReady(opts: {
     agent: agentId,
     ready: true,
     requiresCredential: true,
-    source: 'vault',
+    source: 'launcher-vault',
     hasWorkspaceConfig: true,
     hasUsableWorkspaceConfig: true,
     detectedCredentialSlug: chosenSlug,

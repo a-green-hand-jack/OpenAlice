@@ -228,18 +228,21 @@ function resolveAgentRuntime(
 }
 
 function AgentRuntimePill({ runtime }: { runtime: AgentRuntime }) {
+  // Accent/ring means "this issue explicitly overrides the runtime"; credential
+  // readiness is a separate workspace concern and must not be inferred here.
   const title =
     runtime.source === 'override'
-      ? `Agent runtime: ${runtime.displayName} (issue override)`
+      ? `Agent runtime override: ${runtime.displayName}`
       : runtime.source === 'default'
         ? `Agent runtime: ${runtime.displayName} (workspace default)`
         : `Agent runtime: ${runtime.displayName} (workspace fallback)`
   return (
     <span
       title={title}
+      aria-label={title}
       className={`hidden shrink-0 items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[11px] sm:inline-flex ${
         runtime.source === 'override'
-          ? 'bg-accent/10 text-accent'
+          ? 'bg-bg-tertiary text-text ring-1 ring-accent/30'
           : 'bg-bg-tertiary text-muted'
       }`}
     >

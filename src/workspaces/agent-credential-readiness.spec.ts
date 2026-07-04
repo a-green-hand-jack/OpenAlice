@@ -94,7 +94,7 @@ describe('agent credential readiness', () => {
     });
 
     expect(row.ready).toBe(true);
-    expect(row.source).toBe('vault');
+    expect(row.source).toBe('launcher-vault');
     expect(a.writeAiConfig).toHaveBeenCalledOnce();
     expect(a.writeAiConfig).toHaveBeenCalledWith('/tmp/ws-1', expect.objectContaining({
       apiKey: 'sk-oa',
