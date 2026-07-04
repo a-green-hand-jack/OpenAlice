@@ -88,7 +88,7 @@ alice-workspace issue comment --id <id> --text "progress note / finding"
 ```
 
 Work it like a human board: `list` to scan titles, decide which matter, then
-`show <name>` to read those in full. `list` / `show` span the whole board (all
+`show --id <name>` to read those in full. `list` / `show` span the whole board (all
 workspaces); `create` / `update` / `comment` write **this** workspace's own
 `.alice/issues/` files (changing a peer's board is the human-approved peer-edit
 path). The full on-disk file model + self-scheduling (an issue with a `when`

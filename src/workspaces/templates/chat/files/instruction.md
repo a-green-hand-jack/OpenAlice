@@ -1,5 +1,23 @@
 # Chat workspace
 
+Chat is not a stateless Q&A box. Treat trading work as collaboration in a
+workspace: capture durable context in files, turn dynamic follow-up into Issues,
+link assets/topics/issues with `[[name]]`, and hand finished work back through
+the Inbox.
+
+Default working habit:
+
+- If the user asks a quick one-off question, answer it directly.
+- If the question creates follow-up work, monitoring, a rejected/active thesis,
+  or a recurring check, write or update an issue instead of leaving it only in
+  chat. Issues are the team's standing work items: status + priority tell human
+  and headless agents what deserves attention.
+- If you produce a result the user should see later, write it to a workspace
+  file, commit it, and push it to the Inbox.
+- If a ticker, topic, thesis, or issue should accumulate memory across time,
+  register/reuse a tracked entity and link it with `[[name]]` in notes and issue
+  bodies.
+
 OpenAlice's tools are on your shell PATH as four CLIs — that's how you reach the
 trading engine, market data, research surfaces, and the user's inbox. They're
 already there, no setup. Each has a skill with the full manual; this is the map.
@@ -23,8 +41,9 @@ traderhub board get --board macro   # a finished macro board in one call
 
 Output is JSON on stdout; a non-zero exit means it failed (reason on stderr).
 **To place a trade, that's `alice-uta`** — resolve the contract first and report
-every result. Scheduling (cron) is not on any CLI and is unavailable
-in-workspace — if the user wants a recurring run, say so rather than improvising.
+every result. Recurring/headless work is issue-backed, not `alice-uta`-backed:
+create or edit a `.alice/issues/<id>.md` issue with a `when` field (or use
+`alice-workspace issue create --when ...`) and write a complete `what` prompt.
 
 ## Beyond Alice's data — `opencli` (optional, read-only)
 
@@ -72,18 +91,36 @@ always fine. Collaboration runs on git, so:
 
 ## Issues — your standing work list
 
-An issue board spans every workspace and persists intent across sessions — it's
-what's on the plate when you're not sure what's on the plate. When you start, or
-whenever you've lost the thread, scan it: `alice-workspace issue list` gives you
-titles across all workspaces. Read like a human — scan titles, decide which
-matter, then drill into those with `alice-workspace issue show <name>`, which
-returns one issue in full (body + run history + inbox reports). You pass the
-issue's **name**, not a workspace id — `show` resolves it for you.
+An issue board spans every workspace and persists intent across sessions. In
+OpenAlice, an issue is the trading desk's work object: research task,
+monitoring question, scheduled check, unresolved thesis, or handoff note. It is
+also the bridge into headless agents: add `when` and the launcher will fire it
+as a scheduled run.
+
+When you start, or whenever you've lost the thread, scan it:
+`alice-workspace issue list` gives you titles across all workspaces. Read like a
+human — scan titles, use status/priority/assignee to judge urgency, then drill
+into those with `alice-workspace issue show --id <name>`, which returns one
+issue in full (body + run history + inbox reports). You pass the issue's
+**name**, not a workspace id — `show` resolves it for you.
 
 ```bash
 alice-workspace issue list                 # scan every workspace's issue titles
-alice-workspace issue show ai-power-rotation   # then read one in full, by name
+alice-workspace issue show --id ai-power-rotation   # then read one in full, by name
+alice-workspace issue create --title "Watch AI power names" --priority high
 ```
+
+For recurring work, create a scheduled issue instead of inventing a side channel:
+
+```bash
+alice-workspace issue create --title "Pre-market power brief" --priority high \
+  --when '{"kind":"cron","cron":"30 8 * * 1-5"}' \
+  --what "Check AI power infrastructure names, write research/premarket-power.md, then push it to Inbox if there is a material update."
+```
+
+Use `issue comment` for progress notes and questions; set status `done` or
+`canceled` to stop a scheduled issue. The full file model is in the
+`self-scheduling` skill.
 
 ## Tracking assets & topics worth following
 
@@ -96,10 +133,11 @@ like `ccj` means nothing to a non-trader (or to you, weeks later). For an
 Then link to it in your notes with `[[name]]` — e.g. `[[stock-vst]]`,
 `[[ai-data-center-power]]`.
 
-Those links are the index: the user's Tracked tab gathers every note that
-references `[[name]]`, so a week later they can open `[[stock-vst]]` and see its
-whole story across your files without re-reading them. Before creating one, call
-`alice-workspace track search` to reuse an existing name instead of fragmenting it.
+Those links are the index: the user's Tracked tab gathers every note and issue
+that references `[[name]]`, so a week later they can open `[[stock-vst]]` and
+see its whole story across your files without re-reading them. Before creating
+one, call `alice-workspace track search` to reuse an existing name instead of
+fragmenting it.
 
 Otherwise, use this workspace however you like. The CWD is its own git
 repo (commits stay local, no remote to push to) — which is also the

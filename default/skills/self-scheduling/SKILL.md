@@ -18,6 +18,12 @@ description: >
 
 # Issues & self-scheduling — `.alice/issues/<id>.md`
 
+OpenAlice treats an issue as a collaboration object, not just a timer. It is the
+durable place to put trading follow-up, monitoring work, open questions,
+handoffs, and scheduled checks. Status, priority, and assignee tell humans and
+agents what deserves attention; `when` is the extra field that lets an issue
+summon a headless agent run.
+
 This workspace owns its work as **one markdown file per issue** in `.alice/issues/`
 at its own root. Each file is YAML frontmatter (the structured fields) plus a
 markdown body (the human description).
@@ -89,7 +95,7 @@ alice-workspace issue create --title "Pre-market brief" --priority high \
 The verb set is `list` / `show` / `create` / `update` / `comment` (no `delete` —
 remove an issue by deleting its file, see Notes). **Reads are global, writes are
 local:** `list` and `show` read the whole board across **every** workspace —
-scan titles with `list`, decide which matter, then `show <name>` to read those
+scan titles with `list`, decide which matter, then `show --id <name>` to read those
 in full (the natural way to work a board) — while `create` / `update` /
 `comment` write **this** workspace's own `.alice/issues/` files (changing a
 peer's board is the human-approved peer-edit path). The examples below show the
