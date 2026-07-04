@@ -107,6 +107,16 @@ describe('POST /uta/:id/wallet/push', () => {
     expect(mock.calls.map(c => c.method)).toEqual(['push'])
   })
 
+  it('returns 400 and never pushes when nothing is pending', async () => {
+    const mock = makeMockUTA()
+    const routes = makeRoutes(mock.uta)
+
+    const { status } = await post(routes, '/uta/mock-uta/wallet/push', {})
+
+    expect(status).toBe(400)
+    expect(mock.uta.push).not.toHaveBeenCalled()
+  })
+
   it('does not push from sibling wallet-git routes', async () => {
     const mock = makeMockUTA({ pendingMessage: 'ready to review' })
     const routes = makeRoutes(mock.uta)
