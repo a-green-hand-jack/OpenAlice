@@ -31,11 +31,9 @@ describe('UTA — read-only / keyless write guard', () => {
     ({ aliceId: 'mock-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: '1' } as never)
 
   // Forges an in-place readOnly flip by bypassing the fields' `readonly`
-  // modifier. Today's production lifecycle cannot reach this state: a config
-  // flip goes through reconnectUTA, which builds a NEW account whose staging
-  // area is empty (see issue #15 — transient state is dropped on reconnect).
-  // The commit/push gates these tests pin are defense-in-depth (invariant I1),
-  // not a fix for a currently-exploitable race.
+  // modifier. A config flip normally goes through reconnectUTA and rebuilds
+  // the account from persisted git state; these tests pin the same I1 gate for
+  // any pending in-memory approval that predates the flip.
   function markReadOnly(uta: UnifiedTradingAccount, keyless = false): void {
     const flags = uta as unknown as { readOnly: boolean; keyless: boolean }
     flags.readOnly = true
@@ -121,6 +119,36 @@ describe('UTA — read-only / keyless write guard', () => {
     expect(spy).not.toHaveBeenCalled()
     expect(uta.status().staged).toHaveLength(0)
     expect(uta.status().pendingMessage).toBeNull()
+  })
+
+  it('restores pending approval into a read-only account: push is refused, reject is allowed', async () => {
+    const { uta: original } = createUTA()
+    original.stagePlaceOrder(placeAapl())
+    const prepared = original.commit('buy AAPL')
+    const savedState = original.exportGitState()
+
+    const broker = new MockBroker()
+    const spy = vi.spyOn(broker, 'placeOrder')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { uta: restored } = createUTA(broker, { savedState, readOnly: true })
+    warn.mockRestore()
+
+    expect(restored.status().pendingMessage).toBe('buy AAPL')
+    expect(restored.status().pendingHash).toBe(prepared.hash)
+
+    await expect(restored.push()).rejects.toThrow(readOnlyError)
+    expect(spy).not.toHaveBeenCalled()
+    expect(restored.status().pendingMessage).toBe('buy AAPL')
+
+    await expect(restored.reject('manual no')).resolves.toMatchObject({
+      hash: prepared.hash,
+      message: '[rejected] buy AAPL — manual no',
+      operationCount: 1,
+    })
+    expect(spy).not.toHaveBeenCalled()
+    expect(restored.status().pendingMessage).toBeNull()
+    const rejected = restored.show(prepared.hash)!
+    expect(rejected.results[0]).toMatchObject({ status: 'user-rejected', error: 'manual no' })
   })
 })
 

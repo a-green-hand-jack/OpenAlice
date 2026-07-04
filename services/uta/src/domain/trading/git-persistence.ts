@@ -4,7 +4,8 @@
  * Extracted from main.ts. Pure functions + file IO, no instance dependencies.
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises'
+import { mkdirSync, writeFileSync } from 'fs'
+import { readFile } from 'fs/promises'
 import { dirname } from 'path'
 import type { GitExportState } from './git/types.js'
 import { dataPath } from '@/core/paths.js'
@@ -39,11 +40,11 @@ export async function loadGitState(accountId: string): Promise<GitExportState | 
   return undefined
 }
 
-/** Create a callback that persists git state to disk on each commit. */
-export function createGitPersister(accountId: string): (state: GitExportState) => Promise<void> {
+/** Create a callback that persists git state to disk on each git state change. */
+export function createGitPersister(accountId: string): (state: GitExportState) => void {
   const filePath = gitFilePath(accountId)
-  return async (state: GitExportState) => {
-    await mkdir(dirname(filePath), { recursive: true })
-    await writeFile(filePath, JSON.stringify(state, null, 2))
+  return (state: GitExportState) => {
+    mkdirSync(dirname(filePath), { recursive: true })
+    writeFileSync(filePath, JSON.stringify(state, null, 2))
   }
 }

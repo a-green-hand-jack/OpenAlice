@@ -77,5 +77,6 @@ export interface ITradingGit {
 export interface TradingGitConfig {
   executeOperation: (operation: Operation) => Promise<unknown>
   getGitState: () => Promise<GitState>
+  /** Called whenever exported git state changes (stage, commit, push/reject, sync). */
   onCommit?: (state: GitExportState) => void | Promise<void>
 }

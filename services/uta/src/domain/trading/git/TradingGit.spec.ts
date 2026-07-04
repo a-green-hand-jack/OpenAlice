@@ -3,7 +3,7 @@ import Decimal from 'decimal.js'
 import { Contract, Order, OrderState } from '@traderalice/ibkr'
 import { TradingGit } from './TradingGit.js'
 import type { TradingGitConfig } from './interfaces.js'
-import type { Operation, GitState } from './types.js'
+import type { Operation, GitExportState, GitState } from './types.js'
 import '../contract-ext.js'
 
 // ==================== Helpers ====================
@@ -166,7 +166,7 @@ describe('TradingGit', () => {
       await expect(git.push()).rejects.toThrow('please commit first')
     })
 
-    it('calls onCommit callback with exported state', async () => {
+    it('calls onCommit callback with exported state after each state transition', async () => {
       const onCommit = vi.fn()
       const gitWithCb = new TradingGit({ ...config, onCommit })
 
@@ -174,10 +174,25 @@ describe('TradingGit', () => {
       gitWithCb.commit('msg')
       await gitWithCb.push()
 
-      expect(onCommit).toHaveBeenCalledTimes(1)
-      const exported = onCommit.mock.calls[0][0]
+      expect(onCommit).toHaveBeenCalledTimes(3)
+      expect(onCommit.mock.calls[0][0]).toMatchObject({
+        commits: [],
+        head: null,
+        stagingArea: expect.any(Array),
+        pendingMessage: null,
+        pendingHash: null,
+      })
+      expect(onCommit.mock.calls[1][0]).toMatchObject({
+        commits: [],
+        head: null,
+        pendingMessage: 'msg',
+      })
+      const exported = onCommit.mock.calls[2][0]
       expect(exported.commits).toHaveLength(1)
       expect(exported.head).toHaveLength(8)
+      expect(exported.stagingArea).toEqual([])
+      expect(exported.pendingMessage).toBeNull()
+      expect(exported.pendingHash).toBeNull()
     })
 
     it('handles rejected operations gracefully', async () => {
@@ -573,8 +588,8 @@ describe('TradingGit', () => {
       const second = persistedGit.commit('thesis: trim AAPL')
       await persistedGit.push()
 
-      expect(onCommit).toHaveBeenCalledTimes(2)
-      const persisted = JSON.parse(JSON.stringify(onCommit.mock.calls[1][0]))
+      expect(onCommit).toHaveBeenCalledTimes(6)
+      const persisted = JSON.parse(JSON.stringify(onCommit.mock.calls[onCommit.mock.calls.length - 1][0]))
       const restored = TradingGit.restore(persisted, config)
       const commit = restored.show(second.hash)!
 
@@ -686,6 +701,115 @@ describe('TradingGit', () => {
       expect(log).toHaveLength(1)
       expect(log[0].operations[0].change).toContain('observed')
       expect(log[0].operations[0].change).toContain('1.0093')
+    })
+
+    it('restores an awaiting-approval commit and pushes with the original pending hash', async () => {
+      const executeOperation = vi.fn().mockResolvedValue({ success: true, orderId: 'order-restored' })
+      const original = new TradingGit(makeConfig({ executeOperation }))
+      original.add(buyOp('AAPL'))
+      const prepared = original.commit('Buy AAPL after restart')
+      const exported = JSON.parse(JSON.stringify(original.exportState())) as GitExportState
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const restored = TradingGit.restore(exported, makeConfig({ executeOperation }))
+      warn.mockRestore()
+
+      expect(restored.status()).toMatchObject({
+        pendingMessage: 'Buy AAPL after restart',
+        pendingHash: prepared.hash,
+      })
+      expect(restored.status().staged).toHaveLength(1)
+
+      const result = await restored.push()
+      expect(result.hash).toBe(prepared.hash)
+      expect(executeOperation).toHaveBeenCalledTimes(1)
+      expect(restored.status().pendingMessage).toBeNull()
+      expect(restored.status().staged).toEqual([])
+      expect(restored.show(prepared.hash)?.hash).toBe(prepared.hash)
+    })
+
+    it('restores staged operations without a prepared commit and can commit + push them', async () => {
+      const executeOperation = vi.fn().mockResolvedValue({ success: true, orderId: 'order-staged' })
+      git.add(buyOp('MSFT'))
+      const exported = JSON.parse(JSON.stringify(git.exportState())) as GitExportState
+      expect(exported.stagingArea).toHaveLength(1)
+      expect(exported.pendingMessage).toBeNull()
+
+      const restored = TradingGit.restore(exported, makeConfig({ executeOperation }))
+      expect(restored.status().staged).toHaveLength(1)
+      expect(restored.status().pendingMessage).toBeNull()
+
+      const prepared = restored.commit('Buy staged MSFT')
+      const result = await restored.push()
+      expect(result.hash).toBe(prepared.hash)
+      expect(executeOperation).toHaveBeenCalledTimes(1)
+      expect(restored.show(prepared.hash)?.message).toBe('Buy staged MSFT')
+    })
+
+    it('rejects a restored pending approval and records a user-rejected commit with the reason', async () => {
+      git.add(buyOp('TSLA'))
+      const prepared = git.commit('Buy TSLA after restart')
+      const exported = JSON.parse(JSON.stringify(git.exportState())) as GitExportState
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const restored = TradingGit.restore(exported, config)
+      warn.mockRestore()
+
+      const result = await restored.reject('risk changed')
+      expect(result.hash).toBe(prepared.hash)
+      expect(result.message).toBe('[rejected] Buy TSLA after restart — risk changed')
+      const commit = restored.show(prepared.hash)!
+      expect(commit.results).toHaveLength(1)
+      expect(commit.results[0]).toMatchObject({
+        status: 'user-rejected',
+        error: 'risk changed',
+      })
+      expect(restored.status().pendingMessage).toBeNull()
+      expect(restored.status().staged).toEqual([])
+    })
+
+    it('restores old-shape commit history with empty transient approval state', async () => {
+      git.add(buyOp('AAPL'))
+      git.commit('Buy AAPL')
+      await git.push()
+      const exported = git.exportState()
+      const oldShape = {
+        commits: exported.commits,
+        head: exported.head,
+      } satisfies GitExportState
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const restored = TradingGit.restore(oldShape, config)
+      warn.mockRestore()
+      error.mockRestore()
+
+      expect(restored.status()).toMatchObject({
+        head: exported.head,
+        commitCount: 1,
+        staged: [],
+        pendingMessage: null,
+        pendingHash: null,
+      })
+    })
+
+    it('drops malformed pending approval state loudly while preserving valid staged operations', () => {
+      const malformed = {
+        commits: [],
+        head: null,
+        stagingArea: [buyOp('AAPL')],
+        pendingMessage: 'Buy AAPL',
+        pendingHash: 'not-a-hash',
+      } as unknown as GitExportState
+
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const restored = TradingGit.restore(malformed, config)
+
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('Dropped malformed pending approval'))
+      error.mockRestore()
+      expect(restored.status().staged).toHaveLength(1)
+      expect(restored.status().pendingMessage).toBeNull()
+      expect(restored.status().pendingHash).toBeNull()
     })
   })
 
