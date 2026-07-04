@@ -17,7 +17,16 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 
-const EXCLUDED_DIRS = new Set(['node_modules', '.worktrees', 'dist', '.git'])
+const EXCLUDED_DIRS = new Set([
+  'node_modules',
+  '.worktrees',
+  'dist',
+  '.git',
+  // Fork-workflow worktree sandboxes (CLAUDE.md § Fork mode) — may contain
+  // nested workspace checkouts with their own ANATOMY.md files.
+  '.sandbox-home',
+  '.sandbox-ws',
+])
 
 const CITATION_RE =
   /(^|[^A-Za-z0-9_./:@-])((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]+):(\d+)(?:-(\d+))?(?=$|[^A-Za-z0-9_/:-])/g
@@ -154,6 +163,9 @@ function formatBroken(broken: BrokenAnatomyCitation): string {
 }
 
 function runCli(): void {
+  // Without --check, broken citations are reported but the exit code stays 0
+  // (informational mode). Every gating call site (CI, PR template, ANATOMY.md
+  // Drift Rule) must pass --check.
   const checkMode = process.argv.includes('--check')
   const result = checkAnatomyDrift()
 

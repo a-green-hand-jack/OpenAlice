@@ -73,6 +73,7 @@ state, or ownership.
 ## Drift Rule
 
 When a change moves files, shifts ownership, changes lifecycle, alters routes,
-or changes persisted state, update the relevant ANATOMY.md files and run:
+or changes persisted state, update the relevant ANATOMY.md files **in the same
+commit/PR as the code change** — never as a follow-up — and run:
 
 `pnpm exec tsx tools/check-anatomy-drift.ts --check`
