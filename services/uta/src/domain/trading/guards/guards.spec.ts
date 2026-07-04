@@ -1,9 +1,21 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import Decimal from 'decimal.js'
 import { Contract, Order, UNSET_DECIMAL } from '@traderalice/ibkr'
 import { MaxPositionSizeGuard } from './max-position-size.js'
 import { CooldownGuard } from './cooldown.js'
 import { SymbolWhitelistGuard } from './symbol-whitelist.js'
+import { MaxDrawdownGuard } from './max-drawdown.js'
+import { DailyLossGuard } from './daily-loss.js'
+import { ConcentrationGuard } from './concentration.js'
+import {
+  createPortfolioGuardStateStore,
+  portfolioGuardStatePath,
+  type PortfolioGuardStateStore,
+} from './portfolio-state.js'
 import { createGuardPipeline } from './guard-pipeline.js'
 import { resolveGuards, registerGuard } from './registry.js'
 import type { GuardContext, OperationGuard } from './types.js'
@@ -14,12 +26,16 @@ import '../contract-ext.js'
 
 // ==================== Helpers ====================
 
+let tempDirs: string[] = []
+
 function makePlaceOrderOp(overrides: {
   symbol?: string
   action?: 'BUY' | 'SELL'
   orderType?: string
   cashQty?: number
   totalQuantity?: Decimal
+  lmtPrice?: number
+  auxPrice?: number
 } = {}): Operation {
   const contract = makeContract({ symbol: overrides.symbol ?? 'AAPL' })
   const order = new Order()
@@ -28,6 +44,12 @@ function makePlaceOrderOp(overrides: {
   order.totalQuantity = overrides.totalQuantity ?? new Decimal(10)
   if (overrides.cashQty != null) {
     order.cashQty = new Decimal(overrides.cashQty)
+  }
+  if (overrides.lmtPrice != null) {
+    order.lmtPrice = new Decimal(overrides.lmtPrice)
+  }
+  if (overrides.auxPrice != null) {
+    order.auxPrice = new Decimal(overrides.auxPrice)
   }
   return { action: 'placeOrder', contract, order }
 }
@@ -50,6 +72,30 @@ function makeContext(overrides: {
     },
   }
 }
+
+function makeTempStateBaseDir(): string {
+  const dir = join(tmpdir(), `openalice-guard-spec-${randomUUID()}`)
+  tempDirs.push(dir)
+  return dir
+}
+
+function makeTempStateStore(accountId = `guard-${randomUUID()}`): PortfolioGuardStateStore {
+  const dir = makeTempStateBaseDir()
+  return createPortfolioGuardStateStore(accountId, { baseDir: dir })
+}
+
+async function makeCorruptStateStore(accountId = `guard-${randomUUID()}`): Promise<PortfolioGuardStateStore> {
+  const dir = makeTempStateBaseDir()
+  const path = portfolioGuardStatePath(accountId, { baseDir: dir })
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, '{"version":999}', 'utf-8')
+  return createPortfolioGuardStateStore(accountId, { baseDir: dir })
+}
+
+afterEach(async () => {
+  await Promise.all(tempDirs.map(dir => rm(dir, { recursive: true, force: true })))
+  tempDirs = []
+})
 
 // ==================== MaxPositionSizeGuard ====================
 
@@ -190,6 +236,481 @@ describe('SymbolWhitelistGuard', () => {
   })
 })
 
+// ==================== MaxDrawdownGuard ====================
+
+describe('MaxDrawdownGuard', () => {
+  it('allows order within max drawdown and reports metrics', async () => {
+    const stateStore = makeTempStateStore()
+    const guard = new MaxDrawdownGuard({ maxDrawdownPct: 10 }, { stateStore })
+    await guard.evaluate(makeContext({ account: { netLiquidation: '100000' } }))
+
+    const result = await guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({ cashQty: 1_000 }),
+      account: { netLiquidation: '95000' },
+    }))
+
+    expect(result).toEqual({
+      metrics: {
+        drawdownPct: 5,
+        maxDrawdownPct: 10,
+        highWaterMark: 100000,
+        equity: 95000,
+      },
+    })
+  })
+
+  it('rejects risk-increasing order above max drawdown and reports metrics', async () => {
+    const stateStore = makeTempStateStore()
+    const guard = new MaxDrawdownGuard({ maxDrawdownPct: 10 }, { stateStore })
+    await guard.evaluate(makeContext({ account: { netLiquidation: '100000' } }))
+
+    const result = await guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({ cashQty: 1_000 }),
+      account: { netLiquidation: '85000' },
+    }))
+
+    expect(result.reason).toBe('Drawdown is 15.0% of equity (limit: 10%)')
+    expect(result.metrics).toEqual({
+      drawdownPct: 15,
+      maxDrawdownPct: 10,
+      highWaterMark: 100000,
+      equity: 85000,
+    })
+  })
+
+  it('allows closePosition and cancelOrder while max drawdown is breached', async () => {
+    const stateStore = makeTempStateStore()
+    const guard = new MaxDrawdownGuard({ maxDrawdownPct: 10 }, { stateStore })
+    const contract = makeContract({ symbol: 'AAPL' })
+    await guard.evaluate(makeContext({ account: { netLiquidation: '100000' } }))
+
+    await expect(guard.evaluate(makeContext({
+      operation: { action: 'closePosition', contract },
+      account: { netLiquidation: '85000' },
+    }))).resolves.toEqual({})
+
+    await expect(guard.evaluate(makeContext({
+      operation: { action: 'cancelOrder', orderId: 'ord-1' },
+      account: { netLiquidation: '85000' },
+    }))).resolves.toEqual({})
+  })
+
+  it('allows closePosition without reading corrupt max-drawdown state', async () => {
+    const stateStore = await makeCorruptStateStore()
+    const guard = new MaxDrawdownGuard({ maxDrawdownPct: 10 }, { stateStore })
+    const contract = makeContract({ symbol: 'AAPL' })
+
+    await expect(guard.evaluate(makeContext({
+      operation: { action: 'closePosition', contract },
+      account: { netLiquidation: '85000' },
+    }))).resolves.toEqual({})
+  })
+
+  it('throws on corrupt max-drawdown state for risk-increasing placeOrder', async () => {
+    const stateStore = await makeCorruptStateStore()
+    const guard = new MaxDrawdownGuard({ maxDrawdownPct: 10 }, { stateStore })
+
+    await expect(guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({ cashQty: 1_000 }),
+      account: { netLiquidation: '85000' },
+    }))).rejects.toThrow('portfolio guard state: unsupported or corrupt state file')
+  })
+
+  it('rejects modifyOrder while max drawdown is breached', async () => {
+    const stateStore = makeTempStateStore()
+    const guard = new MaxDrawdownGuard({ maxDrawdownPct: 10 }, { stateStore })
+    await guard.evaluate(makeContext({ account: { netLiquidation: '100000' } }))
+
+    const result = await guard.evaluate(makeContext({
+      operation: { action: 'modifyOrder', orderId: 'ord-1', changes: { lmtPrice: new Decimal(150) } },
+      account: { netLiquidation: '85000' },
+    }))
+
+    expect(result.reason).toBe('Drawdown is 15.0% of equity (limit: 10%)')
+    expect(result.metrics).toEqual({
+      drawdownPct: 15,
+      maxDrawdownPct: 10,
+      highWaterMark: 100000,
+      equity: 85000,
+    })
+  })
+
+  it('passes an unestimable placeOrder while drawdown is below the limit', async () => {
+    const stateStore = makeTempStateStore()
+    const guard = new MaxDrawdownGuard({ maxDrawdownPct: 10 }, { stateStore })
+    await guard.evaluate(makeContext({ account: { netLiquidation: '100000' } }))
+
+    const result = await guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({ symbol: 'NEW_STOCK', totalQuantity: new Decimal(100) }),
+      account: { netLiquidation: '99000' },
+    }))
+
+    expect(result.reason).toBeUndefined()
+    expect(result.metrics).toEqual({
+      drawdownPct: 1,
+      maxDrawdownPct: 10,
+      highWaterMark: 100000,
+      equity: 99000,
+    })
+  })
+
+  it('persists high-water mark across a simulated restart', async () => {
+    const stateStore = makeTempStateStore('acct-restart')
+    const first = new MaxDrawdownGuard({ maxDrawdownPct: 10 }, { stateStore })
+    await first.evaluate(makeContext({ account: { netLiquidation: '100000' } }))
+
+    const restarted = new MaxDrawdownGuard({ maxDrawdownPct: 10 }, { stateStore })
+    const result = await restarted.evaluate(makeContext({
+      operation: makePlaceOrderOp({ cashQty: 1_000 }),
+      account: { netLiquidation: '85000' },
+    }))
+
+    expect(result.reason).toBe('Drawdown is 15.0% of equity (limit: 10%)')
+    expect(result.metrics).toEqual({
+      drawdownPct: 15,
+      maxDrawdownPct: 10,
+      highWaterMark: 100000,
+      equity: 85000,
+    })
+  })
+
+  it('ratchets high-water mark up on new peaks and never down', async () => {
+    const stateStore = makeTempStateStore()
+    const guard = new MaxDrawdownGuard({ maxDrawdownPct: 10 }, { stateStore })
+    await guard.evaluate(makeContext({ account: { netLiquidation: '100000' } }))
+
+    const newPeak = await guard.evaluate(makeContext({ account: { netLiquidation: '110000' } }))
+    expect(newPeak.metrics).toEqual({
+      drawdownPct: 0,
+      maxDrawdownPct: 10,
+      highWaterMark: 110000,
+      equity: 110000,
+    })
+
+    const lower = await guard.evaluate(makeContext({ account: { netLiquidation: '105000' } }))
+    expect(lower.metrics?.highWaterMark).toBe(110000)
+    expect(lower.metrics?.equity).toBe(105000)
+    expect(lower.metrics?.drawdownPct).toBeCloseTo(4.545454545)
+  })
+})
+
+// ==================== DailyLossGuard ====================
+
+describe('DailyLossGuard', () => {
+  it('allows order within daily loss and reports metrics', async () => {
+    const stateStore = makeTempStateStore()
+    const now = () => new Date('2026-07-04T10:00:00.000Z')
+    const guard = new DailyLossGuard({ maxDailyLossPct: 5 }, { stateStore, now })
+    await guard.evaluate(makeContext({ account: { netLiquidation: '100000' } }))
+
+    const result = await guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({ cashQty: 1_000 }),
+      account: { netLiquidation: '98000' },
+    }))
+
+    expect(result).toEqual({
+      metrics: {
+        dailyLossPct: 2,
+        maxDailyLossPct: 5,
+        dayStartEquity: 100000,
+        equity: 98000,
+      },
+    })
+  })
+
+  it('rejects risk-increasing order above daily loss and reports metrics', async () => {
+    const stateStore = makeTempStateStore()
+    const now = () => new Date('2026-07-04T10:00:00.000Z')
+    const guard = new DailyLossGuard({ maxDailyLossPct: 5 }, { stateStore, now })
+    await guard.evaluate(makeContext({ account: { netLiquidation: '100000' } }))
+
+    const result = await guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({ cashQty: 1_000 }),
+      account: { netLiquidation: '94000' },
+    }))
+
+    expect(result.reason).toBe('Daily loss is 6.0% of day-start equity (limit: 5%)')
+    expect(result.metrics).toEqual({
+      dailyLossPct: 6,
+      maxDailyLossPct: 5,
+      dayStartEquity: 100000,
+      equity: 94000,
+    })
+  })
+
+  it('allows closePosition and cancelOrder while daily loss is breached', async () => {
+    const stateStore = makeTempStateStore()
+    const now = () => new Date('2026-07-04T10:00:00.000Z')
+    const guard = new DailyLossGuard({ maxDailyLossPct: 5 }, { stateStore, now })
+    const contract = makeContract({ symbol: 'AAPL' })
+    await guard.evaluate(makeContext({ account: { netLiquidation: '100000' } }))
+
+    await expect(guard.evaluate(makeContext({
+      operation: { action: 'closePosition', contract },
+      account: { netLiquidation: '94000' },
+    }))).resolves.toEqual({})
+
+    await expect(guard.evaluate(makeContext({
+      operation: { action: 'cancelOrder', orderId: 'ord-1' },
+      account: { netLiquidation: '94000' },
+    }))).resolves.toEqual({})
+  })
+
+  it('allows closePosition without reading corrupt daily-loss state', async () => {
+    const stateStore = await makeCorruptStateStore()
+    const now = () => new Date('2026-07-04T10:00:00.000Z')
+    const guard = new DailyLossGuard({ maxDailyLossPct: 5 }, { stateStore, now })
+    const contract = makeContract({ symbol: 'AAPL' })
+
+    await expect(guard.evaluate(makeContext({
+      operation: { action: 'closePosition', contract },
+      account: { netLiquidation: '94000' },
+    }))).resolves.toEqual({})
+  })
+
+  it('throws on corrupt daily-loss state for risk-increasing placeOrder', async () => {
+    const stateStore = await makeCorruptStateStore()
+    const now = () => new Date('2026-07-04T10:00:00.000Z')
+    const guard = new DailyLossGuard({ maxDailyLossPct: 5 }, { stateStore, now })
+
+    await expect(guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({ cashQty: 1_000 }),
+      account: { netLiquidation: '94000' },
+    }))).rejects.toThrow('portfolio guard state: unsupported or corrupt state file')
+  })
+
+  it('rejects modifyOrder while daily loss is breached', async () => {
+    const stateStore = makeTempStateStore()
+    const now = () => new Date('2026-07-04T10:00:00.000Z')
+    const guard = new DailyLossGuard({ maxDailyLossPct: 5 }, { stateStore, now })
+    await guard.evaluate(makeContext({ account: { netLiquidation: '100000' } }))
+
+    const result = await guard.evaluate(makeContext({
+      operation: { action: 'modifyOrder', orderId: 'ord-1', changes: { lmtPrice: new Decimal(150) } },
+      account: { netLiquidation: '94000' },
+    }))
+
+    expect(result.reason).toBe('Daily loss is 6.0% of day-start equity (limit: 5%)')
+    expect(result.metrics).toEqual({
+      dailyLossPct: 6,
+      maxDailyLossPct: 5,
+      dayStartEquity: 100000,
+      equity: 94000,
+    })
+  })
+
+  it('passes an unestimable placeOrder while daily loss is below the limit', async () => {
+    const stateStore = makeTempStateStore()
+    const now = () => new Date('2026-07-04T10:00:00.000Z')
+    const guard = new DailyLossGuard({ maxDailyLossPct: 5 }, { stateStore, now })
+    await guard.evaluate(makeContext({ account: { netLiquidation: '100000' } }))
+
+    const result = await guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({ symbol: 'NEW_STOCK', totalQuantity: new Decimal(100) }),
+      account: { netLiquidation: '99000' },
+    }))
+
+    expect(result.reason).toBeUndefined()
+    expect(result.metrics).toEqual({
+      dailyLossPct: 1,
+      maxDailyLossPct: 5,
+      dayStartEquity: 100000,
+      equity: 99000,
+    })
+  })
+
+  it('persists day-start equity across a simulated restart', async () => {
+    const stateStore = makeTempStateStore('acct-daily-restart')
+    const now = () => new Date('2026-07-04T10:00:00.000Z')
+    const first = new DailyLossGuard({ maxDailyLossPct: 5 }, { stateStore, now })
+    await first.evaluate(makeContext({ account: { netLiquidation: '100000' } }))
+
+    const restarted = new DailyLossGuard({ maxDailyLossPct: 5 }, { stateStore, now })
+    const result = await restarted.evaluate(makeContext({
+      operation: makePlaceOrderOp({ cashQty: 1_000 }),
+      account: { netLiquidation: '94000' },
+    }))
+
+    expect(result.reason).toBe('Daily loss is 6.0% of day-start equity (limit: 5%)')
+    expect(result.metrics).toEqual({
+      dailyLossPct: 6,
+      maxDailyLossPct: 5,
+      dayStartEquity: 100000,
+      equity: 94000,
+    })
+  })
+
+  it('resets day-start equity across a UTC day boundary', async () => {
+    const stateStore = makeTempStateStore()
+    let currentTime = new Date('2026-07-04T23:59:59.000Z')
+    const now = () => currentTime
+    const guard = new DailyLossGuard({ maxDailyLossPct: 5 }, { stateStore, now })
+    await guard.evaluate(makeContext({ account: { netLiquidation: '100000' } }))
+
+    const beforeMidnight = await guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({ cashQty: 1_000 }),
+      account: { netLiquidation: '94000' },
+    }))
+    expect(beforeMidnight.reason).toBe('Daily loss is 6.0% of day-start equity (limit: 5%)')
+
+    currentTime = new Date('2026-07-05T00:00:01.000Z')
+    const afterMidnight = await guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({ cashQty: 1_000 }),
+      account: { netLiquidation: '94000' },
+    }))
+
+    expect(afterMidnight.reason).toBeUndefined()
+    expect(afterMidnight.metrics).toEqual({
+      dailyLossPct: 0,
+      maxDailyLossPct: 5,
+      dayStartEquity: 94000,
+      equity: 94000,
+    })
+  })
+})
+
+// ==================== ConcentrationGuard ====================
+
+describe('ConcentrationGuard', () => {
+  it('allows order within instrument concentration and reports metrics', () => {
+    const guard = new ConcentrationGuard({ maxInstrumentPct: 25 })
+    const result = guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({ cashQty: 10_000 }),
+      account: { netLiquidation: '100000' },
+    }))
+
+    expect(result).toEqual({
+      metrics: {
+        instrumentPct: 10,
+        maxInstrumentPct: 25,
+        symbol: 'AAPL',
+      },
+    })
+  })
+
+  it('rejects exposure-increasing order above concentration and reports metrics', () => {
+    const guard = new ConcentrationGuard({ maxInstrumentPct: 25 })
+    const result = guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({ cashQty: 30_000 }),
+      account: { netLiquidation: '100000' },
+    }))
+
+    expect(result.reason).toBe('Instrument AAPL would be 30.0% of equity (limit: 25%)')
+    expect(result.metrics).toEqual({
+      instrumentPct: 30,
+      maxInstrumentPct: 25,
+      symbol: 'AAPL',
+    })
+  })
+
+  it('rejects new-symbol LMT quantity order above concentration and reports metrics', () => {
+    const guard = new ConcentrationGuard({ maxInstrumentPct: 25 })
+    const result = guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({
+        symbol: 'NEW_STOCK',
+        orderType: 'LMT',
+        totalQuantity: new Decimal(300),
+        lmtPrice: 100,
+      }),
+      account: { netLiquidation: '100000' },
+    }))
+
+    expect(result.reason).toBe('Instrument NEW_STOCK would be 30.0% of equity (limit: 25%)')
+    expect(result.metrics).toEqual({
+      instrumentPct: 30,
+      maxInstrumentPct: 25,
+      symbol: 'NEW_STOCK',
+    })
+  })
+
+  it('rejects new-symbol STP quantity order valued via auxPrice above concentration', () => {
+    const guard = new ConcentrationGuard({ maxInstrumentPct: 25 })
+    const result = guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({
+        symbol: 'NEW_STOCK',
+        orderType: 'STP',
+        totalQuantity: new Decimal(300),
+        auxPrice: 100,
+      }),
+      account: { netLiquidation: '100000' },
+    }))
+
+    expect(result.reason).toBe('Instrument NEW_STOCK would be 30.0% of equity (limit: 25%)')
+    expect(result.metrics).toEqual({
+      instrumentPct: 30,
+      maxInstrumentPct: 25,
+      symbol: 'NEW_STOCK',
+    })
+  })
+
+  it('allows closePosition and cancelOrder while existing concentration is above the limit', () => {
+    const guard = new ConcentrationGuard({ maxInstrumentPct: 25 })
+    const contract = makeContract({ symbol: 'AAPL' })
+    const positions = [makePosition({ contract, marketValue: '50000' })]
+
+    expect(guard.evaluate(makeContext({
+      operation: { action: 'closePosition', contract },
+      positions,
+      account: { netLiquidation: '100000' },
+    }))).toEqual({
+      metrics: { instrumentPct: null, maxInstrumentPct: 25, symbol: 'unknown' },
+    })
+
+    expect(guard.evaluate(makeContext({
+      operation: { action: 'cancelOrder', orderId: 'ord-1' },
+      positions,
+      account: { netLiquidation: '100000' },
+    }))).toEqual({
+      metrics: { instrumentPct: null, maxInstrumentPct: 25, symbol: 'unknown' },
+    })
+  })
+
+  it('allows exposure-reducing order even when post-fill concentration remains above the limit', () => {
+    const guard = new ConcentrationGuard({ maxInstrumentPct: 25 })
+    const contract = makeContract({ symbol: 'AAPL' })
+    const result = guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({ action: 'SELL', cashQty: 1_000 }),
+      positions: [makePosition({ contract, marketValue: '40000' })],
+      account: { netLiquidation: '100000' },
+    }))
+
+    expect(result.reason).toBeUndefined()
+    expect(result.metrics).toEqual({
+      instrumentPct: 39,
+      maxInstrumentPct: 25,
+      symbol: 'AAPL',
+    })
+  })
+
+  it('allows MKT quantity order for a new symbol when post-fill exposure cannot be estimated', () => {
+    const guard = new ConcentrationGuard({ maxInstrumentPct: 1 })
+    const result = guard.evaluate(makeContext({
+      operation: makePlaceOrderOp({ symbol: 'NEW_STOCK', totalQuantity: new Decimal(100) }),
+    }))
+
+    expect(result).toEqual({
+      metrics: {
+        instrumentPct: null,
+        maxInstrumentPct: 1,
+        symbol: 'NEW_STOCK',
+      },
+    })
+  })
+
+  it('allows modifyOrder regardless of concentration', () => {
+    const guard = new ConcentrationGuard({ maxInstrumentPct: 1 })
+    const result = guard.evaluate(makeContext({
+      operation: { action: 'modifyOrder', orderId: 'ord-1', changes: { lmtPrice: new Decimal(150) } },
+      positions: [makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: '50000' })],
+      account: { netLiquidation: '100000' },
+    }))
+
+    expect(result).toEqual({
+      metrics: { instrumentPct: null, maxInstrumentPct: 1, symbol: 'unknown' },
+    })
+  })
+})
+
 // ==================== Guard Pipeline ====================
 
 describe('createGuardPipeline', () => {
@@ -288,6 +809,16 @@ describe('resolveGuards', () => {
     expect(guards).toHaveLength(2)
     expect(guards[0].name).toBe('max-position-size')
     expect(guards[1].name).toBe('symbol-whitelist')
+  })
+
+  it('resolves portfolio guard types', () => {
+    const guards = resolveGuards([
+      { type: 'max-drawdown', options: { maxDrawdownPct: 10 } },
+      { type: 'daily-loss', options: { maxDailyLossPct: 5 } },
+      { type: 'concentration', options: { maxInstrumentPct: 25 } },
+    ], { accountId: 'mock-paper', stateBaseDir: join(tmpdir(), `openalice-registry-spec-${randomUUID()}`) })
+
+    expect(guards.map(g => g.name)).toEqual(['max-drawdown', 'daily-loss', 'concentration'])
   })
 
   it('skips unknown guard types with a warning', () => {
