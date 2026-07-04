@@ -12,7 +12,8 @@ This runbook is for a developer or AI coding session that needs to start OpenAli
 Safety default for all examples:
 
 ```bash
-cd "$REPO"          # your OpenAlice checkout
+export REPO=/path/to/your/OpenAlice   # your checkout
+cd "$REPO"
 export OPENALICE_HOME=/tmp/openalice-cli-home
 export AQ_LAUNCHER_ROOT=/tmp/openalice-cli-workspaces
 export OA=http://127.0.0.1:47331
@@ -92,7 +93,7 @@ OPENALICE_UTA_URL=http://127.0.0.1:47333 \
 node dist/main.js
 ```
 
-The Docker production Guardian is a separate path in `scripts/guardian/prod.mjs`; it spawns built UTA (`node services/uta/dist/uta.js`) and built Alice (`node dist/main.js`) and watches the same restart flag (`scripts/guardian/prod.mjs:3-22`, `79-83`, `99-135`, `207-260`). That is not what `pnpm start` does.
+The Docker production Guardian is a separate path in `scripts/guardian/prod.mjs`; it spawns built UTA (`node services/uta/dist/uta.js`) and built Alice (`node dist/main.js`) and watches the same restart flag (`scripts/guardian/prod.mjs:3-22`, `79-83`, `99-135`, `207-251`). That is not what `pnpm start` does.
 
 ### 1.3 Enable the MCP HTTP endpoint
 
@@ -512,9 +513,9 @@ Workspace sessions launched by Alice receive `AQ_WS_ID`, `OPENALICE_TOOL_URL`, a
 Tool registration happens in Alice composition root (`src/main.ts:215-253`). The most useful operator-facing groups are:
 
 - Thinking/sandbox tools: expression evaluator and related thinking helpers (`src/main.ts:217`).
-- Trading tools: UTA list/search/read, portfolio, orders, wallet status/log/show, commit/reject/push, order history, sync, and stage/place/modify/close/cancel operations (`src/main.ts:218`; `src/tool/trading.ts:198-831`).
+- Trading tools: UTA list/search/read, portfolio, orders, wallet status/log/show, commit/reject/push, order history, sync, and stage/place/modify/close/cancel operations (`src/main.ts:223-226`; `src/tool/trading.ts:198-831`).
 - Market tools: market search, vendors, market board, equity, ETF, bars, reference/macro/derivatives/indices/economy tools (`src/main.ts:219-251`).
-- News/RSS tools: RSS and news search when enabled (`src/main.ts:223-225`).
+- News/RSS tools: RSS and news search when enabled (`src/main.ts:235-237`).
 - Quant/snapshot/simulation/sector rotation tools (`src/main.ts:232-248`).
 - Workspace tools: `inbox_push`, `inbox_read`, `workspace_path`, `entity_upsert`, `entity_search`, and issue tools (`src/main.ts:100-106`; `src/tool/inbox-push.ts:22`; `src/tool/inbox-read.ts:29`; `src/tool/workspace-path.ts:28`; `src/tool/entity-upsert.ts:20`; `src/tool/entity-search.ts:18`; `src/tool/issue-tools.ts:156-434`).
 
@@ -574,20 +575,22 @@ curl -sS -b "$COOKIE" -X POST "$OA/api/trading/uta/$UTA_ID/wallet/push" | jq .
 
 The UTA live-testing guide says trading-path changes should be exercised through the `alice-uta` CLI after setup (`docs/uta-live-testing.md:12-16`, `49-62`). It also states the safety rules: demo/paper accounts only, agent surface only, and HTTP wallet push stands in for user approval (`docs/uta-live-testing.md:20-26`).
 
-The scenario catalog S1-S12 is in `docs/uta-live-testing.md:69-138`:
+The scenario catalog S1-S12 is in `docs/uta-live-testing.md:64-139` — read
+the source for the full per-scenario procedure and the bug class each one
+guards against. Accurate one-line index:
 
-1. S1 lifecycle sanity: place → approve push → observe fill → cancel if needed.
-2. S2 pending limit order lifecycle.
-3. S3 modify/amend order.
-4. S4 close position.
-5. S5 cancel order.
-6. S6 TP/SL bracket lifecycle.
-7. S7 external order reconciliation.
-8. S8 restart survival.
-9. S9 wallet reject/recover.
-10. S10 partial close.
-11. S11 market data/clock/quote ergonomics.
-12. S12 error ergonomics and broker-specific rejection messages.
+1. S1 — Read-state agreement (account vs positions PnL consistency; rows carry `secType`+`aliceId`).
+2. S2 — Simple lifecycle (marketable limit → `[sync]` fill commit → `order trades` → sell back).
+3. S3 — Hanger stability (deep limit stays `Submitted` across poller passes; cancel records `cancelled`).
+4. S4 — Amendment (`order modify` price AND qty; same full-precision orderId).
+5. S5 — Attached TP/SL (unverified ccxt venue must REFUSE loudly; verified/native venues must show BOTH protective legs).
+6. S6 — Standalone stop (STP tracked via algo-namespace fallback, not mis-terminaled).
+7. S7 — External order observation (`[observed]` commit → takeover → cancel through Alice).
+8. S8 — Restart survival (pending order still tracked/cancellable after UTA restart).
+9. S9 — Partial close (spot must NOT send reduceOnly; perp must).
+10. S10 — Notional entry (`--cashQty`: fill qty ≈ cash/price).
+11. S11 — Error ergonomics (every error actionable for an agent, carries the venue's own message).
+12. S12 — Staging undo (`git reject` → clean status, `user-rejected` with reason recorded).
 
 Use this skeleton for each scenario:
 
