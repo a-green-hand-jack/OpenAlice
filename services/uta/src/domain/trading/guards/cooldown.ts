@@ -1,4 +1,4 @@
-import type { OperationGuard, GuardContext } from './types.js'
+import type { OperationGuard, GuardContext, GuardEvaluation } from './types.js'
 import { getOperationSymbol } from '../git/types.js'
 
 const DEFAULT_MIN_INTERVAL_MS = 60_000
@@ -13,21 +13,29 @@ export class CooldownGuard implements OperationGuard {
   }
 
   check(ctx: GuardContext): string | null {
-    if (ctx.operation.action !== 'placeOrder') return null
+    return this.evaluate(ctx).reason ?? null
+  }
+
+  evaluate(ctx: GuardContext): GuardEvaluation {
+    if (ctx.operation.action !== 'placeOrder') return {}
 
     const symbol = getOperationSymbol(ctx.operation)
     const now = Date.now()
     const lastTime = this.lastTradeTime.get(symbol)
+    let msSinceLast: number | null = null
 
     if (lastTime != null) {
-      const elapsed = now - lastTime
-      if (elapsed < this.minIntervalMs) {
-        const remaining = Math.ceil((this.minIntervalMs - elapsed) / 1000)
-        return `Cooldown active for ${symbol}: ${remaining}s remaining`
+      msSinceLast = now - lastTime
+      if (msSinceLast < this.minIntervalMs) {
+        const remaining = Math.ceil((this.minIntervalMs - msSinceLast) / 1000)
+        return {
+          reason: `Cooldown active for ${symbol}: ${remaining}s remaining`,
+          metrics: { msSinceLast, cooldownMs: this.minIntervalMs },
+        }
       }
     }
 
     this.lastTradeTime.set(symbol, now)
-    return null
+    return { metrics: { msSinceLast, cooldownMs: this.minIntervalMs } }
   }
 }

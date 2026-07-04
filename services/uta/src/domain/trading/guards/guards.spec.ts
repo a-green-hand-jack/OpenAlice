@@ -212,7 +212,10 @@ describe('createGuardPipeline', () => {
     const result = await pipeline(op)
 
     expect(dispatcher).toHaveBeenCalledWith(op)
-    expect(result).toEqual({ success: true })
+    expect(result).toEqual({
+      success: true,
+      guardVerdicts: [{ guard: 'allow-all', verdict: 'pass' }],
+    })
   })
 
   it('blocks when a guard rejects', async () => {
@@ -228,6 +231,9 @@ describe('createGuardPipeline', () => {
     expect(result.success).toBe(false)
     expect(result.error).toContain('[guard:deny-all]')
     expect(result.error).toContain('Denied!')
+    expect(result.guardVerdicts).toEqual([
+      { guard: 'deny-all', verdict: 'reject', reason: 'Denied!' },
+    ])
   })
 
   it('stops at first rejecting guard', async () => {
@@ -239,11 +245,16 @@ describe('createGuardPipeline', () => {
 
     const pipeline = createGuardPipeline(dispatcher, account, [guardA, guardB, guardC])
     const op: Operation = makePlaceOrderOp()
-    await pipeline(op)
+    const result = await pipeline(op) as Record<string, unknown>
 
     expect(guardA.check).toHaveBeenCalled()
     expect(guardB.check).toHaveBeenCalled()
     expect(guardC.check).not.toHaveBeenCalled()
+    expect(result.guardVerdicts).toEqual([
+      { guard: 'A', verdict: 'pass' },
+      { guard: 'B', verdict: 'reject', reason: 'Blocked by B' },
+      { guard: 'C', verdict: 'skipped', reason: 'not evaluated after earlier guard rejection' },
+    ])
   })
 
   it('fetches positions and account info for guard context', async () => {

@@ -1155,6 +1155,119 @@ describe('UTA — guards', () => {
     expect(second.rejected[0].error).toContain('[guard:cooldown]')
     expect(spy).toHaveBeenCalledTimes(1)
   })
+
+  it('records passing verdicts and metrics for every configured guard', async () => {
+    const broker = new MockBroker({
+      accountInfo: {
+        netLiquidation: '100000',
+        totalCashValue: '100000',
+        unrealizedPnL: '0',
+        realizedPnL: '0',
+      },
+    })
+    const { uta } = createUTA(broker, {
+      guards: [
+        { type: 'max-position-size', options: { maxPercentOfEquity: 25 } },
+        { type: 'cooldown', options: { minIntervalMs: 60_000 } },
+        { type: 'symbol-whitelist', options: { symbols: ['AAPL'] } },
+      ],
+    })
+
+    uta.stagePlaceOrder({
+      aliceId: 'mock-paper|AAPL',
+      symbol: 'AAPL',
+      action: 'BUY',
+      orderType: 'MKT',
+      cashQty: '1000',
+    })
+    const prepared = uta.commit('buy AAPL with guard audit')
+    const result = await uta.push()
+
+    expect(result.rejected).toHaveLength(0)
+    expect(result.submitted).toHaveLength(1)
+    expect(result.submitted[0].guardVerdicts).toEqual([
+      {
+        guard: 'max-position-size',
+        verdict: 'pass',
+        metrics: { positionValuePct: 1, threshold: 25 },
+      },
+      {
+        guard: 'cooldown',
+        verdict: 'pass',
+        metrics: { msSinceLast: null, cooldownMs: 60_000 },
+      },
+      {
+        guard: 'symbol-whitelist',
+        verdict: 'pass',
+        metrics: { symbol: 'AAPL' },
+      },
+    ])
+
+    const savedState = JSON.parse(JSON.stringify(uta.exportGitState()))
+    const { uta: restored } = createUTA(new MockBroker(), { savedState })
+    expect(restored.show(prepared.hash)?.results[0].guardVerdicts).toEqual(result.submitted[0].guardVerdicts)
+  })
+
+  it('keeps the legacy guard rejection error and records pass, reject, and skipped verdicts', async () => {
+    const broker = new MockBroker({
+      accountInfo: {
+        netLiquidation: '100000',
+        totalCashValue: '100000',
+        unrealizedPnL: '0',
+        realizedPnL: '0',
+      },
+    })
+    const { uta } = createUTA(broker, {
+      guards: [
+        { type: 'symbol-whitelist', options: { symbols: ['AAPL'] } },
+        { type: 'max-position-size', options: { maxPercentOfEquity: 25 } },
+        { type: 'cooldown', options: { minIntervalMs: 60_000 } },
+      ],
+    })
+
+    uta.stagePlaceOrder({
+      aliceId: 'mock-paper|AAPL',
+      symbol: 'AAPL',
+      action: 'BUY',
+      orderType: 'MKT',
+      cashQty: '30000',
+    })
+    uta.commit('buy AAPL above max-position-size')
+    const result = await uta.push()
+
+    expect(result.submitted).toHaveLength(0)
+    expect(result.rejected).toHaveLength(1)
+    expect(result.rejected[0].error).toBe('[guard:max-position-size] Position for AAPL would be 30.0% of equity (limit: 25%)')
+    expect(result.rejected[0].guardVerdicts).toEqual([
+      {
+        guard: 'symbol-whitelist',
+        verdict: 'pass',
+        metrics: { symbol: 'AAPL' },
+      },
+      {
+        guard: 'max-position-size',
+        verdict: 'reject',
+        reason: 'Position for AAPL would be 30.0% of equity (limit: 25%)',
+        metrics: { positionValuePct: 30, threshold: 25 },
+      },
+      {
+        guard: 'cooldown',
+        verdict: 'skipped',
+        reason: 'not evaluated after earlier guard rejection',
+      },
+    ])
+  })
+
+  it('omits guard verdicts when no guards are configured', async () => {
+    const { uta } = createUTA()
+
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: '1' })
+    uta.commit('buy AAPL without guards')
+    const result = await uta.push()
+
+    expect(result.submitted).toHaveLength(1)
+    expect(result.submitted[0]).not.toHaveProperty('guardVerdicts')
+  })
 })
 
 // ==================== constructor — savedState ====================

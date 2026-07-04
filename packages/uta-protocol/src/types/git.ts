@@ -57,6 +57,19 @@ export type Operation =
 
 export type OperationStatus = 'submitted' | 'filled' | 'rejected' | 'cancelled' | 'user-rejected'
 
+export type GuardVerdictStatus = 'pass' | 'reject' | 'skipped'
+
+export type GuardMetricValue = string | number | boolean | null
+
+export type GuardMetrics = Record<string, GuardMetricValue>
+
+export interface GuardVerdict {
+  guard: string
+  verdict: GuardVerdictStatus
+  reason?: string
+  metrics?: GuardMetrics
+}
+
 export interface OperationResult {
   action: OperationAction
   success: boolean
@@ -73,6 +86,8 @@ export interface OperationResult {
   legs?: PlaceOrderLeg[]
   /** Symbol for per-row attribution in multi-update sync commits (the op carries none). */
   symbol?: string
+  /** Structured audit trail for configured operation guards. Optional for pre-issue-18 commits. */
+  guardVerdicts?: GuardVerdict[]
   raw?: unknown
 }
 

@@ -1,6 +1,6 @@
 import Decimal from 'decimal.js'
 import { UNSET_DECIMAL } from '@traderalice/ibkr'
-import type { OperationGuard, GuardContext } from './types.js'
+import type { OperationGuard, GuardContext, GuardEvaluation } from './types.js'
 
 const DEFAULT_MAX_PERCENT = 25
 
@@ -13,7 +13,11 @@ export class MaxPositionSizeGuard implements OperationGuard {
   }
 
   check(ctx: GuardContext): string | null {
-    if (ctx.operation.action !== 'placeOrder') return null
+    return this.evaluate(ctx).reason ?? null
+  }
+
+  evaluate(ctx: GuardContext): GuardEvaluation {
+    if (ctx.operation.action !== 'placeOrder') return {}
 
     const { positions, account, operation } = ctx
     const symbol = operation.contract.symbol
@@ -34,16 +38,23 @@ export class MaxPositionSizeGuard implements OperationGuard {
     }
     // If we can't estimate (new symbol + qty-based without existing position), allow — broker will validate
 
-    if (addedValue.isZero()) return null
+    if (addedValue.isZero()) return {}
 
     const projectedValue = currentValue.plus(addedValue)
     const netLiq = new Decimal(account.netLiquidation)
     const percent = netLiq.gt(0) ? projectedValue.div(netLiq).mul(100) : new Decimal(0)
-
-    if (percent.gt(this.maxPercent)) {
-      return `Position for ${symbol} would be ${percent.toFixed(1)}% of equity (limit: ${this.maxPercent}%)`
+    const metrics = {
+      positionValuePct: percent.toNumber(),
+      threshold: this.maxPercent,
     }
 
-    return null
+    if (percent.gt(this.maxPercent)) {
+      return {
+        reason: `Position for ${symbol} would be ${percent.toFixed(1)}% of equity (limit: ${this.maxPercent}%)`,
+        metrics,
+      }
+    }
+
+    return { metrics }
   }
 }
