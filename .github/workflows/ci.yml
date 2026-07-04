@@ -26,6 +26,25 @@ jobs:
 
       - run: pnpm test
 
+  anatomy-drift:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Skip the Electron desktop shell — the anatomy check only needs the
+      # repo TypeScript toolchain, and this avoids a large electron download.
+      - run: pnpm install --frozen-lockfile --filter='!@traderalice/desktop'
+
+      - run: pnpm exec tsx tools/check-anatomy-drift.ts --check
+
   # Boots the real `pnpm dev` stack and asserts UTA/Alice/Vite all spawn.
   # Exists to catch cross-platform spawn regressions (e.g. `spawn tsx ENOENT`
   # on Windows) that `pnpm test` can't see — esbuild transpiles, it never
