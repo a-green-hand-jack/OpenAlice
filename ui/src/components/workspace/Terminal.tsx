@@ -233,10 +233,22 @@ export function TerminalView(props: TerminalViewProps): ReactElement {
   const themeProfileRef = useRef(terminalThemeProfile);
   themeProfileRef.current = terminalThemeProfile;
   const outputThemeRewriterRef = useRef(new TerminalOutputThemeRewriter());
+  const appliedThemeVariantRef = useRef(terminalThemeProfile.variant);
   const termRef = useRef<Xterm | null>(null);
 
   useEffect(() => {
-    if (termRef.current) termRef.current.options.theme = terminalThemeProfile.xtermTheme;
+    const term = termRef.current;
+    if (!term) return;
+    term.options.theme = terminalThemeProfile.xtermTheme;
+
+    if (appliedThemeVariantRef.current === terminalThemeProfile.variant) return;
+    appliedThemeVariantRef.current = terminalThemeProfile.variant;
+    outputThemeRewriterRef.current.reset();
+    // xterm stores parsed color attributes in its buffer. Switching only the
+    // palette cannot repaint scrollback that was previously light-mode
+    // rewritten, so reattach and let the server replay raw bytes through the
+    // active profile.
+    connectRef.current?.();
   }, [terminalThemeProfile]);
 
   useEffect(() => {
@@ -426,6 +438,13 @@ export function TerminalView(props: TerminalViewProps): ReactElement {
 
     function connect(): void {
       if (teardown) return;
+      const previousWs = activeWs;
+      activeWs = null;
+      try {
+        previousWs?.close();
+      } catch {
+        // Best-effort detach before a deliberate reattach/replay.
+      }
       // Electron app mode has a preload PTY bridge, so it can bypass the
       // renderer -> localhost WebSocket hop. Browser/dev/Docker keep the
       // WebSocket path with the exact same xterm lifecycle.

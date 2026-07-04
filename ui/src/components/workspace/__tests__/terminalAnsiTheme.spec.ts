@@ -41,4 +41,14 @@ describe('terminal ANSI theme rewriting', () => {
     expect(decoder.decode(first)).toBe('')
     expect(decoder.decode(second)).toBe('\x1b[48;2;244;241;232mhello')
   })
+
+  it('drops carried SGR state when reset before a profile replay', () => {
+    const rewriter = new TerminalOutputThemeRewriter()
+    const profile = terminalThemeProfileForVariant('light')
+    const first = rewriter.rewrite(new TextEncoder().encode('\x1b[48;5;'), profile)
+    rewriter.reset()
+    const second = rewriter.rewrite(new TextEncoder().encode('8mhello'), profile)
+    expect(decoder.decode(first)).toBe('')
+    expect(decoder.decode(second)).toBe('8mhello')
+  })
 })

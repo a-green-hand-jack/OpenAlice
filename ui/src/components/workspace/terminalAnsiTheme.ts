@@ -12,9 +12,14 @@ export class TerminalOutputThemeRewriter {
   private readonly encoder = new TextEncoder()
   private carry = ''
 
+  reset(): void {
+    this.carry = ''
+    this.decoder.decode()
+  }
+
   rewrite(data: Uint8Array, profile: TerminalThemeProfile): Uint8Array {
     if (!profile.ansiRewrite.enabled) {
-      this.carry = ''
+      this.reset()
       return data
     }
 
