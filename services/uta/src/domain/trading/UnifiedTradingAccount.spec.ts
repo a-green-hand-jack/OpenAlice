@@ -1006,6 +1006,50 @@ describe('UTA — guards', () => {
 
     expect(spy).toHaveBeenCalledTimes(1)
   })
+
+  it('rejects max-position-size violations at push without calling the broker', async () => {
+    const { uta, broker } = createUTA(undefined, {
+      guards: [{ type: 'max-position-size', options: { maxPercentOfEquity: 25 } }],
+    })
+    const spy = vi.spyOn(broker, 'placeOrder')
+
+    uta.stagePlaceOrder({
+      aliceId: 'mock-paper|AAPL',
+      symbol: 'AAPL',
+      action: 'BUY',
+      orderType: 'MKT',
+      cashQty: '30000',
+    })
+    uta.commit('buy AAPL above max-position-size')
+    const result = await uta.push()
+
+    expect(result.submitted).toHaveLength(0)
+    expect(result.rejected).toHaveLength(1)
+    expect(result.rejected[0].error).toContain('[guard:max-position-size]')
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('rejects cooldown violations at push without executing the repeated order', async () => {
+    const { uta, broker } = createUTA(undefined, {
+      guards: [{ type: 'cooldown', options: { minIntervalMs: 60_000 } }],
+    })
+    const spy = vi.spyOn(broker, 'placeOrder')
+
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: '1' })
+    uta.commit('first AAPL buy')
+    const first = await uta.push()
+    expect(first.rejected).toHaveLength(0)
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: '1' })
+    uta.commit('second AAPL buy too soon')
+    const second = await uta.push()
+
+    expect(second.submitted).toHaveLength(0)
+    expect(second.rejected).toHaveLength(1)
+    expect(second.rejected[0].error).toContain('[guard:cooldown]')
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
 })
 
 // ==================== constructor — savedState ====================
