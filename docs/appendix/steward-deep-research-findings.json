@@ -1,0 +1,130 @@
+{
+ "summary": "在通过三票对抗验证的证据范围内，\"AI agent 长期资产管理（Steward）\"版图清晰地分成两类，且没有任何项目实现了\"渐进授权 + 可审计的长期 steward\"：托管产品（Public.com Agents、Arta AI、PortfolioPilot）全部闭源、各自只占据授权光谱上的一个孤立点（一次性批准工作流 / 建议-only / read-only），不可作代码基座；agent 交易基础设施（Alpaca 官方 MCP server、Coinbase AgentKit 与 Agentic Wallets、Robinhood 的 broker 侧 MCP 端点）提供完整的观察+执行工具面，但授权模型要么是环境变量二元开关、要么是\"预设权限后免逐笔审批\"的事前限额护栏——与 Steward 的默认保守、渐进升级、审批链方向相反，审计/记忆机制在文档中一律缺失。MCP 已被三家一方支持（Robinhood、Alpaca、Coinbase）确立为 broker↔agent 的事实互操作层，直接验证了 OpenAlice\"Workspace 跑原生 agent CLI + MCP 注入\"的架构选型。因此可验证的结论是：以 OpenAlice 为骨架、把 Alpaca MCP / AgentKit 作为可插拔的执行与数据轨道，而 Steward 的五大核心（长期观察循环、风险状态机、渐进授权、审计链、记忆复盘）在所有被验证组件中均无现成实现，只能在 OpenAlice/UTA 侧自建（UTA 已有的 git-like trade approval state 是现成起点）。注意：开源研究框架（FinRL、TradingAgents、FinRobot、Qlib/RD-Agent、OpenBB 等）没有产生通过验证的 claim，问题 B（单一开源起步项目）无法凭本轮验证证据回答。",
+ "findings": [
+  {
+   "claim": "Public.com Agents 是券商自营的闭源托管产品：会话式 AI 工具，用于用户自定义的循环交易指令；其授权机制是粗粒度的一次性批准——每个 Agent 上线前须经用户批准，之后按既定工作流自动执行（可随时编辑/暂停/关闭），不存在 read-only→paper→live 的渐进授权分级，也无 paper/模拟模式。不可作为 Steward 代码基座，仅作托管产品参照物。",
+   "confidence": "high",
+   "sources": [
+    "https://public.com/ai-agents",
+    "https://www.prnewswire.com/news-releases/public-becomes-the-first-brokerage-to-introduce-ai-agents-for-your-portfolio-302729050.html"
+   ],
+   "evidence": "官方页面原文：\"Agents are an AI-powered conversational tool that allows you to enter instructions for a set of self-directed, recurring transactions\"；\"You approve every Agent before it goes live. You can also go back at any time to edit their logic, pause operations, or shut them down entirely\"；\"Nothing executes until you approve it\"。2026-03-31 上线（PR Newswire）。GitHub 无任何 Public.com Agents 代码；页面无 paper trading / read-only / 分级权限的任何描述。",
+   "vote": "合并 claims [1][2]，均 3-0"
+  },
+  {
+   "claim": "Arta AI（2025-04 发布）是闭源托管财富管理产品中的建议/研究型 agent 套件（Investment Planner / Product Specialist / Research Analyst 三个 agent），定位为分析组合、建议投资、按需洞察，无自主下单执行权；技术栈为 agentic systems + function calling + RAG + 凸优化 + 传统 ML，未开源任何代码、未提及 MCP；人类监督仅以\"可预约真人专家\"形式存在，无渐进授权、风险状态机、审批流或决策审计链等任何 Steward 式机制。",
+   "confidence": "high",
+   "sources": [
+    "https://artafinance.com/global/insights/meet-arta-ai-private-wealth-guided-by-ai-agents"
+   ],
+   "evidence": "官方原文：\"a suite of powerful AI agents that can analyze portfolios, suggest investments, and provide financial insights on demand\"；\"Arta AI uses a combination of technologies, including agentic systems, function calling, retrieval-augmented generation (RAG), convex optimization, and traditional machine learning\"；\"if you want to talk to a real human expert, you can simply schedule time with our team\"。GitHub 无 Arta Finance org/repo；截至 2026-07 无开源或 developer platform 动向。三个 agent 均为建议/研究型，文章未声称任何执行权。",
+   "vote": "合并 claims [3][4][5]，均 3-0"
+  },
+  {
+   "claim": "PortfolioPilot（Global Predictions Inc.，SEC 注册投资顾问 RIA）是托管建议产品：对连接的券商/金融账户仅有 read-only 访问，不执行交易——处于 Steward 授权阶梯最保守一端（read-only），但没有任何向执行升级的路径；非开源（两个 GitHub org 均零公开仓库，其 MCP server 为托管端点而非发布源码）。",
+   "confidence": "high",
+   "sources": [
+    "https://portfoliopilot.com/",
+    "https://adviserinfo.sec.gov/firm/summary/327520"
+   ],
+   "evidence": "官网原文：\"PortfolioPilot is a technology product of Global Predictions Inc., a Registered Investment Advisor\"；\"We have read-only access to any connected accounts to help you stay in control\"；FAQ 对是否代客执行交易回答\"No, you stay fully in control of your own finances\"。SEC IAPD 确认 RIA 注册（2023-08 起）。github.com/globalpredictions 与 github.com/global-predictions 均无公开仓库。",
+   "vote": "合并 claims [6][7]，均 3-0"
+  },
+  {
+   "claim": "Robinhood 走的是 broker 侧 agent 基础设施路线：接入方式是 MCP 协议，用户把一个 URL（https://agent.robinhood.com/mcp/trading）粘贴进 agent 的 MCP 配置即可连接大多数 agent（第三方指南已验证 Claude Code、Claude Desktop、Cursor、ChatGPT、Codex 可连），与 MCP/agent CLI 生态直接兼容。注意：仅此连接机制通过验证；其 GA 状态、逐笔审批细节、免责声明措辞等主张均被证伪（0-3），不应引用。",
+   "confidence": "high",
+   "sources": [
+    "https://robinhood.com/us/en/agentic-trading/"
+   ],
+   "evidence": "官方页面原文：\"Connect via MCP: Paste one URL into your MCP config to connect most agents out of the box\"。第三方指南记录 `claude mcp add robinhood-trading --transport http https://agent.robinhood.com/mcp/trading` 等可用连接。已知限定：agent 可跨账户读取，但只能在专用 Agentic 账户内交易——限定的是交易范围，不影响连接机制结论。",
+   "vote": "claim [0]，3-0（同主题另三条 claim 被 0-3 证伪）"
+  },
+  {
+   "claim": "Alpaca 官方 MCP server（github.com/alpacahq/alpaca-mcp-server，MIT，Python 3.10+，~857 stars，活跃维护，2026-04 发布 V2 重写）是 broker 侧开源 agent 交易基础设施（工具层）：以 MCP 协议把 Alpaca 交易与行情 API 暴露给 LLM/agent，65 个工具覆盖账户/组合查询、股票·期权·加密下单（市价/限价/止损/追踪止损/括号单/多腿价差）、历史与实时行情、筛选器与自选股——完整的观察+执行工具面，但它不是长期自主运行的资产管理系统，无长驻循环或调度。",
+   "confidence": "high",
+   "sources": [
+    "https://github.com/alpacahq/alpaca-mcp-server",
+    "https://docs.alpaca.markets/us/docs/alpaca-mcp-server",
+    "https://alpaca.markets/blog/introducing-official-mcp-server-enabling-multi-market-trading-with-ai-interfaces/"
+   ],
+   "evidence": "Repo 描述：\"Alpaca's official MCP Server lets you trade stocks, ETFs, crypto, and options, run data analysis, and build strategies in plain English directly from your favorite LLM tools and IDEs\"。官方文档：\"exposes 65 tools across the Trading and Market Data APIs\"（GitHub README 写 50+，为版本差异非矛盾）。MIT 许可证、alpacahq 官方 org、官网/文档/博客三方印证官方身份。",
+   "vote": "合并 claims [8][16][17]，均 3-0"
+  },
+  {
+   "claim": "Alpaca MCP server 相对 Steward 意图的核心缺口：paper/live 仅靠单一环境变量 ALPACA_PAPER_TRADE 二元切换（默认 paper，设 false 即实盘）——不是渐进授权分级；订单直接对 Alpaca Trading API 执行，无内建审批工作流、风险状态机、决策审计链或记忆机制，官方安全模型主要是\"人工审阅 AI 建议订单\"的警示（外加 paper 默认与 prompt-injection 信任边界中间件，但两者都不构成审批门或审计日志）。ALPACA_TOOLSETS 可静态过滤工具集（事实上的 read-only 部署档位），但属部署期工具裁剪，非运行时授权阶梯。",
+   "confidence": "high",
+   "sources": [
+    "https://github.com/alpacahq/alpaca-mcp-server",
+    "https://docs.alpaca.markets/us/docs/alpaca-mcp-server",
+    "https://alpaca.markets/blog/alpaca-launches-mcp-server-v2"
+   ],
+   "evidence": "README 配置表：ALPACA_PAPER_TRADE, Default: true, \"Set to false for live trading\"。文档原文：\"Orders execute directly against Alpaca's Trading API. Review AI-suggested orders before confirming\"；README 安全须知：\"Review all actions proposed by the LLM carefully\"。对 repo 全部文档 grep audit/approv/memory 零相关命中；V2（2026-04）扩到 61/65 工具并加 ALPACA_TOOLSETS，仍无确认门、风险状态机或审计日志。",
+   "vote": "合并 claims [9][10][18][19]：三条 3-0，一条 2-1"
+  },
+  {
+   "claim": "Coinbase AgentKit（github.com/coinbase/agentkit，Apache-2.0，TS+Python，~1.3k stars，活跃）定位为给 AI agent 配 crypto 钱包与链上动作的基础设施——属\"agent 交易基础设施\"类，非组合管理/steward 产品；一方集成 MCP（@coinbase/agentkit-model-context-protocol，stdio MCP server，可被 Claude 等 MCP client 消费）及 LangChain、Vercel AI SDK（仅 TS）、OpenAI Agents SDK、Strands Agents（仅 Python）等框架，可直接插入 OpenAlice 式 MCP/agent-CLI 架构。限定：Eliza 集成实为 elizaOS 社区维护（非严格一方）；其工具面仅限 crypto/链上钱包动作，MCP 兼容不等于券商证券执行能力。",
+   "confidence": "high",
+   "sources": [
+    "https://github.com/coinbase/agentkit",
+    "https://docs.cdp.coinbase.com/agent-kit/welcome",
+    "https://docs.cdp.coinbase.com/agent-kit/core-concepts/model-context-protocol"
+   ],
+   "evidence": "Repo 原文：\"Every AI Agent deserves a wallet\"，自述为 \"Coinbase Developer Platform's toolkit for giving AI agents a crypto wallet and onchain interactions\"，\"framework-agnostic\"、\"wallet-agnostic\"。Monorepo 目录实证一方扩展：typescript/framework-extensions/{langchain, model-context-protocol, vercel-ai-sdk}；python/framework-extensions/{langchain, openai-agents-sdk, strands-agents}。CDP 官方文档确认 MCP 扩展把链上 action 暴露为 MCP tools。",
+   "vote": "合并 claims [11][12]，均 3-0（另一条关于 AgentKit 缺审批/审计的 claim 1-2 被否，见 caveats）"
+  },
+  {
+   "claim": "Coinbase Agentic Wallets（2026-02-11 发布）是专为 AI agent 构建的托管钱包基础设施（从 AgentKit「把钱包构建进 agent」演进到「直接给任何 agent 配钱包」），风险边界是可编程限额型事前护栏：session 消费上限、单笔交易限额、私钥 enclave 隔离（永不暴露给 agent 的 prompt/LLM）、内置 KYT 合规筛查——属 ex-ante permission scoping。其明确设计哲学是\"预设权限后无需逐笔审批\"的完全自主运行（官方例：agent 凌晨 3 点自动 rebalance、no approval needed），与 Steward\"默认保守、每步升级需审批\"方向相反：它解决执行侧自主性，不提供 Observe→Operate 观察循环、人工审批工作流或渐进授权状态机。",
+   "confidence": "high",
+   "sources": [
+    "https://www.coinbase.com/developer-platform/discover/launches/agentic-wallets",
+    "https://www.theblock.co/post/389524",
+    "https://docs.cdp.coinbase.com/wallets/using-wallets/spend-permissions"
+   ],
+   "evidence": "官方发布页：\"Agentic Wallets are the first wallet infrastructure built specifically for agents… with built-in security guardrails and the battle-tested x402 protocol\"；\"Over a year ago, we launched AgentKit… now… to give any agent a wallet\"（AgentKit 2024-11-08 发布，时间线吻合）。The Block 逐字引用：\"Your agent detects a better yield opportunity at 3am? It rebalances automatically, no approval needed because you've already set permissions and controls\"，并引 Coinbase 框架\"From tools that require constant human oversight to autonomous systems that operate independently\"。CDP Spend Permissions 文档确认为预配置限额模型，无 pending-approval 状态、无分级授权档位；独立报道将 human-in-the-loop 检查点归于竞品（Human.tech、MoonPay+Ledger）以作对比。",
+   "vote": "合并 claims [13][14][15]，均 3-0"
+  },
+  {
+   "claim": "【问题 A 答案】在通过验证的版图内，没有任何项目实现\"渐进授权 + 可审计的长期 steward\"。分类：托管产品 = Public.com Agents（一次性批准后自动执行）、Arta AI（建议/研究-only）、PortfolioPilot（read-only 建议）——三者各占授权光谱一个孤立点，均闭源不可作基座；agent 交易基础设施 = Alpaca MCP（二元 paper/live 开关、无审批/审计）、Coinbase AgentKit + Agentic Wallets（事前限额护栏、明确反逐笔审批哲学）、Robinhood MCP 端点（broker 侧 MCP 路线）——提供执行轨道但把风险审查与审计责任外推给使用方。渐进授权阶梯、审批链、决策审计、记忆复盘四项在所有被验证对象中均无完整实现。",
+   "confidence": "high",
+   "sources": [
+    "https://public.com/ai-agents",
+    "https://artafinance.com/global/insights/meet-arta-ai-private-wealth-guided-by-ai-agents",
+    "https://portfoliopilot.com/",
+    "https://github.com/alpacahq/alpaca-mcp-server",
+    "https://github.com/coinbase/agentkit",
+    "https://www.coinbase.com/developer-platform/discover/launches/agentic-wallets",
+    "https://robinhood.com/us/en/agentic-trading/"
+   ],
+   "evidence": "综合前述全部一手来源：Public 的授权是 approve-then-auto-execute 一级；Arta 无执行权也无审批/审计机制；PortfolioPilot 停在 read-only 无升级路径；Alpaca MCP 文档零审批/审计/记忆命中且订单直连交易 API；Coinbase 官方原话\"no approval needed\"；Robinhood 仅验证了 MCP 接入机制。20 条通过验证的 claim 中没有一条指向任何项目具备 read-only→paper→small-live-with-approval→limited-autonomy 式状态机或决策审计链。",
+   "vote": "综合发现，基于 20 条 3-0/2-1 已验证 claim"
+  },
+  {
+   "claim": "【问题 C 可验证部分】MCP 已是 broker↔agent 的事实互操作层——Robinhood（托管 MCP 端点）、Alpaca（开源 MCP server）、Coinbase AgentKit（一方 MCP 扩展）三家一方支持，这直接验证了 OpenAlice\"原生 agent CLI + MCP 注入\"架构的前瞻性：Alpaca MCP 可作美股/期权/加密的观察+执行轨道并入（与 OpenAlice 已有 alpaca broker 并行或替换），AgentKit 可作链上执行轨道；但两者都只是薄工具桥，Steward 五大缺口（长期观察循环、风险状态机、渐进授权、审计链、记忆复盘）在全部被验证组件中无现成实现——这些必须在 OpenAlice/UTA 侧自建，且 UTA 现有的 git-like trade approval state + paper/demo 账户 + 多 broker 抽象正是被验证生态中唯一接近审批链雏形的资产。",
+   "confidence": "high",
+   "sources": [
+    "https://robinhood.com/us/en/agentic-trading/",
+    "https://docs.alpaca.markets/us/docs/alpaca-mcp-server",
+    "https://docs.cdp.coinbase.com/agent-kit/core-concepts/model-context-protocol"
+   ],
+   "evidence": "三家一方 MCP 支持均由一手来源验证（见前述各 finding 的逐字引文）。缺口判断来自已验证的缺失性 claim：Alpaca 文档 grep 零审批/审计/记忆命中（3-0）；Coinbase 官方哲学\"no approval needed\"（3-0）；托管产品无一提供可复用代码。关于 UTA 的定位属本综合的推论（OpenAlice 自身架构来自项目内部知识，非本轮外部验证对象）。",
+   "vote": "综合发现；MCP 互操作事实部分 3-0，组合推荐部分为推论"
+  },
+  {
+   "claim": "【问题 B/D 的诚实边界】基于本轮通过验证的证据，无法推荐任何单一开源项目作为 Steward 直接基座：被验证的开源件全部是薄工具桥（Alpaca MCP）或执行基建（AgentKit），无一具备长期运行的 Observe→Operate 循环；而候选研究框架（FinRL、TradingAgents、FinRobot、Qlib/RD-Agent、OpenBB、Hummingbot、Freqtrade 等）没有产生任何通过三票验证的 claim，其许可证、活跃度与长期运行适配性未被本轮证实。因此当前唯一有证据支撑的路线是：OpenAlice 为骨架 + broker 侧 MCP 基础设施为可插拔轨道 + Steward 核心自建；\"从某开源研究框架起步\"的备选路线需补充一轮针对开源框架的定向验证后才能给出。",
+   "confidence": "medium",
+   "sources": [
+    "https://github.com/alpacahq/alpaca-mcp-server",
+    "https://github.com/coinbase/agentkit"
+   ],
+   "evidence": "推论依据：本轮 20 条存活 claim 全部集中于 6 个商业产品/基础设施（Public、Arta、PortfolioPilot、Robinhood、Alpaca、Coinbase），对研究型开源框架的覆盖为零——这是证据缺口而非\"这些框架不合格\"的证明。已验证部分（工具桥无长驻循环、无审批/审计）为 3-0，但\"无单一基座可推荐\"是从覆盖不完整的证据集推出的保守结论，故降为 medium。",
+   "vote": "综合发现，基于证据覆盖范围的保守推论"
+  }
+ ],
+ "caveats": "（1）覆盖缺口是本轮最大限制：任务清单中的 OpenBB、FinRobot、TradingAgents、FinRL、Microsoft RD-Agent/Qlib、Magnifi、Composer、Hummingbot、Freqtrade、NexusTrade、lumibot 等开源研究/回测框架没有任何通过三票验证的 claim 存活，问题 B（单一开源起步项目）与问题 C 中\"用 FinRL/Qlib 补策略研究、用 TradingAgents 补决策结构\"的组合评估无法凭本轮证据回答——报告对这些项目的任何断言都需另行验证。（2）Robinhood 部分被大幅证伪：其 GA 可用状态（非 waitlist）、\"无逐笔审批\"、\"平台不监控/不审计\"三条 claim 均 0-3 被否，仅 MCP 接入机制存活——引用 Robinhood 时只能谈 MCP 路线，不能谈其授权/责任模型细节。（3）AgentKit\"文档无审批工作流/审计日志\"的缺失性 claim 以 1-2 被否，说明 AgentKit 仓库内部的护栏故事有争议（可能存在部分机制），对 AgentKit 的缺口描述应比对 Agentic Wallets 的更谨慎。（4）多条 claim 的一手来源是厂商营销页（Coinbase 发布页曾 403、经搜索索引+独立媒体交叉确认；\"first wallet infrastructure\"等最高级表述是厂商定位而非事实）；描述性 claim 可用，但不应转述其评价性措辞。（5）时效性强：Agentic Wallets 2026-02、Public Agents 2026-03、Alpaca MCP V2 2026-04 均为近几个月发布，验证截至 2026-07-03，工具数（50+/61/65）等细节随版本漂移。（6）Alpaca\"paper/live 仅一级开关\"claim 为 2-1 通过，且 ALPACA_TOOLSETS 提供了粗粒度的部署期 read-only 档位——\"仅此一级\"是对运行时授权阶梯的准确刻画，但不宜绝对化。（7）关于 OpenAlice/UTA 自身能力（git-like approval state 等）的表述来自项目内部知识，不在本轮外部验证范围内。",
+ "openQuestions": [
+  "开源研究框架侧完全未验证：FinRL、TradingAgents、FinRobot、Qlib/RD-Agent、OpenBB（含 Workspace MCP/\"Rita\"）的许可证、活跃度、是否支持长期运行 vs 一次性回测、与 MCP 生态的兼容性各是什么？其中哪个（若有）适合作为 Steward 策略研究/复盘环节的现成组件？需要一轮针对开源框架的定向调研补齐问题 B/C。",
+  "Robinhood Agentic Trading 的真实授权与审计模型是什么（是否 GA、专用 Agentic 账户的资金/品种边界、有无逐笔确认或事后审计接口）？三条相关 claim 被证伪后这一块成为版图中最大的事实空白。",
+  "Coinbase 的策略引擎原语（session caps、spend permissions、enclave 签名前策略检查）虽然设计哲学与 Steward 相反，能否被反向借用为渐进授权阶梯中\"limited autonomy\"一档的技术底座（即在 OpenAlice 侧加审批状态机、把 Coinbase 限额作为最后一道硬护栏）？",
+  "版图中是否存在任何真正实现了长期 Observe→Operate 循环 + 记忆复盘的项目（如 NexusTrade、Composer 的自动化层、或 2026 年新出现的 steward 类开源项目）？本轮没有任何 claim 正面或反面验证过这一点。"
+ ]
+}
