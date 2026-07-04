@@ -57,6 +57,11 @@ const cancelOrderSchema = z.object({
   message,
 })
 
+const riskStateSchema = z.object({
+  state: z.enum(['NORMAL', 'CAUTIOUS', 'READ_ONLY']),
+  reason: z.string().min(1).optional(),
+})
+
 /** HTTP status mapping for one-shot order pipeline failures. */
 const PHASE_STATUS: Record<OrderEntryPhase, 400 | 500> = {
   stage: 400,
@@ -213,6 +218,22 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
     const id = c.req.param('id')
     const result = await ctx.utaManager.reconnectUTA(id)
     return c.json(result, result.success ? 200 : 500)
+  })
+
+  // Human-only recovery/tightening route. No Alice-side AI tool is registered
+  // for this surface; it shares the manual HTTP approval class with wallet push.
+  app.post('/uta/:id/risk-state', async (c) => {
+    const uta = ctx.utaManager.get(c.req.param('id'))
+    if (!uta) return c.json({ error: 'Account not found' }, 404)
+    let body: z.infer<typeof riskStateSchema>
+    try {
+      body = riskStateSchema.parse(await c.req.json())
+    } catch (err) {
+      return c.json({ error: err instanceof z.ZodError ? err.message : String(err) }, 400)
+    }
+    const reason = body.reason ?? `Human set risk state to ${body.state}`
+    const riskState = await uta.setRiskState(body.state, reason)
+    return c.json({ riskState })
   })
 
   // Force broker state sync. The AI tool calls this when it suspects

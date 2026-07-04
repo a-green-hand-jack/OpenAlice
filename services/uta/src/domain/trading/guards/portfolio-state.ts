@@ -71,9 +71,10 @@ export function createPortfolioGuardStateStore(
 
     update(mutator) {
       const nextWrite = writeChain.then(async () => {
-        const draft = cloneState(await readState())
+        const current = await readState()
+        const draft = cloneState(current)
         const next = normalize(mutator(draft) ?? draft)
-        await writeState(next)
+        if (!sameState(current, next)) await writeState(next)
         return next
       })
       writeChain = nextWrite.then(() => undefined, () => undefined)
@@ -89,8 +90,10 @@ export function createInMemoryPortfolioGuardStateStore(): PortfolioGuardStateSto
       return cloneState(state)
     },
     async update(mutator) {
-      const draft = cloneState(state)
-      state = normalize(mutator(draft) ?? draft)
+      const current = cloneState(state)
+      const draft = cloneState(current)
+      const next = normalize(mutator(draft) ?? draft)
+      if (!sameState(current, next)) state = next
       return cloneState(state)
     },
   }
@@ -106,6 +109,13 @@ function cloneState(state: PortfolioGuardState): PortfolioGuardState {
     ...(state.maxDrawdown ? { maxDrawdown: { ...state.maxDrawdown } } : {}),
     ...(state.dailyLoss ? { dailyLoss: { ...state.dailyLoss } } : {}),
   }
+}
+
+function sameState(a: PortfolioGuardState, b: PortfolioGuardState): boolean {
+  return a.version === b.version &&
+    a.maxDrawdown?.highWaterMark === b.maxDrawdown?.highWaterMark &&
+    a.dailyLoss?.utcDate === b.dailyLoss?.utcDate &&
+    a.dailyLoss?.dayStartEquity === b.dailyLoss?.dayStartEquity
 }
 
 function normalize(raw: unknown): PortfolioGuardState {

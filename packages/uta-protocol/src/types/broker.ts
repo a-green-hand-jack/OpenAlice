@@ -353,6 +353,31 @@ export interface Bar {
 
 export type BrokerHealth = 'healthy' | 'degraded' | 'offline'
 
+export type RiskState = 'NORMAL' | 'CAUTIOUS' | 'READ_ONLY' | 'HALT'
+
+export type RiskStateActor = 'auto' | 'human'
+
+export type RiskStateMetricValue = string | number | boolean | null
+
+export type RiskStateMetrics = Record<string, RiskStateMetricValue>
+
+export interface RiskStateTransition {
+  from: RiskState
+  to: RiskState
+  by: RiskStateActor
+  reason: string
+  metrics?: RiskStateMetrics
+  at: string
+}
+
+export interface RiskStateInfo {
+  state: RiskState
+  reason?: string
+  metrics?: RiskStateMetrics
+  updatedAt?: string
+  history: RiskStateTransition[]
+}
+
 /**
  * Operational reach — the capability ladder a UTA can currently climb. Health
  * is NOT a single "connected?" boolean: connecting, reading account data, and
@@ -396,6 +421,8 @@ export interface BrokerHealthInfo {
    *  `status`/`reach` alone can't distinguish it from a genuinely-ready account. */
   connecting: boolean
   disabled: boolean
+  /** Per-account trading risk state. Additive so older SDK callers can ignore it. */
+  riskState?: RiskStateInfo
 }
 
 // ==================== Account capabilities ====================
