@@ -38,7 +38,8 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
 - `webui/` - Hono web plugin, admin-token middleware, `/api/*` routes, and
   workspace WebSocket/IPCs. `WebPlugin` starts at `src/webui/plugin.ts:73-94`;
   core API routes are `src/webui/plugin.ts:221-245`; workspace routes are
-  `src/webui/plugin.ts:250-263`; trading proxy is `src/webui/routes/trading-proxy.ts:32-41`.
+  `src/webui/plugin.ts:250-263`; trading proxy is `src/webui/routes/trading-proxy.ts:32-41`;
+  event ingest's external/internal token gate is `src/webui/routes/events.ts:42-60`.
 - `migrations/` - versioned transformations for persisted user state. Registry:
   `src/migrations/registry.ts:27-32`; runner:
   `src/migrations/runner.ts:121-143`.

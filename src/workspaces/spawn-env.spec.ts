@@ -64,6 +64,33 @@ describe('buildSpawnEnv', () => {
     expect(out['OPENALICE_TOOL_SOCKET']).toBe('/tmp/current.sock')
   })
 
+  it('strips event-ingest secrets and bridge URL from the parent env', () => {
+    const previous = {
+      internal: process.env['OPENALICE_INTERNAL_EVENT_TOKEN'],
+      ingest: process.env['OPENALICE_EVENT_INGEST_TOKEN'],
+      url: process.env['OPENALICE_EVENT_INGEST_URL'],
+    }
+    try {
+      process.env['OPENALICE_INTERNAL_EVENT_TOKEN'] = 'internal-secret'
+      process.env['OPENALICE_EVENT_INGEST_TOKEN'] = 'uta-secret'
+      process.env['OPENALICE_EVENT_INGEST_URL'] = 'http://127.0.0.1:47331/api/events/ingest'
+
+      const out = buildSpawnEnv(process.env, { KEEP: 'safe' })
+
+      expect(out['OPENALICE_INTERNAL_EVENT_TOKEN']).toBeUndefined()
+      expect(out['OPENALICE_EVENT_INGEST_TOKEN']).toBeUndefined()
+      expect(out['OPENALICE_EVENT_INGEST_URL']).toBeUndefined()
+      expect(out['KEEP']).toBe('safe')
+    } finally {
+      if (previous.internal === undefined) delete process.env['OPENALICE_INTERNAL_EVENT_TOKEN']
+      else process.env['OPENALICE_INTERNAL_EVENT_TOKEN'] = previous.internal
+      if (previous.ingest === undefined) delete process.env['OPENALICE_EVENT_INGEST_TOKEN']
+      else process.env['OPENALICE_EVENT_INGEST_TOKEN'] = previous.ingest
+      if (previous.url === undefined) delete process.env['OPENALICE_EVENT_INGEST_URL']
+      else process.env['OPENALICE_EVENT_INGEST_URL'] = previous.url
+    }
+  })
+
   it('defaults terminal locale to UTF-8 without overriding explicit locale', () => {
     expect(buildSpawnEnv({})['LANG']).toBe('en_US.UTF-8')
     expect(buildSpawnEnv({})['LC_CTYPE']).toBe('en_US.UTF-8')

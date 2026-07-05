@@ -12,8 +12,9 @@ state, or ownership.
 
 - Guardian starts the dev stack in dependency order: UTA, Alice, then Vite.
   The dev entry point is `scripts/guardian/dev.ts:33`, with the UTA readiness
-  gate at `scripts/guardian/dev.ts:91-99` and the restart flag watcher at
-  `scripts/guardian/dev.ts:157-162`.
+  gate at `scripts/guardian/dev.ts:100-108`, the internal UTA→Alice event
+  token injection at `scripts/guardian/dev.ts:82-96`, and the restart flag watcher at
+  `scripts/guardian/dev.ts:169-174`.
 
 - Alice is the agent runtime under `src/`. Its composition root is
   `src/main.ts:76`, and its assembled `EngineContext` is `src/main.ts:364-376`.
@@ -22,7 +23,9 @@ state, or ownership.
 - UTA is the co-located broker carrier under `services/uta/`. Its process entry
   is `services/uta/src/main.ts:40`, its account manager starts at
   `services/uta/src/domain/trading/uta-manager.ts:37`, and the trading HTTP
-  surface is mounted from `services/uta/src/http/routes-trading.ts:121`.
+  surface is mounted from `services/uta/src/http/routes-trading.ts:121`. Its
+  trade/risk lifecycle events cross into Alice through the best-effort sink at
+  `services/uta/src/domain/trading/events.ts:47`.
 
 - Shared packages live under `packages/`. The main process boundary is
   `@traderalice/uta-protocol`, exported from `packages/uta-protocol/src/index.ts:15-17`.
