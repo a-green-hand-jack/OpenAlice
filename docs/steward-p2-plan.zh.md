@@ -1,6 +1,6 @@
 # Steward P2 阶段计划 — 审计链闭环 + LLM-Agent e2e 观测
 
-> 版本：草案 v0.2（2026-07-05）——已内联答复 maintainer 批注（§2）
+> 版本：草案 v0.3（2026-07-05）——已内联答复 maintainer 两轮批注（§2）
 > 地位：**阶段执行文档**，从属于 [steward-plan.zh.md](steward-plan.zh.md)（v1.0 冻结）。本文不改动冻结计划的任何阶段/顺序/验收标准；e2e 观测演习是 I8/I9（验证门 + paper 优先）范围内的验收强化，不构成计划变更。
 > 用途：maintainer 与实现会话通过本文档对齐。maintainer 直接批注/修改本文，确认后按 §5 的顺序开工。
 
@@ -44,9 +44,27 @@ P1（风险脊柱）五个组件全部合并进 fork master（`81237cb1`），23
       > 如果频率很低的话是不是又不能及时对交易做出调整
       >
    2. **答（2026-07-05）**：理解正确——**今天每一份计划都需要人工 push，无例外**。频率与及时性的矛盾是真问题，冻结计划分三层解它：
-      - **频率**：agent 只在被人启动或被 cron 调度时工作，产计划频率 = 调度频率。P4 把 steward 节奏定为**每日一次 observe run**。Steward 的定位是长线资产管理（日/周级、论点驱动），不是日内高频——"人审得过来"是设计出来的属性，不是碰运气。
-      - **审核负担**：这正是 P3 渐进授权阶梯存在的理由。`limited_autonomy` 档在人**预先批准的预算内**免逐笔审批（日/会话预算、单笔上限、标的白名单，全部是 UTA 侧硬限制），超预算的计划照旧排队人工审。终局形态：常规小额再平衡自主跑，大动作才占用人的注意力。
-      - **及时性**：市场急变不等下一次审批。(a) commit 可带 TP/SL 保护腿——人批准的是"进场+退出规则"整个包，退出规则在场内自动生效；(b) 减仓/平仓方向的操作永不被组合级 guard 拦截（P1 已实现）；(c) 风险状态机自动降级 + 人工 kill switch/flatten 是不经过 agent 的即时刹车。一句话：**加风险要等人，去风险不等人**。
+      1. **频率**：agent 只在被人启动或被 cron 调度时工作，产计划频率 = 调度频率。P4 把 steward 节奏定为**每日一次 observe run**。Steward 的定位是长线资产管理（日/周级、论点驱动），不是日内高频——"人审得过来"是设计出来的属性，不是碰运气。
+      1. **审核负担**：这正是 P3 渐进授权阶梯存在的理由。`limited_autonomy` 档在人**预先批准的预算内**免逐笔审批（日/会话预算、单笔上限、标的白名单，全部是 UTA 侧硬限制），超预算的计划照旧排队人工审。终局形态：常规小额再平衡自主跑，大动作才占用人的注意力。
+      1. **及时性**：市场急变不等下一次审批。(a) commit 可带 TP/SL 保护腿——人批准的是"进场+退出规则"整个包，退出规则在场内自动生效；(b) 减仓/平仓方向的操作永不被组合级 guard 拦截（P1 已实现）；(c) 风险状态机自动降级 + 人工 kill switch/flatten 是不经过 agent 的即时刹车。一句话：**加风险要等人，去风险不等人**。
+      1. > 这里是具体怎么做的，怎么把agent制定的计划转为订单，订单又怎么转为broker侧的执行动作。
+         > 这样的计划和auto-trading-bot有什么区别呢
+         > 如果我们可以通过这种策略提交一个“计划"，能不能通过类似的形式提交一个auto-trading-bot让其在工作区执行交易，比如：
+         >
+         > 1. agent制定计划
+         > 2. agent根据计划设计一个auto-trading-bot,选择合适的交易策略
+         > 3. auto-trading-bot 在工作区进行交易
+         >
+         > 同时我想知道这个是不是回测和live都可以？
+         >
+      2. **答（2026-07-05）**：分三层回答——机械链路、与 bot 的本质区别、能否提交 bot。
+         - **机械链路（计划→订单→broker）**：计划里的"订单"从来不是自然语言。agent 在 `stage` 时就必须交出**结构化 Operation 对象**（`placeOrder{contract, order, tpsl}` / `modifyOrder` / `closePosition` / `cancelOrder`，TypeBox 校验，见 `packages/uta-protocol/src/types/git.ts` 的 Operation 联合类型）——"计划→订单"的翻译发生在 agent 侧、stage 那一刻，thesis 才是散文。人工 push 后，TradingGit 把 pending commit 里的 Operation **逐个**送进 guardedDispatcher（`UnifiedTradingAccount.ts:241-274`）：先过确定性 guard 管道（单笔 guards + P1 组合级 + 风险状态机），全过才进 dispatcher，按 action 分发到 IBroker 适配器（alpaca / ccxt / ibkr / longbridge / mock 之一）调 venue API。每个 Operation 的结果（submitted/filled/rejected/cancelled）写回 commit results + order-history，之后 sync 轮询接管订单生命周期，snapshot 记录组合状态。
+         - **与 auto-trading-bot 的本质区别在审批对象**：计划审批的是"**有限、具体、当下可读的订单集**"——人批准时看得到每一笔；bot 审批的是"**一段会持续产生未知订单的程序**"——批准时看不到未来的具体动作。计划是一次性声明式变更集，执行完即终结（TP/SL 腿由 venue 托管是唯一延续）；bot 是持续运行的决策循环。还有一条架构区别：传统 bot 自己拿 broker key、风控内嵌在 bot 代码里（信任 bot）；我们这里 broker key 永远只在 UTA（I6），任何 bot 都只能经 UTA SDK 说话，每一笔都过同一套确定性 guard + 状态机 + 审计（I3/I4）——**bot 不可信，笼子可信**。
+         - **能否提交一个 bot 到工作区执行？可以，而且这正是既定演进路线**，是三块已有拼图的组合，不需要新执行通道：
+           1. agent 制定计划/设计策略 → workspace 的日常（auto-quant 模板已存在；qlib/FinRL/RD-Agent 策略研究卫星仓库是 P6 可选扩展）。
+           2. bot 在工作区**回测** → **今天就可以**：回测不触 broker，行情数据经 MCP 可得，workspace 里跑什么程序都行（workspace=能力边界的设计意图）。
+           3. bot 在工作区**自主交易** → 这正是 P3 `limited_autonomy` 档的定义：bot 每笔仍走 stage→commit→push 同一管道，只是 push 授权从"逐笔人工"变成"**预先批准的硬预算内自动放行**"（日/会话预算、单笔上限、标的白名单，UTA 侧强制），P1 状态机随时可收回。**今天（P3 之前）bot 只能以提案模式运行**：持续产计划、全部停在审批门排队等人。
+           - 回测 vs live：回测纯工作区内、随时可做；实盘严格按阶梯（I9/P6）——先 mock/paper 账户（mock-simulator 就是 paper 载体，撮合可控），表现达标后按 P6 晋升制度换 live 账户。SDK 面相同、换账户即迁移，但 P3 tier 门槛逐级过。此问实质是 **P3+P4+P6 的组合**，冻结计划已覆盖，无需计划变更。
 6. **留痕**：order-history、snapshot、guard 判定入档；agent 可经 `inbox_push` 向用户推送报告。
 
 按 Steward 六环拆开看：
