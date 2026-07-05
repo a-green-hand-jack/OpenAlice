@@ -45,7 +45,10 @@ The registry enforces this at declare time.
 ```
 
 - The EventLog is the bus — append-only JSONL, fanned out to subscribers.
-- Every event has a monotonic `seq` + `ts`.
+- Every event has a writer-local `seq` + `ts`. Within a single `EventLog`
+  instance, `seq` is monotonic; in dev/prod UTA and Alice can both write
+  `events.jsonl`, so cross-process audit queries must order by `ts` plus event
+  type / payload ids, not by assuming `seq` is globally monotonic.
 - Listener `ctx.emit` auto-fills `causedBy = parentEntry.seq` — you get a
   causal chain for free. Producers have no parent, so their emits have no
   `causedBy` unless the caller passes one explicitly.
@@ -100,6 +103,9 @@ webhook tokens cannot forge broker audit history.
 For `trade.pushed` and `trade.rejected`, `guards` is always present. An empty
 array means no operation guard verdicts were produced; the `guardSummary` and
 `risk` snapshot still answer which guard set/risk state existed at push time.
+When reconstructing a trade lifecycle from `events.jsonl`, correlate by
+`payload.id` / `payload.commitHash` / `payload.orderId` and sort by `ts`; see
+issue #38 for why `seq` is not a cross-process ordering key.
 
 ## Recipe: add a new event type
 
