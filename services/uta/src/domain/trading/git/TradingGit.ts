@@ -29,6 +29,8 @@ import type {
   SimulatePriceChangeResult,
   OrderStatusUpdate,
   SyncResult,
+  PlaceOrderResult,
+  Position,
 } from './types.js'
 import { getOperationSymbol } from './types.js'
 
@@ -320,6 +322,118 @@ export class TradingGit implements ITradingGit {
     return hash
   }
 
+  /**
+   * Record a manual emergency-stop cancellation pass as one synthetic commit.
+   * These broker calls intentionally bypass stage/commit/push because HALT
+   * makes that pipeline read-only. The commit is still the audit narrative.
+   */
+  async recordEmergencyStop(params: {
+    reason: string
+    cancelOrders: boolean
+    cancellations: Array<{ orderId: string; contract: Contract; order?: Order; result: PlaceOrderResult }>
+    stateAfter: GitState
+  }): Promise<CommitHash> {
+    const timestamp = new Date().toISOString()
+    const { cancellations, stateAfter } = params
+
+    const operations: Operation[] = cancellations.map((c) => ({
+      action: 'emergencyCancelOrder',
+      orderId: c.orderId,
+      contract: c.contract,
+      ...(c.order ? { order: c.order } : {}),
+    }))
+    const results: OperationResult[] = cancellations.map((c) => ({
+      action: 'emergencyCancelOrder',
+      success: c.result.success === true,
+      orderId: c.result.orderId ?? c.orderId,
+      status: c.result.success === true
+        ? (c.result.orderState ? this.mapOrderStatus(c.result.orderState) : 'cancelled')
+        : 'submitted',
+      ...(c.result.orderState ? { orderState: c.result.orderState } : {}),
+      ...(c.result.error ? { error: c.result.error } : {}),
+      raw: c.result,
+    }))
+
+    const cancelled = results.filter((r) => r.success).length
+    const attempted = results.length
+    const message = params.cancelOrders
+      ? `[emergency-stop] HALT; cancelled ${cancelled}/${attempted} open order(s) — ${params.reason}`
+      : `[emergency-stop] HALT; cancelOrders=false — ${params.reason}`
+    const hash = generateCommitHash({ message, operations, results, timestamp, parentHash: this.head })
+
+    const commit: GitCommit = {
+      hash,
+      parentHash: this.head,
+      message,
+      operations,
+      results,
+      stateAfter,
+      timestamp,
+      round: this.currentRound,
+    }
+
+    this.commits.push(commit)
+    this.head = hash
+
+    await this.persistState()
+
+    return hash
+  }
+
+  /**
+   * Record a manual flatten pass as one synthetic commit. Like
+   * recordEmergencyStop, this is a human-only broker-level escape hatch that
+   * does not enter the guarded trading-as-git execution pipeline.
+   */
+  async recordFlatten(params: {
+    positions: Array<{ position: Position; result: PlaceOrderResult }>
+    stateAfter: GitState
+  }): Promise<CommitHash> {
+    const timestamp = new Date().toISOString()
+    const { positions, stateAfter } = params
+
+    const operations: Operation[] = positions.map(({ position }) => ({
+      action: 'emergencyClosePosition',
+      contract: position.contract,
+      quantity: position.quantity,
+    }))
+    const results: OperationResult[] = positions.map(({ position, result }) => ({
+      action: 'emergencyClosePosition',
+      success: result.success === true,
+      orderId: result.orderId,
+      status: result.success === true
+        ? (result.orderState ? this.mapOrderStatus(result.orderState) : 'filled')
+        : 'rejected',
+      filledQty: position.quantity.abs().toFixed(),
+      ...(result.orderState ? { orderState: result.orderState } : {}),
+      ...(result.error ? { error: result.error } : {}),
+      raw: result,
+    }))
+
+    const closed = results.filter((r) => r.success).length
+    const attempted = results.length
+    const message = `[flatten] closed ${closed}/${attempted} open position(s)`
+    const hash = generateCommitHash({ message, operations, results, timestamp, parentHash: this.head })
+
+    const commit: GitCommit = {
+      hash,
+      parentHash: this.head,
+      message,
+      operations,
+      results,
+      stateAfter,
+      timestamp,
+      round: this.currentRound,
+    }
+
+    this.commits.push(commit)
+    this.head = hash
+
+    await this.persistState()
+
+    return hash
+  }
+
   /** Every broker orderId the log has ever seen — observation diffs against this. */
   getKnownOrderIds(): Set<string> {
     const known = new Set<string>()
@@ -422,6 +536,17 @@ export class TradingGit implements ITradingGit {
       case 'cancelOrder':
         return `cancelled order ${op.orderId}`
 
+      case 'emergencyCancelOrder':
+        return `emergency-cancelled order ${op.orderId}`
+
+      case 'emergencyClosePosition': {
+        if (result?.status === 'filled') {
+          const price = result.execution?.price ? ` @${result.execution.price}` : ''
+          return `flattened ${op.quantity.toFixed()}${price}`
+        }
+        return `flatten (${result?.status || 'unknown'})`
+      }
+
       case 'syncOrders': {
         const status = result?.status || 'unknown'
         const price = result?.filledPrice ? ` @${result.filledPrice}`
@@ -470,6 +595,9 @@ export class TradingGit implements ITradingGit {
   private projectOperation(op: Operation): Operation {
     if (op.action === 'placeOrder' || op.action === 'observeExternalOrder') {
       return { ...op, order: OrderHelper.toWire(op.order) as unknown as Order }
+    }
+    if (op.action === 'emergencyCancelOrder') {
+      return op.order ? { ...op, order: OrderHelper.toWire(op.order) as unknown as Order } : op
     }
     if (op.action === 'modifyOrder') {
       return { ...op, changes: OrderHelper.toWire(op.changes) as unknown as Partial<Order> }
@@ -586,9 +714,19 @@ export class TradingGit implements ITradingGit {
       case 'observeExternalOrder':
         return {
           ...op,
+          order: TradingGit.rehydrateOrder(op.order),
+        }
+      case 'emergencyCancelOrder':
+        return {
+          ...op,
           order: op.order ? TradingGit.rehydrateOrder(op.order) : op.order,
         }
       case 'closePosition':
+        return {
+          ...op,
+          quantity: op.quantity != null ? new Decimal(String(op.quantity)) : op.quantity,
+        }
+      case 'emergencyClosePosition':
         return {
           ...op,
           quantity: op.quantity != null ? new Decimal(String(op.quantity)) : op.quantity,
@@ -746,7 +884,11 @@ export class TradingGit implements ITradingGit {
         // Persisted with the operation, so it survives process restarts
         // where the broker's in-memory orderId→symbol cache is empty.
         const hasContract =
-          op?.action === 'placeOrder' || op?.action === 'closePosition' || op?.action === 'observeExternalOrder'
+          op?.action === 'placeOrder' ||
+          op?.action === 'closePosition' ||
+          op?.action === 'observeExternalOrder' ||
+          op?.action === 'emergencyCancelOrder' ||
+          op?.action === 'emergencyClosePosition'
         const localSymbol = hasContract ? op.contract?.localSymbol || undefined : undefined
         const aliceId = hasContract ? op.contract?.aliceId || undefined : undefined
 

@@ -8,6 +8,8 @@
 import type Decimal from 'decimal.js'
 import type { Contract, Order } from '@traderalice/ibkr'
 import type {
+  PlaceOrderResult,
+  Position,
   CommitHash,
   Operation,
   AddResult,
@@ -59,6 +61,18 @@ export interface ITradingGit {
   /** Squash externally-observed open orders into one [observed] commit. */
   recordObservedOrders(params: {
     observed: Array<{ contract: Contract; order: Order; orderId: string }>
+    stateAfter: GitState
+  }): Promise<CommitHash>
+  /** Squash direct emergency-stop broker cancellations into one audit commit. */
+  recordEmergencyStop(params: {
+    reason: string
+    cancelOrders: boolean
+    cancellations: Array<{ orderId: string; contract: Contract; order?: Order; result: PlaceOrderResult }>
+    stateAfter: GitState
+  }): Promise<CommitHash>
+  /** Squash direct flatten broker closes into one audit commit. */
+  recordFlatten(params: {
+    positions: Array<{ position: Position; result: PlaceOrderResult }>
     stateAfter: GitState
   }): Promise<CommitHash>
   /** Every broker orderId the log has ever seen. */

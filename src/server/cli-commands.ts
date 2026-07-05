@@ -221,6 +221,11 @@ export const CLI_EXPORTS: Record<string, CliExport> = {
         reject: 'tradingReject',
         sync: 'tradingSync',
       },
+      risk: {
+        // Visibility only. No emergency-stop or flatten execution command is
+        // exported to agent-reachable CLI surfaces.
+        status: 'riskStatus',
+      },
       market: {
         clock: 'getMarketClock',
       },
