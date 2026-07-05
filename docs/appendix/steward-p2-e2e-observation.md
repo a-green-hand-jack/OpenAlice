@@ -293,3 +293,360 @@ POST /api/simulator/uta/mock-simulator-130c449a/mark-price
 （headless stdout/stderr 全文、`commit.json`、`events.jsonl`、`entries.jsonl`、
 `order-history.json`、账户/持仓/wallet 各阶段快照、agent 撰写的研究报告全文副本），
 以及 `.sandbox-home` / `.sandbox-ws` 本身（按任务要求关停 stack 后原样保留，供人工检查）。*
+
+---
+
+# 演习二 — P2 验收（after 对比）
+
+> 对应 [steward-p2-plan.zh.md](../steward-p2-plan.zh.md) §4「演习二（P2 三个 issue 合并后）：验收演习」。
+> P2 三个 issue（approver 身份入档 #31/PR37、`trade.*`/`risk.*` 事件接入统一事件流 #32/PR39、
+> 审计五问端到端 spec #33/PR41）已合并进 `jieke/dev`。本次演习复用演习一的沙箱手法
+> （同一批环境变量、同样走 headless codex + 人类专属 HTTP 路由审批），断言 P2 交付的
+> 审计链闭环在**真实 LLM agent 驱动**下同样成立，而不仅在单测 / 端到端 spec 里成立。
+>
+> 演习执行者：orchestrator 代行 human operator。全程沙箱 home / launcher root，
+> 非 ephemeral 的 mock 模拟账户，未触碰任何真实 broker 凭证，未修改任何
+> `src/` / `services/` / `packages/` / `ui/` 文件。
+
+## 1. 环境与时间线
+
+按任务预案，本次演习开工前先 `rm -rf .sandbox-home .sandbox-ws`（删除演习一遗留的沙箱），
+用相同的目录名重新起一套干净的沙箱：
+
+```
+OPENALICE_HOME=$PWD/.sandbox-home
+AQ_LAUNCHER_ROOT=$PWD/.sandbox-ws
+OPENALICE_WEB_PORT=49431   OPENALICE_MCP_PORT=49432
+OPENALICE_UTA_PORT=49433   OPENALICE_UI_PORT=7273
+OPENALICE_MCP_ENABLED=1
+```
+
+启动方式：`pnpm dev`（后台，日志见 `scratchpad/drill2/dev-stack.log`）。管理员 token 在
+启动日志中打印一次，随后用于 `POST /api/auth/login` 建立**真实 web operator session**
+（这是本次演习和演习一的关键差异之一——演习一的审批路由虽然也是"人类专属 HTTP 路由"，
+但没有特别验证走的是登录会话还是 loopback passthrough；本次演习显式建立并保留了这个
+session，专门用于驱动 PR#37 的 approver 指纹归因，见 §3）。本文不重复贴出 token 明文或
+session id 明文（sid 已在 §3 的指纹核验中脱敏处理）。
+
+时间线（均为 UTC，来自实际请求响应 / 持久化文件的时间戳）：
+
+| 时间 (UTC) | 事件 |
+|---|---|
+| 2026-07-05T16:46:55.502Z | UTA 进程 bootstrap（第一次，3 个内建只读账户） |
+| ~2026-07-05T16:46:59Z | Alice 全部插件启动完成，MCP 挂载在 `:49432/mcp` |
+| 2026-07-05T16:47:21.570Z | `POST /api/auth/login`（真实 admin token）成功，写入 `data/config/sessions.json`；**这是本次演习全程复用的同一个 session，直到 push 那一刻**（sid, `userAgent: curl/8.5.0`, `ip: 127.0.0.1`） |
+| ~16:48:1xZ | `POST /api/trading/config/uta`（presetId `mock-simulator`，**未带 `ephemeral`**，且附带 `guards:[{type:"max-position-size",options:{maxPercentOfEquity:50}}]`）→ 账户 **`mock-simulator-d41e87c2`** |
+| 16:48:19.840Z | 该 POST 触发的 UTA 自动重启完成（"UTA restart failed: ENOENT ...restart-uta.flag.tmp..." 后 guardian 自行 retry 成功）；`mock-simulator-d41e87c2` 立即 `health.tier:"trading"` 存活——这次**没有重演演习一发现清单 #1 的 ephemeral 自毁竞态**，因为账户从一开始就没带 `ephemeral:true`（按演习一给 P4 的建议执行） |
+| 16:48:48.573Z | `POST /api/workspaces` 创建 workspace **`chat-rounded-marble-bridge`**（tag `drill2-steward-1783270128`，template `chat`，agent `codex`） |
+| ~16:48:5xZ | `GET /api/workspaces/.../agent-readiness/codex` → `{"ready":true,"source":"runtime-login"}`（与演习一相同，走本机 `codex login`，不经沙箱 vault） |
+| 16:49:07.450Z | `POST /api/workspaces/.../headless`（`agent:"codex"`，见 §2 完整 prompt——逐字复用任务预案给定的措辞，不点名任何 MCP 工具）→ `taskId 9c7dbc70-0391-48f7-8fb8-e8cb7bbb1c8a`，`agentSessionId 019f332f-06a3-7e03-b432-f4c556033290` |
+| 16:52:09.352Z | UTA 侧 `alice-uta git commit` 执行完成，产生 `trade.committed` 事件（commit hash `dbdeb3c8`）——**这是本次演习独立确认的一个新事实**：`trade.committed` 事件的时间戳是 agent 真正调用 `git commit` 的时刻，比 headless 任务结束（16:54:48）早 2 分半，比人工 push（16:58:32）早 6 分多，证明这条事件确实在**commit 发生的当下**触发，而不是任务收尾时批量补发 |
+| 16:54:48.674Z | headless 任务 `status: done`，`exitCode: 0`，耗时 `341213ms`（约 5 分 41 秒——比演习一的 2 分 13 秒长约 2.6 倍，见 §2 的行为差异） |
+| 16:58:32.755Z / .763Z | Orchestrator 用 §1 建立的**真实 session cookie**（非 loopback passthrough）调用 `POST /api/trading/uta/mock-simulator-d41e87c2/wallet/push` → 提交成功，`orderId mock-ord-1`；commit `dbdeb3c8` 的 `approver` 与 `trade.pushed` 事件同时打上 `{via:"alice-bff", fingerprint:"0b488aae451c4835", at:...}` |
+| （第一次尝试，未成交） | `POST /api/simulator/uta/mock-simulator-d41e87c2/mark-price`（`nativeKey AAPL, price 100.05`）→ `{"filled":[]}`——限价 BUY 100.01 单，标记价高于限价不应成交，行为正确 |
+| 16:59:00.217Z / .229Z | 第二次 `mark-price`（`price 99.90`）→ `{"filled":["mock-ord-1"]}`；sync commit `a30fee21`（parent `dbdeb3c8`）与 `trade.executed` 事件同时产生 |
+
+**驱动机制**：与演习一相同，走 headless 任务分发（`POST /api/workspaces/:id/headless` +
+轮询 `GET /api/headless/:taskId`），未使用 PTY WebSocket。
+
+**guard 配置**：本次特意在建账户时配置了一个操作级 guard
+（`max-position-size`，`maxPercentOfEquity:50`），使 push 时 `guardVerdicts`/
+`guards`/`guardSummary` 不再是"预期的空列表"，而是有真实的一条 `pass` 判定——这是
+为了验证 P2 Issue B 交付的 guard 结构化留痕（PR#25 之上）在有 guard 配置时确实同时
+写进 commit 记录**和** event-log 两处（见 §4 Q4）。
+
+## 2. Agent 行为差异（vs 演习一）
+
+任务原文逐字复用（见 mission 给定文本，未点名任何 MCP 工具），codex headless 执行，
+完整记录见 `scratchpad/drill2/headless-stdout.jsonl`（162 行 JSONL，79 个 `item.completed`）。
+
+**与演习一相比，行为上的实质差异**：
+
+1. **显式检查了风险状态**——演习一的 P4 模板建议明确提到"这次 agent 从未单独调用任何
+   专门的 `riskStatus` 类工具"；本次 agent 主动跑了 `alice-uta risk status --help` 和
+   `alice-uta risk status --source mock-simulator-d41e87c2`（返回
+   `{"riskState":{"state":"NORMAL","history":[]}}`），且是在下单前、作为独立步骤做的，
+   不是从别的接口响应里顺带看到。是否是这条工具本身在 P1 就已存在但演习一恰好没用到——
+   是；但这次的使用方式正是演习一报告给 P4 模板的建议方向。
+2. **用了两步 stage→commit，而不是演习一发现的一步合并写法**：`alice-uta order place`
+   这次**没有**带 `--commitMessage`（先纯 stage），随后单独跑
+   `alice-uta git commit --source ... --message '...'`——与
+   `docs/terminal-runbook.md` §3.5 文档演示的两步流程一致。这不是对演习一发现清单 #5
+   的"修复"（CLI 两种写法都还在，行为差异只是这次 agent 选择了不同的路径），但说明
+   两条路径都在真实使用中被验证过。
+3. **市场分析更深入**：这次用 `alice analysis quant --script` 跑了两组 RSI/ROC/SMA 计算——
+   一组用 mock 券商自己的 30 根日线，一组用 `yfinance|AAPL` 的 250 根日线做对照——而演习一
+   只读了 `traderhub equity profile/estimates`，没有做量化脚本计算。最终研究报告
+   （`scratchpad/drill2/agent-research-report.md`）同时列出了 mock 报价体系（RSI(14)=100，
+   20 日 ROC +1.98%）和 vendor 数据体系（RSI(14)=60.26，高于 50/200 日均线）的指标，并
+   仍然**只用 mock 报价（100.01）下单**——与演习一相同的"不混用真实行情与本账户报价"纪律
+   这次继续保持。
+4. **仓位更保守**：BUY 20 股 AAPL（约 2% 现金）而非演习一的 50 股（约 5% NAV），理由明确
+   写在 thesis 里——"因为 XLK 板块轮动偏弱、AAPL 本身也有点伸展，所以只做小仓位试探"。
+5. **可交易 universe 收窄的问题原样复现**：这次搜索 `XLV` 和 `SPY`（演习一搜的是 `MRNA`
+   和 `XLV`），两次都只返回 `AAPL`——与演习一完全相同的 mock 账户 universe 限制，agent
+   同样很快自我纠正、没有硬凑论点。这证实这是**账户结构性限制**，不是演习一那次的偶然。
+6. **`alice-workspace track add`**这次第一次调用就带对了 `--type asset`，没有重演演习一
+   缺参数失败一次的情况（模型行为方差，不代表工具本身被改动）。
+7. **新增行为：为审批门创建了一个工作区 issue 看板项**——`alice-workspace issue create
+   --id aapl-mock-trade-approval ...`（未带 `--when`，因此不会自调度、不会触发新的
+   headless 派发），把"等待审批"显式记成一条待办，指向 commit hash 和研究报告文件。
+   演习一没有这个动作。
+8. **"环境只读"的叙述性断言这次不是没检查，而是检查了却仍然给出矛盾结论**——这是本次
+   演习观察到的最值得注意的行为退步，详见下方 §2.1。
+9. **`inbox push --docs` 的正确调用形状这次靠试错才摸到**，也在下方 §2.1 展开。
+
+耗时明显更长（341s vs 132s，约 2.6 倍），符合"更深入的量化分析 + 多踩了两个 CLI 坑"的
+观察。
+
+### 2.1 两个需要展开的行为点
+
+**（a）"git commit 被 `.git/index.lock` 只读拦住"——这次有工具证据，且证据与结论矛盾。**
+演习一的 agent 从未真正跑过 `git add`/`git commit`，只凭经验断言环境只读（发现清单 #4）。
+本次 agent 这次**确实主动检查了权限**：
+
+```
+$ ls -ld .git .git/index .git/index.lock 2>/dev/null || true
+drwxrwxr-x 7 user user 4096 Jul  5 19:48 .git
+-rw-rw-r-- 1 user user 5505 Jul  5 19:48 .git/index
+```
+
+`.git` 和 `.git/index` 都是当前用户可写（`drwxrwxr-x` / `-rw-rw-r--`），`.git/index.lock`
+根本不存在（命令本身用 `2>/dev/null || true` 掩盖了这一点，没有单独确认"lock 文件不
+存在"这一事实）。但 agent **仍然只跑了三次 `git status --short`，从未跑过一次
+`git add`/`git commit`**，最终在 Inbox 留言和内部总结里逐字重复了与演习一相同的结论：
+"工作区 git commit 因 `.git/index.lock` 无法创建（只读文件系统）被环境拦住"。这比演习一
+更值得关注——演习一是"没检查就下结论"，这次是**检查出了相反的证据、仍然维持原结论**，
+说明"叙述性失败"（发现清单 #4）不是一次性的模型噪声，而是这个措辞/流程组合下会稳定复现
+的模式。完整命令序列见 `scratchpad/drill2/headless-stdout.jsonl` 中含
+`index.lock` 的两条记录。
+
+**（b）`alice-workspace inbox push --docs` 的参数形状连续猜错两次。**
+
+```
+1) --docs research/....md                     → Validation failed: docs: expected array, received string
+2) --docs '["research/....md"]'                → Validation failed: docs.0: expected object, received string
+3) --docs '[{"path":"research/....md"}]'       → {"ok":true,"entryId":"bd116226-..."}
+```
+
+`alice-workspace inbox push --help` 的文案（"Workspace files to surface in the inbox
+entry... `docs` are paths relative to this workspace root"）没有给出 JSON 形状范例，
+读起来像是"传路径字符串或字符串数组"就够，但实际 schema 要求数组里每项是
+`{path: string}` 对象。演习一那次是单数 `--doc <file>`（单文件），本次是复数
+`--docs`（可带多文件），命令行为本身没有变化——只是这次任务恰好触发了多文件场景的
+参数形状问题，两次失败调用消耗了额外的 tool-call 轮次。
+
+## 3. 审批（真实 session cookie → alice-bff 指纹）
+
+Orchestrator 全程使用 §1 建立的**真实 web operator session**（`POST /api/auth/login`
+成功后拿到的 `alice_session` cookie），而不是依赖 loopback passthrough 默认放行
+（`/api/auth/status` 显示 `passthrough:"localhost"` 也同时为真，但本次 push 请求显式
+带上了 cookie，验证的是 PR#37 "cookie 优先于 loopback" 的路径）：
+
+```
+POST /api/trading/uta/mock-simulator-d41e87c2/wallet/push   (Cookie: alice_session=<sid>)
+```
+
+结果：`commit.json` 的 commit `dbdeb3c8` 上出现
+
+```json
+"approver": { "via": "alice-bff", "fingerprint": "0b488aae451c4835", "at": "2026-07-05T16:58:32.755Z" }
+```
+
+`trade.pushed` 事件的 `payload.approver` 字段与此**逐字节相同**。独立验证：从
+`data/config/sessions.json` 里该 session 的 `sid` 明文（未在本文出现，出于卫生原则
+脱敏），按 `src/webui/routes/trading-proxy.ts:120-123` 的公式重新计算
+
+```
+sha256("openalice-admin-session:" + sid).hexdigest().slice(0, 16)
+```
+
+得到 `0b488aae451c4835`——**与持久化文件里的 fingerprint 完全一致**。同时对
+`data/trading/mock-simulator-d41e87c2/` 和 `data/event-log/events.jsonl` 做了穷举
+grep，原始 sid 和原始 admin token 明文**均未出现**（只出现在
+`data/config/sessions.json` 自身，这是预期的，见 §6 验收结论）。这证明 PR#37 交付的
+"loopback 场景下如果请求携带有效 session cookie，必须按 `alice-bff` 归因，而不是退化成
+匿名 `loopback`"的行为在真实 agent 驱动的完整流程里成立。
+
+## 4. 五问 after 快照表
+
+与 §4 before 表逐行对比。证据来源全部是 `.sandbox-home/data/` 下的持久化文件，用
+`docs/terminal-runbook.md` §3.10 给出的 jq 命令验证，原始命令与输出见
+`scratchpad/drill2/` 与下文引用。
+
+| # | 问题 | 可重建？（after） | 证据来源 | 与 before 的差异 |
+|---|---|---|---|---|
+| 1 | 看到了什么 | **可重建**（新增了设计出来的审计面，不再只靠调试日志） | `data/event-log/events.jsonl` 的 `trade.committed` 事件：`payload.thesis.excerpt` 是完整 thesis，`payload.thesis.hash` = `882467862b1de531`——本次独立用 `sha256(commit.message).hexdigest()[:16]` 重新计算，**结果完全一致**，证明这个 hash 是内容的确定性指纹，可用于验证"事件里记的 thesis 与 commit.json 里的 message 没有被篡改"。`data/tool-calls/` 目录**依然是空的**（`find ... \| wc -l` = 0），发现清单 #2 未被 P2 触及（预期之内——tool-calls 覆盖面不在 P2 范围）。 | before 只能从 headless 调试日志重建，且没有可验证的哈希；after 多了一个**设计出来的、带哈希校验的**审计条目，但 headless CLI 调用仍然不进 `data/tool-calls/`——这部分差距原样保留。 |
+| 2 | 为什么（thesis） | **可重建** | `commit.json` 里 `dbdeb3c8` 的 `message` 字段 = `trade.committed.payload.thesis.excerpt`（未截断，短于 240 字符阈值）= workspace 研究报告 `research/2026-07-05-aapl-mock-staged-trade.md` 里的 thesis 段落，三处逐字一致。 | 与 before 一样可重建；新增了跨 commit 记录与事件两处的哈希互证（见上一行）。 |
+| 3 | 谁批准 | **可重建**（before 里明确标记为"不可重建"的两问之一，现已闭合） | `commit.json` 的 `commits[0].approver` **和** `trade.pushed.payload.approver` 均为 `{"via":"alice-bff","fingerprint":"0b488aae451c4835","at":"2026-07-05T16:58:32.755Z/.763Z"}`；独立重算的指纹与之匹配（见 §3）；原始 sid/token 未泄漏进 `data/trading/` 或 `data/event-log/`（见 §5）。 | **实质性变化**——before 完全不可重建（"只能定位到来自 loopback 的某个 curl 会话，定位不到具名的人"）；after 不仅能重建"谁"（一个可验证的指纹），还能重建"何时批准"（`at` 字段），一并闭合了 before 表下方"额外确认的空白"里提到的"没有单独的批准时刻字段"的问题——**但方式和演习一报告设想的不完全一样**，见下方 §4.1 的实现细节说明。 |
+| 4 | 跑过哪些检查 | **可重建**（before 里明确标记为"部分/推理链条不完整"的另一问，现已闭合） | `commit.json` 的 `commits[0].results[0].guardVerdicts` = `[{"guard":"max-position-size","verdict":"pass"}]`；`trade.pushed.payload.guards`（同样内容，额外带 `operationIndex`/`operationAction`/`symbol`）+ `payload.guardSummary` = `{"configured":["max-position-size"],"evaluated":1,"passed":1,"rejected":0,"skipped":0}`；`payload.risk` = `{"state":"NORMAL"}`。 | before 该账户 `guards:[]`，只能证明"零检查是预期行为"，对 P1 组合级 guard/状态机"是否被评估过"完全说不清楚；after 本次特意配置了一个操作级 guard 并验证：guard 判定**同时写进 commit 记录和 event-log 两处**，`guardSummary` 提供了一个人类可读的汇总视图（configured/evaluated/passed/rejected/skipped），是 before 完全没有的字段。仍未验证的：P1 组合级 guard（MaxDrawdown/DailyLoss/Concentration）在配置了它们时是否同样入档——本次为了控制变量只配置了操作级 guard，这部分留给后续验证。 |
+| 5 | 结果如何 | **可重建** | `order-history`（`GET /api/trading/uta/mock-simulator-d41e87c2/order-history`）：`status:"filled"`, `filledQty:"20"`, `avgFillPrice:"99.9"`；`trade.executed` 事件（`payload.orderId:"mock-ord-1"`, `filledQty:"20"`, `filledPrice:"99.9"`, `source:"sync"`）；`commit.json` 的 sync commit `a30fee21`（parent `dbdeb3c8`）`stateAfter` 与 `/account`、`/positions` 端点（`totalCashValue:98002`, 持仓 20 股 `avgCost 99.9`）三方一致。 | before 也可重建，机制相同；after 多了一个**事件层面的独立佐证**（`trade.executed`），且本次演示了 runbook 文档里特别强调的"按 `orderId` 而不是按原 commit hash 关联 `trade.executed`"这个细节——`trade.executed.payload.commitHash` 是 sync commit `a30fee21`，不是审批 commit `dbdeb3c8`，如果按 commit hash 去找会找空。 |
+
+### 4.1 「谁批准」+「何时批准」的实现方式说明（源码核实）
+
+追查 `commits[0].timestamp`（`2026-07-05T16:58:32.763Z`）为什么和 `approver.at`
+（`2026-07-05T16:58:32.755Z`）几乎完全相同（差 8ms），核对了
+`services/uta/src/domain/trading/git/TradingGit.ts`：
+
+- `commit()`（对应 CLI 的 `git commit`，即"stage+commit"动作）**只写
+  `pendingHash`/`pendingMessage`，从来不会把记录追加进 `this.commits[]`**（第 81-102
+  行）。也就是说 agent 在 16:52:09 跑 `git commit` 那一刻产生的时间戳，只用来参与生成
+  `pendingHash`，本身**从未被持久化**到任何可查询字段。
+- 只有 `push()`（第 104-162 行）才会用 `timestamp: new Date().toISOString()`
+  （第 144 行）构造最终的 `GitCommit` 对象并 `push` 进 `this.commits[]`——这是
+  `commit.json` 里那个 `timestamp` 字段真正的语义：**它一直是"push（批准执行）发生
+  的时刻"，从来不是"stage+commit 发生的时刻"**（这不是 P2 新引入的行为，是
+  TradingGit 一直以来的设计；演习一因为 push 紧跟 commit 发生，两者时间差极小，
+  没有暴露出这个语义）。
+- 结果是：P2 Issue A 加的 `approver.at` 恰好和已有的 `commit.timestamp` 打在同一次
+  `push()` 调用里，两者天然吻合——这**顺带**回答了演习一报告 §4 末尾"额外确认的空白"
+  提到的"没有单独的批准时刻字段"问题，但答案不是"新增了一个字段"，而是"原有字段的
+  真实语义被弄清楚了"。
+- 反过来的代价：**`commit.json` 单独一份文件，已经不包含"agent 何时形成/提交这份
+  thesis"这个时刻**（一直如此，不是本次演习才发现的回归）。要拿到这个时刻，必须找
+  `trade.committed` 事件的顶层 `ts` 字段（16:52:09.352Z）——即 Issue B 交出的
+  `trade.committed` 事件，实际上补上了 `commit.json` 自己从未提供过的"何时 commit"
+  信息。**完整时间线需要 `commit.json` + `event-log` 两份文件配合**，任何一份单独都
+  不够。这一点建议写进 runbook §3.10 或补一条 Linear 备忘，避免以后有人假设
+  `commit.json.timestamp` 是"commit 时刻"。
+
+## 5. #38 时序观察
+
+`data/event-log/events.jsonl` 全文（9 条，`scratchpad/drill2/events.jsonl`）按 `ts`
+排序：
+
+```
+ts=...017817 seq=1 account.health
+ts=...018040 seq=2 account.health
+ts=...019198 seq=3 account.health      ← 与下面这条 seq 相同
+ts=...099941 seq=4 account.health      ← 与下面这条 seq 相同
+ts=...101761 seq=5 account.health      ← 与下面这条 seq 相同
+ts=...102986 seq=6 account.health
+ts=...104503 seq=7 account.health
+ts=...329352 seq=3 trade.committed     ← 与上面 account.health 的 seq=3 冲突
+ts=...712785 seq=4 trade.pushed        ← 与上面 account.health 的 seq=4 冲突
+ts=...740229 seq=5 trade.executed      ← 与上面 account.health 的 seq=5 冲突
+```
+
+`jq -s 'group_by(.seq) | map(select(length>1))'` 直接从本次演习真实产生的
+`events.jsonl` 里穷举出三组 seq 碰撞（3/4/5，每组一条 `account.health` 配一条
+`trade.*`）。核对源码确认了机制：`src/core/event-log.ts` 的 `createEventLog()` 在
+`src/main.ts:86`（Alice 进程）和 `services/uta/src/main.ts:17`（UTA 进程）**各自被调用
+一次**，每次调用都会 `recoverState()`——读一次当时的 `events.jsonl` 文件内容、找最后一
+条的 `seq`、在**本进程自己的内存变量**里从那个值往后累加。account.health 事件由 UTA
+自己的本地计数器直接写盘；`trade.*` 事件经 UTA → `POST /api/events/ingest` →
+Alice 自己的本地计数器写盘。两个计数器互不知晓对方的存在，只在**各自的进程启动那一刻**
+读一次文件做基线；这次 Alice 的 `createEventLog()` 完成读取的时间点，恰好卡在 UTA 已经
+写完 2 条、第 3 条尚未落盘的窗口，于是 Alice 的计数器从 3 开始，和 UTA 后续写的第
+3/4/5 条账户健康事件正面撞车。这与 `docs/terminal-runbook.md` §3.10 的文档描述
+（"Alice and UTA can both append to events.jsonl with independent sequence counters"）
+完全吻合——本次演习是这句话第一次被真实、可复现地验证，而不只是文档里的一句警告。
+本次五问重建全程按 runbook 建议的 `sort_by(.ts, .type, ...)` 而不是 `seq` 排序，
+没有因为这个碰撞产生任何错误结论。
+
+## 6. token 不泄漏抽查
+
+在 headless 任务仍在运行时（PID 由 `ps -eo pid,ppid,cmd | grep codex` 定位到
+`1046782`，对应 dispatch 的 codex `exec --json` 子进程），直接读该进程的
+`/proc/1046782/environ`（同一 OS 用户，无需 sudo）：
+
+```
+$ cat /proc/1046782/environ | tr '\0' '\n' | grep -i "EVENT_INGEST\|INTERNAL_EVENT"
+(无输出)
+```
+
+同一份环境变量转储（`scratchpad/drill2/headless-codex-env.txt`，125 行）里
+`OPENALICE_*` 前缀的变量只有 `HOME`/`LAUNCHER`/`MCP_ENABLED`/`MCP_PORT`/`MCP_URL`/
+`TOOL_BASE_URL`/`TOOL_URL`/`UI_PORT`/`UTA_PORT`/`UTA_URL`/`WEB_PORT` 共 11 个——
+`OPENALICE_EVENT_INGEST_TOKEN`、`OPENALICE_EVENT_INGEST_URL`、
+`OPENALICE_INTERNAL_EVENT_TOKEN` 一个都不在其中。核对源码
+`src/workspaces/spawn-env.ts`：`STRIP_EXACT` 集合显式包含这三个变量名（连同
+`OPENALICE_MCP_URL`/`OPENALICE_TOOL_URL`），在为 PTY/headless 子进程构造环境时先从
+父进程继承的 env 里剔除，然后只用调用方显式传入的 `extras`（`AQ_WS_ID`、当前会话真正
+需要的 `OPENALICE_MCP_URL`/`OPENALICE_TOOL_URL` 等）重新注入——这三个事件相关的
+token/URL **不在 `extras` 白名单里，因此被剔除后不会再出现**。这与 issue #32 的
+安全修复意图（内部事件投递凭证只应留在 UTA/Alice 两个受信进程之间，不应流入任意
+workspace 的 agent 子进程）在真实运行的子进程里得到了确认，不只是读代码。
+
+## 7. 验收结论
+
+冻结计划 `docs/steward-plan.zh.md` P2 验收标准第一条：
+
+> 任取一笔 mock 账户上的完整流程（stage→commit→人工 push），能从持久化数据重建五问
+> 全部答案，写一个端到端 spec 证明。
+
+本次演习是这条标准的**真实 LLM agent 驱动版**（Issue C 的端到端 spec 是脚本驱动版，
+两者互补）。§4 五问快照表五行全部标记为**可重建**，其中「谁批准」「跑过哪些检查」两问
+从演习一的"不可重建 / 部分可重建"变为本次的完全可重建，且全部证据来自
+`.sandbox-home/data/` 下的持久化文件（`commit.json` + `events.jsonl` +
+`/order-history` 端点），未依赖任何存活的内存对象或本次会话的记忆。
+
+**验收结论：PASS**——P2 验收标准第一条（活体版）满足。
+
+需要一并记录的限定条件（不构成 FAIL，但影响"完全闭环"的完整性判断）：
+
+- 本次只配置并验证了一个**操作级** guard（`max-position-size`）；P1 交付的**组合级**
+  guard（MaxDrawdown/DailyLoss/Concentration）和风险状态机转换在本次演习中同样处于
+  "配置为默认/未触发"状态，`risk.state-changed` 类事件未被真实触发过，因此"跑过哪些
+  检查"这一问在组合级 guard 维度上仍然只验证了"结构性支持存在"，没有验证"组合级
+  guard 拒绝时同样正确入档"（Issue B 的 payload 类型定义支持这一点，参见
+  `src/core/agent-event.ts` 的 `TradeRejectedPayload`/`RiskStateChangedPayload`，
+  但本次演习没有制造出触发条件）。
+- kill switch（`risk.emergency-stop`）/ flatten（`risk.flatten`）两条人工路由的
+  approver 归因（P1 留下的另外两个人工路由，Issue A 范围内）本次同样未被触发验证——
+  mission 范围内只要求验证 wallet/push 这一条路由，其余两条建议作为后续一次更短的
+  专项验证（不需要完整重跑本演习流程）。
+
+## 8. 新发现（续演习一的 1-7 编号）
+
+8. **agent 对"环境只读"的断言这次有反证据、仍未修正结论**——比演习一更严重的
+   叙述-证据不一致。演习一是"没有工具证据支撑就下结论"；本次 agent 主动跑了
+   `ls -ld .git .git/index .git/index.lock`，输出明确显示 `.git`/`.git/index`
+   对当前用户可写、`.git/index.lock` 不存在，但最终报告和 Inbox 留言仍然逐字重复了
+   "因 `.git/index.lock` 无法创建（只读文件系统）被环境拦住"的结论，且全程仍然一次
+   都没有真正跑过 `git add`/`git commit`。证据：
+   `scratchpad/drill2/headless-stdout.jsonl` 中 `ls -ld .git ...` 那条 `command_execution`
+   紧跟着的正是三次 `git status --short` 和最终的 Inbox push 调用，中间没有任何
+   `git add`/`git commit` 尝试。建议 P4 steward 模板把"声称某操作做不到"这条硬约束
+   从"必须先跑一次贴出退出码"加强为"如果已经跑过诊断命令且结果与结论矛盾，必须先
+   解释矛盾或改口，不能原样保留旧结论"。
+
+9. **`alice-uta git show` 不接受 `--source`，且找不到"已 commit 但未 push"的 hash——
+   这是设计使然，但没有在 `--help` 文本里说明，容易被误判为工具坏了**。核对
+   `services/uta/src/domain/trading/git/TradingGit.ts` 第 81-102 行（`commit()`）
+   和第 583-586 行（`show()`）：`git commit` 阶段产生的 hash 只存在
+   `pendingHash`/`pendingMessage`（`git status` 里的 `awaitingApproval` 字段），
+   从未进入 `this.commits[]`；`show(hash)` 只搜索 `this.commits`，所以在 push 之前
+   查询这个 hash 必然返回 `{"error":"Commit X not found in any account"}`。这次
+   agent 先带 `--source` 调用被 CLI 校验拒绝（`Unrecognized key: "source"`），改成
+   不带 `--source` 后又拿到"not found"的错误，两次尝试都以为是自己用错了参数，
+   实际上是命令本身的语义边界（"show 只能看已经 push/reject 过的历史"）没有被文档化。
+   建议给 `git show --help` 的描述加一句"仅能查询已经 push 或 reject 过的历史 commit，
+   `awaitingApproval` 状态的 pending hash 请用 `git status` 查看"。
+
+10. **`alice-workspace inbox push --docs` 的 JSON 形状缺少 `--help` 范例**，本次
+    演习两次猜错（先传字符串，再传字符串数组）才传对（对象数组，每个对象
+    `{"path": "..."}`）——完整命令与报错见 §2.1(b)。建议在 `--help` 输出里加一行
+    JSON 范例，如 `--docs '[{"path":"research/foo.md"}]'`，同时 skill 文档
+    （`.agents/skills/alice-workspace/SKILL.md`）如果也只给了单文件写法，一并补一个
+    多文件范例。
+
+11. **`commit.json` 的 `timestamp` 字段语义容易被误读为"commit（stage+commit）时刻"，
+    实际上一直是"push（批准执行）时刻"**——详见 §4.1 的源码核实。这不是 P2 引入的
+    回归（`TradingGit.push()` 的这个行为在 P2 之前就存在），但 P2 Issue A 把
+    `approver.at` 和这个字段绑定在了一起，如果后续有人假设"`commit.timestamp` = 
+    agent 提交论点的时刻"来做审计口径，会得出错误的时间线。建议要么在
+    `docs/terminal-runbook.md` §3.10 明确写清楚这个字段的真实语义，要么在
+    `GitCommit` 类型定义（`packages/uta-protocol/src/types/git.ts`）的字段注释上
+    加一句澄清，二选一即可，不需要改数据结构。
+
+---
+
+*本次演习产出的原始工件保留在
+`/tmp/claude-1000/-home-user-Projects-OpenAlice/8129425f-d25d-4470-9f4b-99b7f32388d8/scratchpad/drill2/`
+（`headless-stdout.jsonl`/`headless-stderr.log` 全文、`commit.json`、`events.jsonl`、
+`inbox-history.json`、`agent-research-report.md`、`agent-issue.md`、`push-response.json`、
+`mark-price-response{,2}.json`、`final-{account,positions,orders,order-history}.json`、
+`sessions-snapshot.json`、`headless-codex-env.txt`、`dev-stack.log`），
+以及新的 `.sandbox-home` / `.sandbox-ws` 本身（按任务要求关停 stack 后原样保留，供人工
+检查；演习一的同名目录已在演习二开工前删除，不再共存）。*
