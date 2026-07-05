@@ -1,6 +1,6 @@
 # Steward P3 设计稿 — 渐进授权阶梯
 
-> 版本：草案 v0.1（2026-07-05）
+> 版本：草案 v0.2（2026-07-05）——§8 五个待决问题 maintainer 已裁决（见该节），本版据此更新 §3/§5 并新增 §11 精确工具映射表待过目
 > 地位：**设计稿**，从属于 [steward-plan.zh.md](steward-plan.zh.md) v1.0 冻结计划的 P3。
 > 冻结计划 P3 明确要求：**"实现前先出一页设计稿给用户过目"**、**"设计稿经用户批准后才动工"**。本文就是那页设计稿。**maintainer 批准前不写任何实现代码。**
 > 用法：maintainer 直接在文中批注（`>` 引用块），orchestrator 内联答复并升版本号；§8 的待决问题是本稿的核心，请优先裁决。
@@ -32,12 +32,14 @@
 
 | 授权档 | agent 可见的工具面 | 执行方式 | 账户类型 |
 |---|---|---|---|
-| **read_only** | 行情/新闻/分析/`riskStatus` + 只读交易查询（account/positions/orders）。**无 stage/commit/任何写工具** | 无 | 任意（含实盘，只读） |
-| **paper** | 上一档 + `stage`/`commit`（带 thesis） | 人工 push（现有审批门不变） | **仅 paper/mock 账户** |
+| **read_only** | 行情/新闻/分析/`riskStatus` + 只读交易查询（account/positions/orders） | 无 | 任意（含实盘，只读） |
+| **paper** | 上一档 + `stage`/`commit`（带 thesis） | **UTA 侧 auto-push**（虚拟钱，仅过 guards + P1 风险状态，无需预算信封） | **仅 paper/mock 账户** |
 | **small_live** | 同 paper | 人工 push **逐笔**（审批门不变）+ **UTA 侧硬金额上限**（单笔 + 单日，人批准也拒超限） | 实盘账户 |
-| **limited_autonomy** | 同 paper（**agent 工具面与 paper 相同——关键，见 §5**） | **UTA 侧确定性 auto-push**：预算内免逐笔人工审批；P1 降级即刻失效 | 先 paper（I9），达标后实盘 |
+| **limited_autonomy** | 同 paper | **UTA 侧确定性 auto-push，预算信封内**免逐笔审批；P1 降级即刻失效 | 先 paper（I9），达标后实盘 |
 
-读法：授权档从上到下单调放宽，每一档都是前一档的超集加一点新能力。**注意 paper 与 limited_autonomy 的 agent 工具面完全相同**，区别只在 UTA 侧那条 auto-push 通道开不开——这是 §5 的设计核心。
+读法（**D2 裁决后的正确读法**）：阶梯**不是按"自主程度"递增，而是按"真金暴露 / 已建立的信任"递增**。paper 用虚拟钱，所以 auto-push 是安全的、免费给；一旦上真钱（small_live）就收回自主权、要求逐笔人工 + 硬上限；只有在 small_live 用真钱证明过自己后，才在 limited_autonomy 把真钱的自主权在预算信封内交还。所以"自主"这条线是 auto→人工→auto，但"真金风险"这条线是单调递增的——阶梯保护的是后者。
+
+**三个写档（paper/small_live/limited_autonomy）的 agent 工具面完全相同**（都是 stage/commit，都**不含 push 工具**）；区别 100% 在 UTA 执行侧那条通道：paper=无条件 auto-push（仅 guards+风险）/ small_live=人工 push + 硬上限 / limited_autonomy=预算信封内 auto-push。工具面裁剪只区分 **read_only vs 写档**；三个写档之间靠 UTA 执行侧区分——这是 §5、§11 的设计核心。
 
 ---
 
@@ -61,7 +63,10 @@
 
 **问题**：`limited_autonomy` 要让 agent 的提案在预算内**自动成交、无需人**。但今天 push 是**人类专属 HTTP 路由**，`allowAiTrading` 默认 false，agent 没有任何触 broker 的路径。怎么在不给 agent 一把 push 工具的前提下实现自动执行？
 
-**推荐方案（保持 I3）**：**不给 agent push 工具。** agent 的工具面在 `limited_autonomy` 下与 `paper` 完全相同——仍然只能 `stage`/`commit`。真正的自动执行由 **UTA 侧一个确定性的 auto-push 组件**完成：每当有一笔 commit 落地，auto-push 在 UTA 内部对照**预算信封**（预先由人批准）判定——
+**方案（D1 已批准，保持 I3）**：**任何档都不给 agent push 工具。** 三个写档的 agent 工具面都只有 `stage`/`commit`。真正的自动执行由 **UTA 侧一个确定性的 auto-push 组件**完成。
+
+- **paper 档**（D2 裁决：也用 auto-push）：commit 落地后 auto-push **无条件放行**（只过 guards + P1 风险状态检查，**不要求预算信封**——虚拟钱，目的就是无摩擦测试）。
+- **limited_autonomy 档**：commit 落地后 auto-push 对照**预算信封**（预先由人批准）判定——
 
 - 单笔金额 ≤ 单笔上限？
 - 累计（会话/当日）+ 本笔 ≤ 预算？
@@ -107,13 +112,13 @@
 
 ---
 
-## 8. 待决问题（请 maintainer 裁决 —— 这是本稿要你过目的核心）
+## 8. 待决问题 —— maintainer 已全部裁决（2026-07-05）
 
-- **D1（最重要）**：§5 的方案——`limited_autonomy` 的自动执行用 **UTA 侧确定性 auto-push，agent 永不拿 push 工具**。批准这个方向吗？（替代方案是给 agent 一把受预算约束的 push 工具，但那会把 LLM 放进信任链，我不推荐，违反 I3。）
-- **D2**：`paper` 档的执行——建议**仍走人工 push**（自主性归 `limited_autonomy`；"paper 上测自主"= 用 `limited_autonomy` 指向 paper 账户）。同意，还是希望 paper 档本身就允许 auto-push（因为是虚拟钱）？
-- **D3**：`limited_autonomy` 预算的重置边界——建议复用 P1 DailyLoss 的 **UTC 日界**（跨 venue 一致）。同意，还是要"会话预算"（每次 headless run 重置）或两者叠加？
-- **D4**：授权档命名——`read_only` / `paper` / `small_live` / `limited_autonomy`（冻结计划已给这四个名）。代码里的字段名用 `authzLevel` 还是别的（`grant` / `autonomyLevel`）？只要不撞 `tier`。
-- **D5**：工具面到授权档的精确映射（§3 表是初稿）——比如 `read_only` 到底能不能看 `stage` 的**只读预览**、`riskStatus` 归哪档，等细节。批准后我在 P3-1 里定一张精确的 工具→档 映射表再给你过一眼，还是现在就要逐条定？
+- **D1 ✅ 批准**：`limited_autonomy` 用 UTA 侧确定性 auto-push，agent 永不拿 push 工具。
+- **D2 ✅ 改为 paper 也用 auto-push**（不走人工）。已据此更新 §3/§5，并重述阶梯语义为"按真金暴露递增"（见 §3 读法）。paper auto-push 无条件（仅 guards+风险），limited_autonomy auto-push 要过预算信封。
+- **D3 ✅ 复用 P1 DailyLoss 的 UTC 日界**。
+- **D4 ✅ 字段名 `authzLevel`**，四个取值 `read_only`/`paper`/`small_live`/`limited_autonomy`。
+- **D5 → 见 §11**：精确的 工具→授权档 映射表已在下方给出，**请过目批准；这是开始 P3-1 实现前的最后一个确认点。**
 
 ---
 
@@ -122,6 +127,56 @@
 - 多用户/角色分离（单 operator 模型不变）。
 - `/mcp` 全局面的认证改造（属安全加固不属阶梯本身，另开 issue）。
 - 自动放宽授权档（永久 out，I2）。
+
+---
+
+## 11. 精确工具→授权档映射表（D5 交付，请过目批准）
+
+这是从 `src/tool/trading.ts` 实际枚举的 **24 个 agent 可见交易工具** + 非交易工具，逐个定档。原则：**工具面裁剪只区分 read_only（只读）vs 写档（可 stage/commit）；三个写档工具面相同**（区别在 UTA 执行侧，§5）。`✓`=该档可见，`—`=该档不可见。
+
+### 只读交易工具（全档可见，含 read_only）
+
+| 工具 | 作用 | read_only | paper | small_live | limited_autonomy |
+|---|---|:--:|:--:|:--:|:--:|
+| `listUTAs` | 列账户 | ✓ | ✓ | ✓ | ✓ |
+| `searchContracts` / `getContractDetails` / `expandContract` | 合约查询 | ✓ | ✓ | ✓ | ✓ |
+| `getAccount` / `getPortfolio` / `getOrders` | 组合/持仓/订单查询 | ✓ | ✓ | ✓ | ✓ |
+| `getQuote` / `getMarketClock` | 行情/交易时段 | ✓ | ✓ | ✓ | ✓ |
+| `riskStatus` | 只读风险状态（P1） | ✓ | ✓ | ✓ | ✓ |
+| `tradingLog` / `tradingShow` / `tradingStatus` | TradingGit 历史/详情/状态 | ✓ | ✓ | ✓ | ✓ |
+| `orderHistory` / `tradeHistory` | 订单/成交历史 | ✓ | ✓ | ✓ | ✓ |
+| `simulatePriceChange` | 价格 what-if（源码标注 READ-ONLY dry-run） | ✓ | ✓ | ✓ | ✓ |
+| `tradingSync` | 从 broker 拉取订单状态对账（不下单，仅同步 ledger） | ✓ | ✓ | ✓ | ✓ |
+
+### 提案类工具（write：仅写档可见，read_only 不可见）
+
+| 工具 | 作用 | read_only | paper | small_live | limited_autonomy |
+|---|---|:--:|:--:|:--:|:--:|
+| `placeOrder` | stage 一笔下单意图 | **—** | ✓ | ✓ | ✓ |
+| `modifyOrder` | stage 改单 | **—** | ✓ | ✓ | ✓ |
+| `closePosition` | stage 平仓 | **—** | ✓ | ✓ | ✓ |
+| `cancelOrder` | stage 撤单 | **—** | ✓ | ✓ | ✓ |
+| `tradingCommit` | 把 staged 打包成待审批 commit（带 thesis） | **—** | ✓ | ✓ | ✓ |
+| `tradingReject` | 丢弃 pending/staged（可逆，不触 broker） | **—** | ✓ | ✓ | ✓ |
+
+### 执行类工具（**所有档都不给 agent**）
+
+| 工具 | 作用 | read_only | paper | small_live | limited_autonomy |
+|---|---|:--:|:--:|:--:|:--:|
+| `tradingPush` | 触 broker 真实执行 | **—** | **—** | **—** | **—** |
+
+> **这是 P3 对现状的一个明确改变**：今天 `tradingPush` 是暴露给 agent 的（默认返回 awaiting-approval 存根，`allowAiTrading` 开了才真执行）。**P3-1 把 `tradingPush` 从 agent 工具面彻底移除，所有档都不给。** 执行只有两条路：人工经 HTTP push 路由（small_live 及一切人工审批），或 UTA 侧确定性 auto-push（paper / limited_autonomy，§5）。这样 I3 更干净——agent 连"存根 push"都碰不到，执行完全不在它的工具面里。
+
+### 非交易工具（全档可见，与授权档无关）
+
+`inbox_push` / `inbox_read`、`issue_*`、`entity_*`、`workspace_path`，以及市场/新闻/分析/quant/economy/derivatives/etf/indices/sector 等——都是 observe/report/研究面，**任何档都可见**（授权阶梯只管交易执行面，不裁剪观察与汇报能力）。
+
+### 两条附加约束（非工具级，但属本表的裁决范围）
+
+1. **账户类型闸**：`paper` 档只能作用于 **paper/mock 账户**；对实盘账户，即使 workspace 档=paper 也拒绝其提案类工具生效（实盘账户的授权路径是 read_only → small_live → limited_autonomy，跳过 paper）。落点：账户×workspace 绑定校验。
+2. **`tradingReject` 归写档**：它虽然不触 broker，但会改动待审批队列（丢弃别的会话/人可能想审的 commit）。放在写档，read_only 不给——保守。
+
+**请你确认这张表**（尤其：`tradingSync` / `simulatePriceChange` 放在 read_only 是否 OK；`tradingPush` 全档移除是否同意；账户类型闸的处理）。确认后我按 §7 开 P3-1 issue 开始实现。
 
 ---
 
