@@ -15,6 +15,12 @@ import './contract-ext.js'
 /** 8-character short SHA-256 hash. */
 export type CommitHash = string
 
+export interface ApproverIdentity {
+  via: 'alice-bff' | 'loopback'
+  fingerprint?: string
+  at: string
+}
+
 // ==================== Operation ====================
 
 export type OperationAction = Operation['action']
@@ -130,6 +136,8 @@ export interface GitCommit {
   results: OperationResult[]
   stateAfter: GitState
   timestamp: string
+  /** Human approval/trigger identity. Optional for pre-issue-31 commits. */
+  approver?: ApproverIdentity
   round?: number
 }
 

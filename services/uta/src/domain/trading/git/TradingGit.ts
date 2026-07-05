@@ -23,6 +23,7 @@ import type {
   GitState,
   CommitLogEntry,
   GitExportState,
+  ApproverIdentity,
   GuardVerdict,
   OperationSummary,
   PriceChangeInput,
@@ -100,7 +101,7 @@ export class TradingGit implements ITradingGit {
     }
   }
 
-  async push(): Promise<PushResult> {
+  async push(approver?: ApproverIdentity): Promise<PushResult> {
     if (this.stagingArea.length === 0) {
       throw new Error('Nothing to push: staging area is empty')
     }
@@ -141,6 +142,7 @@ export class TradingGit implements ITradingGit {
       results,
       stateAfter,
       timestamp: new Date().toISOString(),
+      ...(approver ? { approver } : {}),
       round: this.currentRound,
     }
 
@@ -332,6 +334,7 @@ export class TradingGit implements ITradingGit {
     cancelOrders: boolean
     cancellations: Array<{ orderId: string; contract: Contract; order?: Order; result: PlaceOrderResult }>
     stateAfter: GitState
+    approver?: ApproverIdentity
   }): Promise<CommitHash> {
     const timestamp = new Date().toISOString()
     const { cancellations, stateAfter } = params
@@ -369,6 +372,7 @@ export class TradingGit implements ITradingGit {
       results,
       stateAfter,
       timestamp,
+      ...(params.approver ? { approver: params.approver } : {}),
       round: this.currentRound,
     }
 
@@ -388,6 +392,7 @@ export class TradingGit implements ITradingGit {
   async recordFlatten(params: {
     positions: Array<{ position: Position; result: PlaceOrderResult }>
     stateAfter: GitState
+    approver?: ApproverIdentity
   }): Promise<CommitHash> {
     const timestamp = new Date().toISOString()
     const { positions, stateAfter } = params
@@ -423,6 +428,7 @@ export class TradingGit implements ITradingGit {
       results,
       stateAfter,
       timestamp,
+      ...(params.approver ? { approver: params.approver } : {}),
       round: this.currentRound,
     }
 

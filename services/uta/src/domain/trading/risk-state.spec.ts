@@ -235,6 +235,36 @@ describe('Risk state machine — persistence', () => {
     })
   })
 
+  it('loads legacy transition history without trigger identity', async () => {
+    const baseDir = makeTempDir()
+    const path = riskStatePath('legacy-risk', { baseDir })
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, JSON.stringify({
+      version: 1,
+      state: 'CAUTIOUS',
+      reason: 'legacy caution',
+      updatedAt: '2026-07-05T12:00:00.000Z',
+      history: [{
+        from: 'NORMAL',
+        to: 'CAUTIOUS',
+        by: 'human',
+        reason: 'legacy caution',
+        at: '2026-07-05T12:00:00.000Z',
+      }],
+    }), 'utf-8')
+
+    const uta = new UnifiedTradingAccount(new MockBroker({ id: 'legacy-risk' }), {
+      riskStateBaseDir: baseDir,
+      guardStateBaseDir: baseDir,
+    })
+
+    expect(uta.getRiskState()).toMatchObject({
+      state: 'CAUTIOUS',
+      history: [{ from: 'NORMAL', to: 'CAUTIOUS', by: 'human', reason: 'legacy caution' }],
+    })
+    expect(uta.getRiskState().history[0].triggerIdentity).toBeUndefined()
+  })
+
   it('treats corrupt risk-state files as READ_ONLY and logs loudly', async () => {
     const baseDir = makeTempDir()
     const path = riskStatePath('corrupt-risk', { baseDir })

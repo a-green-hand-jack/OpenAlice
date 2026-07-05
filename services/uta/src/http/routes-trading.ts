@@ -5,7 +5,7 @@ import type { UTAEngineContext } from '../types.js'
 import { BrokerError } from '../domain/trading/brokers/types.js'
 import type { UnifiedTradingAccount } from '../domain/trading/UnifiedTradingAccount.js'
 import { searchTradeableContracts } from '../domain/trading/contract-search.js'
-import type { AssetClassHint } from '@traderalice/uta-protocol'
+import type { ApproverIdentity, AssetClassHint } from '@traderalice/uta-protocol'
 import { executeOneShotOrder, type OrderEntryPhase } from '../domain/trading/order-entry.js'
 import { projectOrderHistory, projectTradeHistory } from '../domain/trading/order-history.js'
 
@@ -94,11 +94,33 @@ const ALLOWED_ASSET_CLASSES: ReadonlySet<AssetClassHint> = new Set([
   'equity', 'crypto', 'currency', 'commodity', 'unknown',
 ])
 
+const APPROVER_HEADER = 'x-openalice-approver'
+
 /** Resolve account by :id param, return 404 if not found. */
 function resolveAccount(ctx: UTAEngineContext, c: Context): UnifiedTradingAccount | null {
   const id = c.req.param('id')
   if (!id) return null
   return ctx.utaManager.get(id) ?? null
+}
+
+function approverFromRequest(c: Context): ApproverIdentity {
+  const at = new Date().toISOString()
+  const raw = c.req.header(APPROVER_HEADER)
+  if (!raw) return { via: 'loopback', at }
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object') return { via: 'loopback', at }
+    const via = (parsed as { via?: unknown }).via
+    const fingerprint = (parsed as { fingerprint?: unknown }).fingerprint
+    if (via !== 'alice-bff') return { via: 'loopback', at }
+    return {
+      via,
+      ...(typeof fingerprint === 'string' && fingerprint ? { fingerprint } : {}),
+      at,
+    }
+  } catch {
+    return { via: 'loopback', at }
+  }
 }
 
 /**
@@ -241,7 +263,7 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
       return c.json({ error: err instanceof z.ZodError ? err.message : String(err) }, 400)
     }
     const reason = body.reason ?? `Human set risk state to ${body.state}`
-    const riskState = await uta.setRiskState(body.state, reason)
+    const riskState = await uta.setRiskState(body.state, reason, approverFromRequest(c))
     return c.json({ riskState })
   })
 
@@ -259,9 +281,10 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
       return c.json({ error: err instanceof z.ZodError ? err.message : String(err) }, 400)
     }
     const reason = body.reason ?? 'Human emergency stop'
+    const triggerIdentity = approverFromRequest(c)
     let riskState
     try {
-      riskState = await uta.setRiskState('HALT', reason)
+      riskState = await uta.setRiskState('HALT', reason, triggerIdentity)
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -269,6 +292,7 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
       const result = await uta.emergencyCancelAllOpenOrders({
         reason,
         cancelOrders: body.cancelOrders,
+        triggerIdentity,
       })
       return c.json({
         riskState,
@@ -295,7 +319,7 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
       return c.json({ error: err instanceof z.ZodError ? err.message : String(err) }, 400)
     }
     try {
-      const result = await uta.flattenAllOpenPositions()
+      const result = await uta.flattenAllOpenPositions(approverFromRequest(c))
       return c.json({
         results: result.results,
         hash: result.hash,
@@ -543,7 +567,7 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
     if (!uta) return c.json({ error: 'Account not found' }, 404)
     if (!uta.status().pendingMessage) return c.json({ error: 'Nothing to push' }, 400)
     try {
-      const result = await uta.push()
+      const result = await uta.push(approverFromRequest(c))
       return c.json(result)
     } catch (err) {
       return c.json({ error: String(err) }, 500)
