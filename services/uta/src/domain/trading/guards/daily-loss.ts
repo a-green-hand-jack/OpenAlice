@@ -63,7 +63,7 @@ export class DailyLossGuard implements OperationGuard {
       equity: equity.toNumber(),
     }
 
-    if (dailyLossPct.gt(this.maxDailyLossPct)) {
+    if (dailyLossPct.gte(this.maxDailyLossPct)) {
       return {
         reason: `Daily loss is ${dailyLossPct.toFixed(1)}% of day-start equity (limit: ${this.maxDailyLossPct}%)`,
         metrics,

@@ -14,8 +14,9 @@ export function createGuardPipeline(
   dispatcher: (op: Operation) => Promise<unknown>,
   account: IBroker,
   guards: OperationGuard[],
+  onContext?: (ctx: GuardContext) => Promise<void> | void,
 ): (op: Operation) => Promise<unknown> {
-  if (guards.length === 0) return dispatcher
+  if (guards.length === 0 && !onContext) return dispatcher
 
   return async (op: Operation): Promise<unknown> => {
     const [positions, accountInfo] = await Promise.all([
@@ -24,6 +25,7 @@ export function createGuardPipeline(
     ])
 
     const ctx: GuardContext = { operation: op, positions, account: accountInfo }
+    await onContext?.(ctx)
     const guardVerdicts: GuardVerdict[] = []
 
     for (let i = 0; i < guards.length; i++) {

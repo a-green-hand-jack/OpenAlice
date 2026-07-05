@@ -57,7 +57,7 @@ export class MaxDrawdownGuard implements OperationGuard {
       equity: equity.toNumber(),
     }
 
-    if (drawdownPct.gt(this.maxDrawdownPct)) {
+    if (drawdownPct.gte(this.maxDrawdownPct)) {
       return {
         reason: `Drawdown is ${drawdownPct.toFixed(1)}% of equity (limit: ${this.maxDrawdownPct}%)`,
         metrics,

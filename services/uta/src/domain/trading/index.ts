@@ -89,3 +89,15 @@ export type {
   OperationGuard,
   GuardRegistryEntry,
 } from './guards/index.js'
+
+export {
+  createRiskStateStore,
+  createRiskStateEvaluator,
+  riskStatePath,
+} from './risk-state.js'
+export type {
+  HumanRecoverableRiskState,
+  RiskStateStore,
+  RiskStateEvaluator,
+  PersistedRiskState,
+} from './risk-state.js'

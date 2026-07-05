@@ -15,7 +15,7 @@ const REACH_RANK: Record<UTAReach, number> = { down: 0, connected: 1, readable: 
 import { TradingGit } from './git/TradingGit.js'
 import { recomputeCostBasisFromCommits } from './cost-basis.js'
 import { projectOrderHistory, projectTradeHistory } from './order-history.js'
-import type { OrderHistoryEntry, TradeHistoryEntry } from '@traderalice/uta-protocol'
+import type { OrderHistoryEntry, TradeHistoryEntry, RiskState, RiskStateInfo } from '@traderalice/uta-protocol'
 import { pnlOf } from './position-math.js'
 import type {
   Operation,
@@ -34,6 +34,16 @@ import type {
   SyncResult,
 } from './git/types.js'
 import { createGuardPipeline, resolveGuards } from './guards/index.js'
+import { createPortfolioGuardStateStore } from './guards/portfolio-state.js'
+import { isClearlyRiskReducing } from './guards/portfolio-risk.js'
+import type { GuardContext } from './guards/types.js'
+import {
+  createRiskStateEvaluator,
+  createRiskStateStore,
+  isRiskStateReadOnly,
+  type RiskStateEvaluator,
+  type RiskStateStore,
+} from './risk-state.js'
 import './contract-ext.js'
 
 // ==================== Options ====================
@@ -53,6 +63,10 @@ export interface UnifiedTradingAccountOptions {
   keyless?: boolean
   /** Test-only override for per-account guard state under data/trading/. */
   guardStateBaseDir?: string
+  /** Test-only override for per-account risk state under data/trading/. */
+  riskStateBaseDir?: string
+  /** Test-only clock injection for risk-state daily-loss evaluation. */
+  riskStateNow?: () => Date
 }
 
 // ==================== Stage param types ====================
@@ -94,6 +108,9 @@ export class UnifiedTradingAccount {
   private readonly _onHealthChange?: (accountId: string, health: BrokerHealthInfo) => void
   private readonly _onPostPush?: (accountId: string) => void | Promise<void>
   private readonly _onPostReject?: (accountId: string) => void | Promise<void>
+  private readonly _riskStateStore: RiskStateStore
+  private readonly _riskStateEvaluator: RiskStateEvaluator
+  private _lastRiskContext: Pick<GuardContext, 'positions' | 'account'> | null = null
 
   // ---- Health tracking ----
   private static readonly DEGRADED_THRESHOLD = 3
@@ -150,6 +167,22 @@ export class UnifiedTradingAccount {
     this._onHealthChange = options.onHealthChange
     this._onPostPush = options.onPostPush
     this._onPostReject = options.onPostReject
+    const portfolioGuardStateStore = createPortfolioGuardStateStore(
+      broker.id,
+      options.guardStateBaseDir ? { baseDir: options.guardStateBaseDir } : undefined,
+    )
+    const riskStateBaseDir = options.riskStateBaseDir ?? options.guardStateBaseDir
+    this._riskStateStore = createRiskStateStore(broker.id, {
+      ...(riskStateBaseDir ? { baseDir: riskStateBaseDir } : {}),
+      ...(options.riskStateNow ? { now: options.riskStateNow } : {}),
+    })
+    this._riskStateEvaluator = createRiskStateEvaluator({
+      accountId: broker.id,
+      guards: options.guards ?? [],
+      riskStateStore: this._riskStateStore,
+      portfolioStateStore: portfolioGuardStateStore,
+      now: options.riskStateNow,
+    })
 
     // Wire internals
     this._getState = async (): Promise<GitState> => {
@@ -164,6 +197,7 @@ export class UnifiedTradingAccount {
       // Stamp aliceId on all contracts returned by broker
       for (const p of positions) this.stampAliceId(p.contract)
       for (const o of orders) this.stampAliceId(o.contract)
+      await this._evaluateRiskState(accountInfo, positions)
       return {
         netLiquidation: accountInfo.netLiquidation,
         totalCashValue: accountInfo.totalCashValue,
@@ -191,8 +225,20 @@ export class UnifiedTradingAccount {
     const guards = resolveGuards(options.guards ?? [], {
       accountId: broker.id,
       stateBaseDir: options.guardStateBaseDir,
+      stateStore: portfolioGuardStateStore,
+      now: options.riskStateNow,
     })
-    const guardedDispatcher = createGuardPipeline(dispatcher, broker, guards)
+    const hasRiskTriggers = (options.guards ?? []).some((g) => g.type === 'max-drawdown' || g.type === 'daily-loss')
+    const guardedDispatcher = createGuardPipeline(
+      dispatcher,
+      broker,
+      guards,
+      hasRiskTriggers
+        ? async (ctx) => {
+            await this._evaluateRiskState(ctx.account, ctx.positions)
+          }
+        : undefined,
+    )
 
     const gitConfig = {
       executeOperation: guardedDispatcher,
@@ -275,7 +321,16 @@ export class UnifiedTradingAccount {
       recovering: this._recovering,
       connecting: this._connecting,
       disabled: this._disabled,
+      riskState: this.getRiskState(),
     }
+  }
+
+  getRiskState(): RiskStateInfo {
+    return this._riskStateStore.current()
+  }
+
+  async setRiskState(state: RiskState, reason: string): Promise<RiskStateInfo> {
+    return this._riskStateStore.humanSet({ state, reason })
   }
 
   /** Probe the capability ladder up to this account's target reach. Stages:
@@ -516,6 +571,50 @@ export class UnifiedTradingAccount {
     }
   }
 
+  private _assertRiskStateAllowsWrite(kind: 'stage' | 'commit' | 'push', operation?: Operation): void {
+    const riskState = this.getRiskState()
+    if (riskState.state === 'NORMAL') return
+
+    if (riskState.state === 'CAUTIOUS') {
+      if (kind !== 'stage') return
+      if (kind === 'stage' && operation && this._isClearlyRiskReducing(operation)) return
+      throw new BrokerError('CONFIG',
+        `Account "${this.label}" is in risk state CAUTIOUS — risk-increasing trading operations are not allowed. ` +
+        `Trigger: ${riskState.reason ?? 'risk guard breach'}. ` +
+        `A human can recover or tighten via POST /uta/${this.id}/risk-state.`)
+    }
+
+    if (isRiskStateReadOnly(riskState.state)) {
+      throw new BrokerError('CONFIG',
+        `Account "${this.label}" is read-only due to risk state ${riskState.state}. ` +
+        `Trigger: ${riskState.reason ?? 'risk state machine'}. ` +
+        `Stage, commit, and push are not allowed; reject remains available.`)
+    }
+  }
+
+  private _isClearlyRiskReducing(operation: Operation): boolean {
+    const cached = this._lastRiskContext ?? {
+      positions: [],
+      account: {
+        baseCurrency: 'USD',
+        netLiquidation: '0',
+        totalCashValue: '0',
+        unrealizedPnL: '0',
+        realizedPnL: '0',
+      },
+    }
+    return isClearlyRiskReducing({
+      operation,
+      positions: cached.positions,
+      account: cached.account,
+    })
+  }
+
+  private async _evaluateRiskState(account: AccountInfo, positions: readonly Position[]): Promise<RiskStateInfo> {
+    this._lastRiskContext = { account, positions }
+    return this._riskStateEvaluator.evaluate(account)
+  }
+
   /**
    * Per-orderType required-field gate, enforced at stage time so a broken
    * order can never reach staging/commit. Without this, a caller that loses
@@ -620,7 +719,6 @@ export class UnifiedTradingAccount {
     if (params.symbol) contract.symbol = params.symbol
 
     const subAccountId = this._resolveWriteSubAccount(contract, params.subAccountId)
-    if (subAccountId) this._stagedSubAccountIds.push(subAccountId)
 
     const order = new Order()
     order.action = params.action
@@ -643,7 +741,10 @@ export class UnifiedTradingAccount {
         ? { takeProfit: params.takeProfit, stopLoss: params.stopLoss }
         : undefined
 
-    return this.git.add({ action: 'placeOrder', contract, order, tpsl })
+    const operation: Operation = { action: 'placeOrder', contract, order, tpsl }
+    this._assertRiskStateAllowsWrite('stage', operation)
+    if (subAccountId) this._stagedSubAccountIds.push(subAccountId)
+    return this.git.add(operation)
   }
 
   stageModifyOrder(params: StageModifyOrderParams): AddResult {
@@ -658,7 +759,9 @@ export class UnifiedTradingAccount {
     if (params.tif != null) changes.tif = params.tif
     if (params.goodTillDate != null) changes.goodTillDate = params.goodTillDate
 
-    return this.git.add({ action: 'modifyOrder', orderId: params.orderId, changes })
+    const operation: Operation = { action: 'modifyOrder', orderId: params.orderId, changes }
+    this._assertRiskStateAllowsWrite('stage', operation)
+    return this.git.add(operation)
   }
 
   stageClosePosition(params: StageClosePositionParams): AddResult {
@@ -667,24 +770,28 @@ export class UnifiedTradingAccount {
     if (params.symbol) contract.symbol = params.symbol
 
     const subAccountId = this._resolveWriteSubAccount(contract, params.subAccountId)
-    if (subAccountId) this._stagedSubAccountIds.push(subAccountId)
-
-    return this.git.add({
+    const operation: Operation = {
       action: 'closePosition',
       contract,
       quantity: params.qty != null ? new Decimal(String(params.qty)) : undefined,
-    })
+    }
+    this._assertRiskStateAllowsWrite('stage', operation)
+    if (subAccountId) this._stagedSubAccountIds.push(subAccountId)
+    return this.git.add(operation)
   }
 
   stageCancelOrder(params: { orderId: string }): AddResult {
     this._assertWritable()
-    return this.git.add({ action: 'cancelOrder', orderId: params.orderId })
+    const operation: Operation = { action: 'cancelOrder', orderId: params.orderId }
+    this._assertRiskStateAllowsWrite('stage', operation)
+    return this.git.add(operation)
   }
 
   // ==================== Git flow ====================
 
   commit(message: string): CommitPrepareResult {
     this._assertWritable()
+    this._assertRiskStateAllowsWrite('commit')
     const result = this.git.commit(this._stampSubAccount(message))
     // Sub-account intent is now baked into the persisted message — clear the
     // transient tracker so the next staging batch starts clean.
@@ -703,6 +810,7 @@ export class UnifiedTradingAccount {
 
   async push(): Promise<PushResult> {
     this._assertWritable()
+    this._assertRiskStateAllowsWrite('push')
     if (this._disabled) {
       throw new BrokerError('CONFIG', `Account "${this.label}" is disabled due to configuration error.`)
     }
@@ -732,7 +840,7 @@ export class UnifiedTradingAccount {
   }
 
   status(): GitStatus {
-    return this.git.status()
+    return { ...this.git.status(), riskState: this.getRiskState() }
   }
 
   /**
@@ -931,6 +1039,7 @@ export class UnifiedTradingAccount {
       }
       account.unrealizedPnL = unrealized.toString()
     }
+    await this._evaluateRiskState(account, positions)
     return account
   }
 

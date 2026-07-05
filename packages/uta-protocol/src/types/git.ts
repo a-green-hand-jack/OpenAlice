@@ -7,7 +7,7 @@
 
 import type { Contract, Order, OrderCancel, Execution, OrderState } from '@traderalice/ibkr'
 import type Decimal from 'decimal.js'
-import type { Position, OpenOrder, TpSlParams, PlaceOrderLeg } from './broker.js'
+import type { Position, OpenOrder, TpSlParams, PlaceOrderLeg, RiskStateInfo } from './broker.js'
 import './contract-ext.js'
 
 // ==================== Commit Hash ====================
@@ -151,6 +151,7 @@ export interface GitStatus {
   pendingHash: CommitHash | null
   head: CommitHash | null
   commitCount: number
+  riskState?: RiskStateInfo
 }
 
 export interface OperationSummary {
