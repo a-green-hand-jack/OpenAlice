@@ -642,6 +642,25 @@ describe('TradingGit', () => {
       expect(commit.results[0].guardVerdicts).toEqual(guardVerdicts)
     })
 
+    it('preserves approver identity through JSON round-trip', async () => {
+      git.add(buyOp('AAPL'))
+      const prepared = git.commit('approved buy')
+      await git.push({
+        via: 'alice-bff',
+        fingerprint: 'fp-admin-session',
+        at: '2026-07-05T12:00:00.000Z',
+      })
+
+      const persisted = JSON.parse(JSON.stringify(git.exportState())) as GitExportState
+      const restored = TradingGit.restore(persisted, config)
+
+      expect(restored.show(prepared.hash)?.approver).toEqual({
+        via: 'alice-bff',
+        fingerprint: 'fp-admin-session',
+        at: '2026-07-05T12:00:00.000Z',
+      })
+    })
+
     it('restores old commit results without guard verdicts', async () => {
       const guardVerdicts = [
         { guard: 'symbol-whitelist', verdict: 'pass', metrics: { symbol: 'AAPL' } },
@@ -670,6 +689,24 @@ describe('TradingGit', () => {
         orderId: 'legacy-order',
         status: 'submitted',
       })
+    })
+
+    it('restores legacy commits without approver identity', async () => {
+      git.add(buyOp('AAPL'))
+      const prepared = git.commit('legacy un-attributed buy')
+      await git.push({
+        via: 'alice-bff',
+        fingerprint: 'fp-admin-session',
+        at: '2026-07-05T12:00:00.000Z',
+      })
+
+      const persisted = JSON.parse(JSON.stringify(git.exportState())) as GitExportState
+      delete persisted.commits[0].approver
+
+      const restored = TradingGit.restore(persisted, config)
+      const commit = restored.show(prepared.hash)!
+      expect(commit.approver).toBeUndefined()
+      expect(commit.message).toBe('legacy un-attributed buy')
     })
 
     it('rehydrates Decimal price fields through JSON round-trip', async () => {

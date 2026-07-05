@@ -17,6 +17,7 @@ import { dirname, resolve } from 'node:path'
 import { dataPath } from '@/core/paths.js'
 import type {
   AccountInfo,
+  ApproverIdentity,
   RiskState,
   RiskStateInfo,
   RiskStateMetrics,
@@ -68,12 +69,14 @@ export interface RiskStateStore {
     target: Exclude<RiskState, 'NORMAL'>
     reason: string
     metrics?: RiskStateMetrics
+    triggerIdentity?: ApproverIdentity
     at?: Date
   }): Promise<RiskStateInfo>
   humanSet(input: {
     state: RiskState
     reason: string
     metrics?: RiskStateMetrics
+    triggerIdentity?: ApproverIdentity
     at?: Date
   }): Promise<RiskStateInfo>
 }
@@ -129,6 +132,7 @@ export function createRiskStateStore(
     by: RiskStateTransition['by']
     reason: string
     metrics?: RiskStateMetrics
+    triggerIdentity?: ApproverIdentity
     at?: Date
     recordEvenIfSame?: boolean
   }): Promise<RiskStateInfo> {
@@ -144,6 +148,7 @@ export function createRiskStateStore(
         by: input.by,
         reason: input.reason,
         ...(input.metrics ? { metrics: input.metrics } : {}),
+        ...(input.triggerIdentity ? { triggerIdentity: input.triggerIdentity } : {}),
         at,
       }
       state = normalize({
@@ -176,6 +181,7 @@ export function createRiskStateStore(
         by: 'auto',
         reason: input.reason,
         metrics: input.metrics,
+        triggerIdentity: input.triggerIdentity,
         at: input.at,
       })
     },
@@ -186,6 +192,7 @@ export function createRiskStateStore(
         by: 'human',
         reason: input.reason,
         metrics: input.metrics,
+        triggerIdentity: input.triggerIdentity,
         at: input.at,
         recordEvenIfSame: true,
       })
@@ -302,6 +309,23 @@ function normalizeTransition(raw: unknown): RiskStateTransition {
     by: raw.by,
     reason: raw.reason,
     ...(raw.metrics !== undefined ? { metrics: normalizeMetrics(raw.metrics) } : {}),
+    ...(raw.triggerIdentity !== undefined ? { triggerIdentity: normalizeApproverIdentity(raw.triggerIdentity) } : {}),
+    at: raw.at,
+  }
+}
+
+function normalizeApproverIdentity(raw: unknown): ApproverIdentity {
+  if (!isRecord(raw)) throw new Error('risk state: corrupt trigger identity')
+  if (raw.via !== 'alice-bff' && raw.via !== 'loopback') {
+    throw new Error('risk state: corrupt trigger identity')
+  }
+  if (typeof raw.at !== 'string') throw new Error('risk state: corrupt trigger identity')
+  if (raw.fingerprint !== undefined && typeof raw.fingerprint !== 'string') {
+    throw new Error('risk state: corrupt trigger identity')
+  }
+  return {
+    via: raw.via,
+    ...(raw.fingerprint !== undefined ? { fingerprint: raw.fingerprint } : {}),
     at: raw.at,
   }
 }

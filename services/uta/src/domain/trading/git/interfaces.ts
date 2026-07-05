@@ -21,6 +21,7 @@ import type {
   CommitLogEntry,
   GitExportState,
   GitState,
+  ApproverIdentity,
   PriceChangeInput,
   SimulatePriceChangeResult,
   OrderStatusUpdate,
@@ -32,7 +33,7 @@ export interface ITradingGit {
 
   add(operation: Operation): AddResult
   commit(message: string): CommitPrepareResult
-  push(): Promise<PushResult>
+  push(approver?: ApproverIdentity): Promise<PushResult>
   reject(reason?: string): Promise<RejectResult>
 
   // ---- wallet reconciliation (synthesized commits) ----
@@ -69,11 +70,13 @@ export interface ITradingGit {
     cancelOrders: boolean
     cancellations: Array<{ orderId: string; contract: Contract; order?: Order; result: PlaceOrderResult }>
     stateAfter: GitState
+    approver?: ApproverIdentity
   }): Promise<CommitHash>
   /** Squash direct flatten broker closes into one audit commit. */
   recordFlatten(params: {
     positions: Array<{ position: Position; result: PlaceOrderResult }>
     stateAfter: GitState
+    approver?: ApproverIdentity
   }): Promise<CommitHash>
   /** Every broker orderId the log has ever seen. */
   getKnownOrderIds(): Set<string>

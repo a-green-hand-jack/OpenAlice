@@ -12,7 +12,10 @@
  * doesn't hang on a dead backend.
  */
 
-import { Hono } from 'hono'
+import { createHash } from 'node:crypto'
+import { Hono, type Context } from 'hono'
+import { listSessions, type SessionRecord } from '@/services/auth/index.js'
+import { SESSION_COOKIE_NAME } from '../middleware/auth.js'
 
 // Total request timeout. UTA is on the loopback interface so connect is
 // instant — this guards against handlers that legitimately take seconds
@@ -28,6 +31,8 @@ const PASSTHROUGH_HEADERS: readonly string[] = [
   'accept', 'accept-language', 'content-type', 'content-length',
   'user-agent', 'cache-control', 'pragma', 'x-request-id',
 ]
+
+const APPROVER_HEADER = 'x-openalice-approver'
 
 export function createTradingProxyRoutes(opts: { utaBaseUrl: string }): Hono {
   const app = new Hono()
@@ -45,6 +50,8 @@ export function createTradingProxyRoutes(opts: { utaBaseUrl: string }): Hono {
       const v = incoming.headers.get(name)
       if (v !== null) forwardHeaders.set(name, v)
     }
+    const approver = await approverDescriptorFromRequest(c)
+    if (approver) forwardHeaders.set(APPROVER_HEADER, JSON.stringify(approver))
 
     const controller = new AbortController()
     const connectTimer = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS)
@@ -91,6 +98,61 @@ export function createTradingProxyRoutes(opts: { utaBaseUrl: string }): Hono {
 
 function url(req: Request): URL {
   try { return new URL(req.url) } catch { return new URL('http://localhost/') }
+}
+
+async function approverDescriptorFromRequest(c: Context): Promise<{ via: 'alice-bff'; fingerprint: string } | null> {
+  const attached = approverDescriptor((c as unknown as { get: (key: string) => unknown }).get('session'))
+  if (attached) return attached
+
+  const sid = readSessionCookie(c.req.header('cookie') ?? '')
+  if (!sid) return null
+
+  const session = await findValidSession(sid)
+  return approverDescriptor(session)
+}
+
+function approverDescriptor(session: unknown): { via: 'alice-bff'; fingerprint: string } | null {
+  if (!session || typeof session !== 'object') return null
+  const sid = (session as Partial<SessionRecord>).sid
+  if (!sid) return null
+  return {
+    via: 'alice-bff',
+    fingerprint: createHash('sha256')
+      .update(`openalice-admin-session:${sid}`)
+      .digest('hex')
+      .slice(0, 16),
+  }
+}
+
+async function findValidSession(sid: string): Promise<SessionRecord | null> {
+  try {
+    const session = (await listSessions()).find((s) => s.sid === sid)
+    if (!session) return null
+    const expiresAt = new Date(session.expiresAt).getTime()
+    if (!Number.isFinite(expiresAt) || expiresAt < Date.now()) return null
+    return session
+  } catch {
+    return null
+  }
+}
+
+function readSessionCookie(cookieHeader: string): string | null {
+  if (!cookieHeader) return null
+  for (const raw of cookieHeader.split(';')) {
+    const entry = raw.trim()
+    const eq = entry.indexOf('=')
+    if (eq < 0) continue
+    const name = entry.slice(0, eq)
+    if (name !== SESSION_COOKIE_NAME) continue
+    const value = entry.slice(eq + 1).trim()
+    if (value.length === 0) return null
+    try {
+      return decodeURIComponent(value)
+    } catch {
+      return null
+    }
+  }
+  return null
 }
 
 function hasBody(method: string): boolean {
