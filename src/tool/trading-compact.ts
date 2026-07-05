@@ -128,6 +128,7 @@ export function compactOperation(op: unknown): AnyRec {
         ...(k['tpsl'] ? { tpsl: k['tpsl'] } : {}),
       }
     case 'closePosition':
+    case 'emergencyClosePosition':
       return {
         action,
         contract: compactContract(k['contract']),
@@ -137,6 +138,13 @@ export function compactOperation(op: unknown): AnyRec {
       return { action, orderId: k['orderId'], changes: compactOrderFields(k['changes']) }
     case 'cancelOrder':
       return { action, orderId: k['orderId'] }
+    case 'emergencyCancelOrder':
+      return {
+        action,
+        orderId: k['orderId'],
+        contract: compactContract(k['contract']),
+        ...(k['order'] ? { order: compactOrderFields(k['order']) } : {}),
+      }
     default:
       return { action }
   }
@@ -184,6 +192,7 @@ export function compactStatus(status: unknown): AnyRec {
     awaitingApproval: msg ? { message: msg, hash: k['pendingHash'] ?? null } : null,
     head: k['head'] ?? null,
     commitCount: k['commitCount'],
+    ...(k['riskState'] ? { riskState: k['riskState'] } : {}),
   }
 }
 

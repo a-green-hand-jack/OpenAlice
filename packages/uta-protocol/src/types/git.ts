@@ -24,6 +24,23 @@ export type Operation =
   | { action: 'modifyOrder'; orderId: string; changes: Partial<Order> }
   | { action: 'closePosition'; contract: Contract; quantity?: Decimal }
   | { action: 'cancelOrder'; orderId: string; orderCancel?: OrderCancel }
+  | {
+      // Human-only kill-switch audit event: an open broker order cancelled
+      // directly by /emergency-stop, bypassing the stage/commit/push wall that
+      // READ_ONLY/HALT intentionally enforce.
+      action: 'emergencyCancelOrder'
+      orderId: string
+      contract: Contract
+      order?: Order
+    }
+  | {
+      // Human-only kill-switch audit event: an open position closed directly
+      // by /flatten, bypassing the normal close-position pipeline so it still
+      // works while the account is HALT.
+      action: 'emergencyClosePosition'
+      contract: Contract
+      quantity: Decimal
+    }
   | { action: 'syncOrders' }
   | {
       // Wallet-only event: an open order observed on the broker that Alice
@@ -325,6 +342,8 @@ export function getOperationSymbol(op: Operation | undefined): string {
     case 'modifyOrder': return 'unknown' // modifyOrder doesn't carry contract
     case 'closePosition': return op.contract?.symbol || op.contract?.aliceId || 'unknown'
     case 'cancelOrder': return 'unknown'
+    case 'emergencyCancelOrder': return op.contract?.symbol || op.contract?.aliceId || 'unknown'
+    case 'emergencyClosePosition': return op.contract?.symbol || op.contract?.aliceId || 'unknown'
     case 'syncOrders': return 'unknown'
     case 'observeExternalOrder': return op.contract?.symbol || op.contract?.aliceId || 'unknown'
     case 'reconcileBalance': return op.aliceId

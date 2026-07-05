@@ -62,6 +62,15 @@ const riskStateSchema = z.object({
   reason: z.string().min(1).optional(),
 })
 
+const emergencyStopSchema = z.object({
+  reason: z.string().min(1).optional(),
+  cancelOrders: z.boolean().default(true),
+})
+
+const flattenSchema = z.object({
+  confirm: z.literal('FLATTEN'),
+})
+
 /** HTTP status mapping for one-shot order pipeline failures. */
 const PHASE_STATUS: Record<OrderEntryPhase, 400 | 500> = {
   stage: 400,
@@ -234,6 +243,66 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
     const reason = body.reason ?? `Human set risk state to ${body.state}`
     const riskState = await uta.setRiskState(body.state, reason)
     return c.json({ riskState })
+  })
+
+  // Human-only kill switch. No Alice-side AI tool is registered for this
+  // route; it shares the manual HTTP approval class with wallet push. Broker
+  // cancellation is direct because HALT blocks the normal stage/commit/push
+  // pipeline by design.
+  app.post('/uta/:id/emergency-stop', async (c) => {
+    const uta = ctx.utaManager.get(c.req.param('id'))
+    if (!uta) return c.json({ error: 'Account not found' }, 404)
+    let body: z.infer<typeof emergencyStopSchema>
+    try {
+      body = emergencyStopSchema.parse(await c.req.json().catch(() => ({})))
+    } catch (err) {
+      return c.json({ error: err instanceof z.ZodError ? err.message : String(err) }, 400)
+    }
+    const reason = body.reason ?? 'Human emergency stop'
+    let riskState
+    try {
+      riskState = await uta.setRiskState('HALT', reason)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+    try {
+      const result = await uta.emergencyCancelAllOpenOrders({
+        reason,
+        cancelOrders: body.cancelOrders,
+      })
+      return c.json({
+        riskState,
+        cancelResults: result.cancelResults,
+        hash: result.hash,
+      })
+    } catch (err) {
+      return c.json({
+        riskState,
+        error: err instanceof Error ? err.message : String(err),
+      }, 500)
+    }
+  })
+
+  // Human-only account flatten. This is intentionally separate from
+  // emergency-stop and intentionally bypasses the one-shot close-position
+  // route so it still works in HALT.
+  app.post('/uta/:id/flatten', async (c) => {
+    const uta = ctx.utaManager.get(c.req.param('id'))
+    if (!uta) return c.json({ error: 'Account not found' }, 404)
+    try {
+      flattenSchema.parse(await c.req.json().catch(() => ({})))
+    } catch (err) {
+      return c.json({ error: err instanceof z.ZodError ? err.message : String(err) }, 400)
+    }
+    try {
+      const result = await uta.flattenAllOpenPositions()
+      return c.json({
+        results: result.results,
+        hash: result.hash,
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
   })
 
   // Force broker state sync. The AI tool calls this when it suspects

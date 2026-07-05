@@ -584,6 +584,20 @@ IMPORTANT: Check this BEFORE making new trading decisions.`,
       },
     }),
 
+    riskStatus: tool({
+      description: 'View current trading risk state and risk-state transition history. Read-only visibility; does not stop, recover, or flatten accounts.',
+      inputSchema: z.object({ source: z.string().optional().describe(sourceDesc(false)) }).meta({ examples: [{ source: 'alpaca-paper' }] }),
+      execute: async ({ source }) => {
+        const targets = await manager.resolve(source)
+        if (targets.length === 0) return await noAccountsError(manager, source)
+        const results = await Promise.all(targets.map(async (uta) => {
+          const status = await uta.status() as { riskState?: unknown }
+          return { source: uta.id, riskState: status.riskState ?? null }
+        }))
+        return results.length === 1 ? results[0] : results
+      },
+    }),
+
     simulatePriceChange: tool({
       description: 'Simulate price changes to see portfolio impact (dry run, READ-ONLY).',
       inputSchema: z.object({

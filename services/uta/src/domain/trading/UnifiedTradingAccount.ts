@@ -69,6 +69,36 @@ export interface UnifiedTradingAccountOptions {
   riskStateNow?: () => Date
 }
 
+export interface EmergencyCancelOrderResult {
+  orderId: string
+  symbol: string
+  aliceId?: string
+  success: boolean
+  status: string
+  error?: string
+}
+
+export interface EmergencyStopResult {
+  hash: string
+  cancelResults: EmergencyCancelOrderResult[]
+}
+
+export interface FlattenPositionResult {
+  symbol: string
+  aliceId?: string
+  side: Position['side']
+  quantity: string
+  success: boolean
+  orderId?: string
+  status: string
+  error?: string
+}
+
+export interface FlattenResult {
+  hash: string
+  results: FlattenPositionResult[]
+}
+
 // ==================== Stage param types ====================
 
 /**
@@ -997,6 +1027,123 @@ export class UnifiedTradingAccount {
     })
     console.warn(`UTA[${this.id}]: recorded ${unknown.length} external order(s) not placed through Alice`)
     return { observed: unknown.length }
+  }
+
+  /**
+   * Human-only emergency stop broker action. This bypasses the normal
+   * stage/commit/push pipeline because READ_ONLY/HALT intentionally block it,
+   * but still records a TradingGit audit commit after the broker calls.
+   */
+  async emergencyCancelAllOpenOrders(input: {
+    reason: string
+    cancelOrders: boolean
+  }): Promise<EmergencyStopResult> {
+    this._assertWritable()
+
+    const cancellations: Array<{ orderId: string; contract: Contract; order?: Order; result: PlaceOrderResult }> = []
+    const cancelResults: EmergencyCancelOrderResult[] = []
+
+    if (input.cancelOrders) {
+      if (!this.broker.getOpenOrders) {
+        throw new BrokerError('CONFIG', `Account "${this.label}" broker does not support broad open-order enumeration; cannot cancel all orders safely.`)
+      }
+
+      const open = await this._callBroker(() => this.broker.getOpenOrders!())
+      console.warn(`UTA[${this.id}]: EMERGENCY STOP cancelling ${open.length} open order(s): ${input.reason}`)
+
+      for (const openOrder of open) {
+        if (openOrder.contract) this.stampAliceId(openOrder.contract)
+        const orderId = openOrder.orderId ?? (openOrder.order?.orderId ? String(openOrder.order.orderId) : '<missing-order-id>')
+        let result: PlaceOrderResult
+        if (orderId === '<missing-order-id>') {
+          result = { success: false, error: 'Broker open-order row omitted orderId; cannot cancel safely.' }
+        } else {
+          try {
+            result = await this._callBroker(() => this.broker.cancelOrder(orderId))
+          } catch (err) {
+            result = { success: false, error: err instanceof Error ? err.message : String(err) }
+          }
+        }
+        cancellations.push({
+          orderId,
+          contract: openOrder.contract,
+          order: openOrder.order,
+          result,
+        })
+        cancelResults.push(this.projectEmergencyCancel(openOrder, orderId, result))
+      }
+    } else {
+      console.warn(`UTA[${this.id}]: EMERGENCY STOP set HALT without cancelling orders: ${input.reason}`)
+    }
+
+    const stateAfter = await this._getState()
+    const hash = await this.git.recordEmergencyStop({
+      reason: input.reason,
+      cancelOrders: input.cancelOrders,
+      cancellations,
+      stateAfter,
+    })
+    const succeeded = cancelResults.filter((r) => r.success).length
+    console.warn(`UTA[${this.id}]: [emergency-stop] audit ${hash}; cancelled ${succeeded}/${cancelResults.length} open order(s)`)
+    return { hash, cancelResults }
+  }
+
+  /**
+   * Human-only flatten broker action. Works in every risk state, including
+   * HALT, by closing broker positions directly instead of entering the guarded
+   * close-position pipeline.
+   */
+  async flattenAllOpenPositions(): Promise<FlattenResult> {
+    this._assertWritable()
+
+    const positions = await this._callBroker(() => this.broker.getPositions())
+    for (const position of positions) this.stampAliceId(position.contract)
+
+    console.warn(`UTA[${this.id}]: FLATTEN closing ${positions.length} open position(s)`)
+
+    const records: Array<{ position: Position; result: PlaceOrderResult }> = []
+    const results: FlattenPositionResult[] = []
+
+    for (const position of positions) {
+      let result: PlaceOrderResult
+      try {
+        result = await this._callBroker(() => this.broker.closePosition(position.contract, position.quantity))
+      } catch (err) {
+        result = { success: false, error: err instanceof Error ? err.message : String(err) }
+      }
+      records.push({ position, result })
+      results.push(this.projectFlattenResult(position, result))
+    }
+
+    const stateAfter = await this._getState()
+    const hash = await this.git.recordFlatten({ positions: records, stateAfter })
+    const succeeded = results.filter((r) => r.success).length
+    console.warn(`UTA[${this.id}]: [flatten] audit ${hash}; closed ${succeeded}/${results.length} open position(s)`)
+    return { hash, results }
+  }
+
+  private projectEmergencyCancel(openOrder: OpenOrder, orderId: string, result: PlaceOrderResult): EmergencyCancelOrderResult {
+    return {
+      orderId: result.orderId ?? orderId,
+      symbol: openOrder.contract.symbol || openOrder.contract.localSymbol || openOrder.contract.aliceId || 'unknown',
+      ...(openOrder.contract.aliceId ? { aliceId: openOrder.contract.aliceId } : {}),
+      success: result.success === true,
+      status: result.success === true ? (result.orderState?.status ?? 'Cancelled') : 'Rejected',
+      ...(result.error ? { error: result.error } : {}),
+    }
+  }
+
+  private projectFlattenResult(position: Position, result: PlaceOrderResult): FlattenPositionResult {
+    return {
+      symbol: position.contract.symbol || position.contract.localSymbol || position.contract.aliceId || 'unknown',
+      ...(position.contract.aliceId ? { aliceId: position.contract.aliceId } : {}),
+      side: position.side,
+      quantity: position.quantity.toFixed(),
+      success: result.success === true,
+      ...(result.orderId ? { orderId: result.orderId } : {}),
+      status: result.success === true ? (result.orderState?.status ?? 'Filled') : 'Rejected',
+      ...(result.error ? { error: result.error } : {}),
+    }
   }
 
   simulatePriceChange(priceChanges: PriceChangeInput[]): Promise<SimulatePriceChangeResult> {
