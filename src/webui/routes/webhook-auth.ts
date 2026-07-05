@@ -37,12 +37,17 @@ export function extractPresentedToken(headers: {
 
 /** Check the presented token against the configured allowlist.
  *  Constant-time per candidate; short-circuits on first match. */
-export function checkAuth(cfg: WebhookConfig, presented: string | null): AuthResult {
-  if (cfg.tokens.length === 0) return { kind: 'unconfigured' }
+export function checkAuth(
+  cfg: WebhookConfig,
+  presented: string | null,
+  additionalTokens: ReadonlyArray<Pick<WebhookToken, 'id' | 'token'>> = [],
+): AuthResult {
+  const tokens = [...cfg.tokens, ...additionalTokens]
+  if (tokens.length === 0) return { kind: 'unconfigured' }
   if (presented == null || presented.length === 0) return { kind: 'missing' }
 
   const presentedBuf = Buffer.from(presented)
-  for (const t of cfg.tokens) {
+  for (const t of tokens) {
     if (matchesConstantTime(presentedBuf, t)) {
       return { kind: 'ok', tokenId: t.id }
     }
@@ -50,7 +55,7 @@ export function checkAuth(cfg: WebhookConfig, presented: string | null): AuthRes
   return { kind: 'invalid' }
 }
 
-function matchesConstantTime(presentedBuf: Buffer, candidate: WebhookToken): boolean {
+function matchesConstantTime(presentedBuf: Buffer, candidate: Pick<WebhookToken, 'token'>): boolean {
   const candidateBuf = Buffer.from(candidate.token)
   // timingSafeEqual requires equal lengths — a length mismatch leaks only
   // the candidate length, which is not sensitive (fixed entropy budget).

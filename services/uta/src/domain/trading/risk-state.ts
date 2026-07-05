@@ -47,6 +47,7 @@ export type HumanRecoverableRiskState = Exclude<RiskState, 'HALT'>
 export interface RiskStateStoreOptions {
   baseDir?: string
   now?: () => Date
+  onTransition?: (entry: RiskStateTransition) => void | Promise<void>
 }
 
 export interface PersistedRiskState {
@@ -161,6 +162,16 @@ export function createRiskStateStore(
       })
       await writeState(state)
       logTransition(accountId, entry)
+      try {
+        const emitted = options.onTransition?.(entry)
+        if (emitted) {
+          void Promise.resolve(emitted).catch((err) => {
+            console.error(`risk-state[${accountId}]: failed to emit risk.state-changed event`, err)
+          })
+        }
+      } catch (err) {
+        console.error(`risk-state[${accountId}]: failed to emit risk.state-changed event`, err)
+      }
       return toInfo(state)
     })
     writeChain = nextWrite.then(() => undefined, () => undefined)

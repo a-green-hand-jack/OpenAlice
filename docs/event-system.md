@@ -24,7 +24,7 @@ Canonical example: [cron-router](../src/task/cron/listener.ts).
 
 **Producer (Pumper)** — pure event source. Only emits, never subscribes.
 Declared against the same registry. Canonical examples: [cron-engine](../src/task/cron/engine.ts)
-(timer), [webhook-ingest](../src/connectors/web/web-plugin.ts) (HTTP),
+(timer), [webhook-ingest](../src/webui/plugin.ts) (HTTP),
 [connectors](../src/core/connector-center.ts) (shared across every connector
 plugin — Web chat, Telegram, future Discord/Slack/etc., all emit
 `message.received` / `message.sent` through ConnectorCenter's single
@@ -68,9 +68,38 @@ The registry enforces this at declare time.
 | EventLog itself | [src/core/event-log.ts](../src/core/event-log.ts) |
 | Reference Listener (subscribe → agent → emit done/error) | [src/task/task-router/listener.ts](../src/task/task-router/listener.ts) |
 | Reference Producer (timer) | [src/task/cron/engine.ts](../src/task/cron/engine.ts) |
-| Webhook ingest gate | [src/connectors/web/routes/events.ts](../src/connectors/web/routes/events.ts) + [webhook-auth.ts](../src/connectors/web/routes/webhook-auth.ts) |
+| Webhook ingest gate | [src/webui/routes/events.ts](../src/webui/routes/events.ts) + [webhook-auth.ts](../src/webui/routes/webhook-auth.ts) |
 | Flow visualization | [ui/src/pages/AutomationFlowSection.tsx](../ui/src/pages/AutomationFlowSection.tsx) |
 | Webhook docs UI | [ui/src/pages/AutomationWebhookSection.tsx](../ui/src/pages/AutomationWebhookSection.tsx) |
+
+## Event catalog: UTA trade / risk lifecycle
+
+UTA is a separate process, so trade/risk events cross back into Alice through
+`POST /api/events/ingest` rather than writing Alice's `EventLog` directly. The
+Guardian generates a per-boot internal token, injects it into Alice as
+`OPENALICE_INTERNAL_EVENT_TOKEN`, and injects the matching
+`OPENALICE_EVENT_INGEST_URL` / `OPENALICE_EVENT_INGEST_TOKEN` into UTA.
+UTA's sink validates payloads locally, queues HTTP posts in emission order, and
+logs `[uta-events] dropped ...` on validation, auth, network, timeout, or
+non-2xx failures. Emission is best-effort and fire-and-forget: a dropped event
+must never abort or wait inside the trading operation. These trade/risk event
+types are **not** marked `external: true`; the ingest route accepts them only
+when the per-boot internal UTA token authenticated the request, so ordinary
+webhook tokens cannot forge broker audit history.
+
+| Event | Producer | Required payload shape |
+|---|---|---|
+| `trade.committed` | UTA `UnifiedTradingAccount.commit()` | `id`, `accountId`, `operationCount`, `operations[]`, `thesis.{excerpt,hash}` |
+| `trade.pushed` | UTA `UnifiedTradingAccount.push()` after broker submission | `id`, `accountId`, `operationCount`, `operations[]`, `approver`, `guards[]`, `guardSummary`, `risk` |
+| `trade.executed` | UTA push immediate fills and sync fills | `id`, `accountId`, `commitHash`, `operation`, `status: "filled"`, `source: "push" \| "sync"`, optional fill/order fields |
+| `trade.rejected` | UTA push guard/risk refusal | `id`, `accountId`, `operationCount`, `operations[]`, `reason`, `guards[]`, `rejectingGuards[]`, `risk`, optional `approver` |
+| `risk.state-changed` | UTA risk-state store transition hook | `accountId`, `from`, `to`, `by`, `reason`, `at`, optional `triggerIdentity`, `metrics` |
+| `risk.emergency-stop` | UTA emergency stop | `accountId`, `hash`, `reason`, `cancelOrders`, optional `triggerIdentity`, `outcomes[]` |
+| `risk.flatten` | UTA flatten | `accountId`, `hash`, optional `triggerIdentity`, `outcomes[]` |
+
+For `trade.pushed` and `trade.rejected`, `guards` is always present. An empty
+array means no operation guard verdicts were produced; the `guardSummary` and
+`risk` snapshot still answer which guard set/risk state existed at push time.
 
 ## Recipe: add a new event type
 
@@ -134,7 +163,7 @@ append the subscribed event and assert downstream events appeared.
 | Form | Meaning | Flow rendering |
 |---|---|---|
 | `subscribes: 'cron.fire'` | Single type | Concrete edge from left-column node |
-| `subscribes: ['cron.fire', 'task.requested'] as const` | Enumerated tuple | N concrete edges |
+| `subscribes: ['cron.fire', 'agent.work.requested'] as const` | Enumerated tuple | N concrete edges |
 | `subscribes: '*'` | All events | Left-side aura (no edges) |
 | `emits` omitted | Emits nothing (ctx.emit is unusable) | No right-side edges |
 | `emits: ['my.done', 'my.error'] as const` | Enumerated tuple | N concrete edges |
@@ -177,7 +206,7 @@ When choosing `emits`:
   hides *what it actually produces* from the Flow graph. Webhook-ingest is a
   deliberate exception because its real shape is "whatever is in the external
   allowlist"; even then the declaration is kept narrow
-  (`['task.requested'] as const`) and extended by hand when a new external
+  (`['agent.work.requested'] as const`) and extended by hand when a new external
   type lands.
 - **Runtime validation still fires.** A wildcard emit rejects unregistered
   types; a narrow emit rejects anything not in the declared tuple.
@@ -187,16 +216,16 @@ When choosing `emits`:
 This is the step that's easiest to half-do. Four places to edit:
 
 1. **Event metadata** — set `external: true` on the event in [AgentEvents](../src/core/agent-event.ts).
-2. **Webhook-ingest producer** — extend the tuple in [web-plugin.ts](../src/connectors/web/web-plugin.ts):
+2. **Webhook-ingest producer** — extend the tuple in [plugin.ts](../src/webui/plugin.ts):
    ```ts
    this.ingestProducer = ctx.listenerRegistry.declareProducer({
      name: 'webhook-ingest',
-     emits: ['task.requested', 'my.external.event'] as const,  // ← add
+     emits: ['agent.work.requested', 'my.external.event'] as const,  // ← add
    })
    ```
-3. **Route type declaration** — matching tuple in [events.ts](../src/connectors/web/routes/events.ts):
+3. **Route type declaration** — matching tuple in [events.ts](../src/webui/routes/events.ts):
    ```ts
-   ingestProducer: ProducerHandle<readonly ['task.requested', 'my.external.event']>
+   ingestProducer: ProducerHandle<readonly ['agent.work.requested', 'my.external.event']>
    ```
 4. **Admin docs** — add an entry to `EXTERNAL_DOCS` in
    [AutomationWebhookSection.tsx](../ui/src/pages/AutomationWebhookSection.tsx)

@@ -30,6 +30,7 @@ import {
 import type { CurrencyClientLike } from '@/domain/market-data/client/types.js'
 import { buildSDKCredentials } from '@/domain/market-data/credential-map.js'
 import { startOrderSyncPoller } from './domain/trading/order-sync-poller.js'
+import { createUtaEventSinkFromEnv } from './domain/trading/events.js'
 import { createTradingRoutes } from './http/routes-trading.js'
 import { createSimulatorRoutes } from './http/routes-simulator.js'
 import type { UTAEngineContext } from './types.js'
@@ -60,8 +61,9 @@ async function main(): Promise<void> {
   // listenerRegistry, ...) is not used by trading routes.
 
   const eventLog = await createEventLog()
+  const eventSink = createUtaEventSinkFromEnv()
   const toolCenter = new ToolCenter()
-  const utaManager = new UTAManager({ eventLog, toolCenter })
+  const utaManager = new UTAManager({ eventLog, toolCenter, eventSink })
 
   // ==================== Account init (with ephemeral purge) ====================
 
@@ -196,6 +198,7 @@ async function main(): Promise<void> {
     clearInterval(catalogRefreshTimer)
     snapshotScheduler.stop()
     server.close()
+    await eventSink.close().catch(() => { /* swallow during shutdown */ })
     await utaManager.closeAll().catch(() => { /* swallow during shutdown */ })
     await eventLog.close().catch(() => { /* swallow during shutdown */ })
     process.exit(0)

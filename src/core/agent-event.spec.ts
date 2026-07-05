@@ -8,6 +8,8 @@ describe('AgentEventSchemas', () => {
   const expectedTypes: (keyof AgentEventMap)[] = [
     'cron.fire',
     'message.received', 'message.sent',
+    'trade.committed', 'trade.pushed', 'trade.executed', 'trade.rejected',
+    'risk.state-changed', 'risk.emergency-stop', 'risk.flatten',
     'agent.work.requested', 'agent.work.done', 'agent.work.skip', 'agent.work.error',
   ]
 
@@ -63,6 +65,91 @@ describe('validateEventPayload', () => {
     expect(() => validateEventPayload('message.sent', {
       channel: 'web', to: 'default', prompt: 'hello', durationMs: 300,
     })).toThrow(/Invalid payload.*message\.sent/)
+  })
+
+  // -- trade / risk lifecycle --
+  it('should accept valid trade.committed payload', () => {
+    expect(() => validateEventPayload('trade.committed', {
+      id: 'abc12345',
+      accountId: 'mock-paper',
+      operationCount: 1,
+      operations: [{ action: 'placeOrder', symbol: 'AAPL', side: 'BUY', orderType: 'MKT', quantity: '1' }],
+      thesis: { excerpt: 'buy AAPL', hash: '8f2f5c4b0c3e9d7a' },
+    })).not.toThrow()
+  })
+
+  it('should accept valid trade.pushed payload with an empty guard list', () => {
+    expect(() => validateEventPayload('trade.pushed', {
+      id: 'abc12345',
+      accountId: 'mock-paper',
+      operationCount: 1,
+      operations: [{ action: 'placeOrder', symbol: 'AAPL', status: 'filled' }],
+      approver: { via: 'alice-bff', fingerprint: 'session:abc', at: '2026-07-05T00:00:00.000Z' },
+      guards: [],
+      guardSummary: { configured: [], evaluated: 0, passed: 0, rejected: 0, skipped: 0 },
+      risk: { state: 'NORMAL' },
+    })).not.toThrow()
+  })
+
+  it('should accept valid trade.executed payload', () => {
+    expect(() => validateEventPayload('trade.executed', {
+      id: 'abc12345:mock-ord-1',
+      accountId: 'mock-paper',
+      commitHash: 'abc12345',
+      operation: { action: 'placeOrder', symbol: 'AAPL', status: 'filled' },
+      orderId: 'mock-ord-1',
+      status: 'filled',
+      source: 'push',
+    })).not.toThrow()
+  })
+
+  it('should accept valid trade.rejected payload with rejecting verdicts', () => {
+    const guard = {
+      operationIndex: 0,
+      operationAction: 'placeOrder',
+      symbol: 'AAPL',
+      guard: 'max-position-size',
+      verdict: 'reject',
+      reason: 'too large',
+    }
+    expect(() => validateEventPayload('trade.rejected', {
+      id: 'abc12345',
+      accountId: 'mock-paper',
+      operationCount: 1,
+      operations: [{ action: 'placeOrder', symbol: 'AAPL', status: 'rejected', error: 'too large' }],
+      reason: 'too large',
+      guards: [guard],
+      rejectingGuards: [guard],
+      risk: { state: 'NORMAL' },
+    })).not.toThrow()
+  })
+
+  it('should accept valid risk lifecycle payloads', () => {
+    expect(() => validateEventPayload('risk.state-changed', {
+      accountId: 'mock-paper',
+      from: 'NORMAL',
+      to: 'HALT',
+      by: 'human',
+      reason: 'manual stop',
+      at: '2026-07-05T00:00:00.000Z',
+      triggerIdentity: { via: 'loopback', at: '2026-07-05T00:00:00.000Z' },
+    })).not.toThrow()
+
+    expect(() => validateEventPayload('risk.emergency-stop', {
+      accountId: 'mock-paper',
+      hash: 'abc12345',
+      reason: 'manual stop',
+      cancelOrders: true,
+      triggerIdentity: { via: 'loopback', at: '2026-07-05T00:00:00.000Z' },
+      outcomes: [{ orderId: 'mock-ord-1', symbol: 'AAPL', success: true, status: 'Cancelled' }],
+    })).not.toThrow()
+
+    expect(() => validateEventPayload('risk.flatten', {
+      accountId: 'mock-paper',
+      hash: 'abc12345',
+      triggerIdentity: { via: 'loopback', at: '2026-07-05T00:00:00.000Z' },
+      outcomes: [{ symbol: 'AAPL', side: 'long', quantity: '1', success: true, orderId: 'mock-ord-2', status: 'Filled' }],
+    })).not.toThrow()
   })
 
   // -- agent.work.requested --

@@ -11,7 +11,7 @@ import { readWebSubchannels } from '../core/config.js'
 import { createMediaRoutes } from './routes/media.js'
 import { createChannelsRoutes, type SSEClient } from './routes/channels.js'
 import { createConfigRoutes, createMarketDataRoutes } from './routes/config.js'
-import { createEventsRoutes } from './routes/events.js'
+import { createEventsRoutes, type WebhookIngestEventTypes } from './routes/events.js'
 import { createTopologyRoutes } from './routes/topology.js'
 import { createScheduleRoutes } from './routes/schedule.js'
 import { createIssuesRoutes } from './routes/issues.js'
@@ -75,7 +75,7 @@ export class WebPlugin implements Plugin {
   private server: ReturnType<typeof serve> | null = null
   /** SSE clients grouped by channel ID. Default channel: 'default'. */
   private sseByChannel = new Map<string, Map<string, SSEClient>>()
-  private ingestProducer?: ProducerHandle<readonly ['agent.work.requested']>
+  private ingestProducer?: ProducerHandle<WebhookIngestEventTypes>
   private workspaceService: WorkspaceService | null = null
   private workspacesWs: AttachedWS | null = null
   private workspacesIpc: AttachedWorkspaceIpc | null = null
@@ -207,11 +207,21 @@ export class WebPlugin implements Plugin {
     // `connectors` producer — see `ctx.connectorCenter.emitMessage*`.
     //
     // webhook-ingest: POST /api/events/ingest — enumerates its concrete emits so
-    // each external type shows up on the Flow graph as a real injection edge.
-    // Extend this tuple when adding new `external: true` event types.
+    // each HTTP-ingested type shows up on the Flow graph as a real injection
+    // edge. Public webhook types still require `external: true`; UTA trade/risk
+    // lifecycle events are internal-token-only.
     this.ingestProducer = ctx.listenerRegistry.declareProducer({
       name: 'webhook-ingest',
-      emits: ['agent.work.requested'] as const,
+      emits: [
+        'agent.work.requested',
+        'trade.committed',
+        'trade.pushed',
+        'trade.executed',
+        'trade.rejected',
+        'risk.state-changed',
+        'risk.emergency-stop',
+        'risk.flatten',
+      ] as const,
     })
 
     // ==================== Mount route modules ====================

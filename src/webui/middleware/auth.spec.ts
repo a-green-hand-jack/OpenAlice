@@ -44,6 +44,7 @@ function makeApp(opts: Parameters<typeof createAuthMiddleware>[0]) {
   app.use('*', createAuthMiddleware(opts))
   app.get('/api/trading/uta', (c) => c.json({ utas: [] }))
   app.post('/api/trading/uta/x/wallet/push', (c) => c.json({ ok: true }))
+  app.post('/api/events/ingest', (c) => c.json({ ok: true }))
   app.get('/api/version', (c) => c.json({ ok: true }))
   app.post('/api/auth/login', (c) => c.json({ ok: true }))
   return app
@@ -97,6 +98,19 @@ describe('auth middleware — playbook 01 (auth bypass)', () => {
     const res = await app.request('/api/trading/uta/x/wallet/push', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
+      body: '{}',
+    }, envWithIp('203.0.113.5'))
+    expect(res.status).toBe(401)
+  })
+
+  it('keeps POST /api/events/ingest behind the session gate for non-loopback callers', async () => {
+    const app = makeApp({ trustedProxies: ['10.0.0.1'], csrfTrustedOrigins: [] })
+    const res = await app.request('/api/events/ingest', {
+      method: 'POST',
+      headers: {
+        'authorization': 'Bearer internal-token',
+        'content-type': 'application/json',
+      },
       body: '{}',
     }, envWithIp('203.0.113.5'))
     expect(res.status).toBe(401)
