@@ -85,7 +85,7 @@ async function runOneShot(
   message: string,
   stage: () => void,
 ): Promise<Response> {
-  const r = await executeOneShotOrder(uta, message, stage)
+  const r = await executeOneShotOrder(uta, message, stage, approverFromRequest(c))
   if (r.ok) return c.json(r.result)
   return c.json({ error: r.error, phase: r.phase }, PHASE_STATUS[r.phase])
 }

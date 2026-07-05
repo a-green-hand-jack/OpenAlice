@@ -71,6 +71,12 @@ describe('checkAuth', () => {
     ).toEqual({ kind: 'ok', tokenId: 'dev' })
   })
 
+  it('matches additional runtime tokens', () => {
+    expect(
+      checkAuth(cfg([]), 'internal', [{ id: 'internal-uta-events', token: 'internal' }]),
+    ).toEqual({ kind: 'ok', tokenId: 'internal-uta-events' })
+  })
+
   it('matches against any entry in a multi-token list', () => {
     const c = cfg([
       { id: 'old', token: 'old-token' },

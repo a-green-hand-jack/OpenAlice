@@ -24,7 +24,7 @@
  */
 
 import type { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
-import type { PushResult } from './git/types.js'
+import type { ApproverIdentity, PushResult } from './git/types.js'
 
 export type OrderEntryPhase = 'stage' | 'commit' | 'push'
 
@@ -45,6 +45,7 @@ export async function executeOneShotOrder(
   uta: UnifiedTradingAccount,
   message: string,
   stage: () => void,
+  approver?: ApproverIdentity,
 ): Promise<OrderEntryResult> {
   // Phase 1: stage
   try {
@@ -64,7 +65,7 @@ export async function executeOneShotOrder(
 
   // Phase 3: push
   try {
-    const result = await uta.push()
+    const result = await uta.push(approver)
     return { ok: true, result }
   } catch (err) {
     return { ok: false, phase: 'push', error: errorMessage(err) }

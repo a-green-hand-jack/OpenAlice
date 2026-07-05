@@ -17,6 +17,7 @@
 import { resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import type { ChildProcess } from 'node:child_process'
 import {
   readPortsFile,
@@ -78,15 +79,23 @@ async function main(): Promise<void> {
     OPENALICE_LAUNCHER: 'dev',
   }
 
+  const utaUrl = `http://127.0.0.1:${ports.utaPort}`
+  const internalEventToken = randomBytes(32).toString('hex')
+  const eventIngestUrl = `http://127.0.0.1:${ports.webPort}/api/events/ingest`
+
   // ── UTA spec (re-used by Guardian for restart) ────────────
   const utaSpec: SpawnSpec = {
     name: 'uta',
     command: 'tsx',
     args: ['watch', 'services/uta/src/main.ts'],
-    env: { ...baseEnv, OPENALICE_UTA_PORT: String(ports.utaPort) },
+    env: {
+      ...baseEnv,
+      OPENALICE_UTA_PORT: String(ports.utaPort),
+      OPENALICE_EVENT_INGEST_URL: eventIngestUrl,
+      OPENALICE_EVENT_INGEST_TOKEN: internalEventToken,
+    },
     prefixLogs: true,
   }
-  const utaUrl = `http://127.0.0.1:${ports.utaPort}`
 
   const utaInitial = spawnChild(utaSpec)
   const utaReady = await waitForHttp(`${utaUrl}/__uta/health`, { timeoutMs: 15_000 })
@@ -105,6 +114,8 @@ async function main(): Promise<void> {
     args: ['watch', 'src/main.ts'],
     env: {
       ...baseEnv,
+      OPENALICE_EVENT_INGEST_URL: eventIngestUrl,
+      OPENALICE_EVENT_INGEST_TOKEN: internalEventToken,
       OPENALICE_WEB_PORT: String(ports.webPort),
       OPENALICE_MCP_PORT: String(ports.mcpPort),
       OPENALICE_TOOL_BASE_URL: `http://127.0.0.1:${ports.mcpPort}/cli`,
@@ -112,6 +123,7 @@ async function main(): Promise<void> {
       // allowlist (src/workspaces/config.ts buildDefaultOrigins).
       OPENALICE_UI_PORT: String(ports.uiPort),
       OPENALICE_UTA_URL: utaUrl,
+      OPENALICE_INTERNAL_EVENT_TOKEN: internalEventToken,
     },
     prefixLogs: true,
   })

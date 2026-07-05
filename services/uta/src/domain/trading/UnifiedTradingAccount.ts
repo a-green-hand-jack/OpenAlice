@@ -44,6 +44,17 @@ import {
   type RiskStateEvaluator,
   type RiskStateStore,
 } from './risk-state.js'
+import {
+  buildGuardSummary,
+  buildTradeThesis,
+  collectGuardVerdicts,
+  riskSnapshot,
+  summarizeOperation,
+  summarizeOperations,
+  type UtaLifecycleEventType,
+  type UtaEventSink,
+} from './events.js'
+import type { AgentEventMap } from '@/core/agent-event.js'
 import './contract-ext.js'
 
 // ==================== Options ====================
@@ -67,6 +78,8 @@ export interface UnifiedTradingAccountOptions {
   riskStateBaseDir?: string
   /** Test-only clock injection for risk-state daily-loss evaluation. */
   riskStateNow?: () => Date
+  /** Best-effort bridge into Alice's unified event log. Must never block trading. */
+  eventSink?: UtaEventSink
 }
 
 export interface EmergencyCancelOrderResult {
@@ -138,6 +151,8 @@ export class UnifiedTradingAccount {
   private readonly _onHealthChange?: (accountId: string, health: BrokerHealthInfo) => void
   private readonly _onPostPush?: (accountId: string) => void | Promise<void>
   private readonly _onPostReject?: (accountId: string) => void | Promise<void>
+  private readonly _eventSink?: UtaEventSink
+  private readonly _configuredGuardTypes: string[]
   private readonly _riskStateStore: RiskStateStore
   private readonly _riskStateEvaluator: RiskStateEvaluator
   private _lastRiskContext: Pick<GuardContext, 'positions' | 'account'> | null = null
@@ -197,6 +212,8 @@ export class UnifiedTradingAccount {
     this._onHealthChange = options.onHealthChange
     this._onPostPush = options.onPostPush
     this._onPostReject = options.onPostReject
+    this._eventSink = options.eventSink
+    this._configuredGuardTypes = (options.guards ?? []).map((g) => g.type)
     const portfolioGuardStateStore = createPortfolioGuardStateStore(
       broker.id,
       options.guardStateBaseDir ? { baseDir: options.guardStateBaseDir } : undefined,
@@ -205,6 +222,18 @@ export class UnifiedTradingAccount {
     this._riskStateStore = createRiskStateStore(broker.id, {
       ...(riskStateBaseDir ? { baseDir: riskStateBaseDir } : {}),
       ...(options.riskStateNow ? { now: options.riskStateNow } : {}),
+      onTransition: (entry) => {
+        this._emitEvent('risk.state-changed', {
+          accountId: this.id,
+          from: entry.from,
+          to: entry.to,
+          by: entry.by,
+          reason: entry.reason,
+          at: entry.at,
+          ...(entry.triggerIdentity ? { triggerIdentity: entry.triggerIdentity } : {}),
+          ...(entry.metrics ? { metrics: entry.metrics } : {}),
+        })
+      },
     })
     this._riskStateEvaluator = createRiskStateEvaluator({
       accountId: broker.id,
@@ -823,6 +852,13 @@ export class UnifiedTradingAccount {
     this._assertWritable()
     this._assertRiskStateAllowsWrite('commit')
     const result = this.git.commit(this._stampSubAccount(message))
+    this._emitEvent('trade.committed', {
+      id: result.hash,
+      accountId: this.id,
+      operationCount: result.operationCount,
+      operations: summarizeOperations(this.git.status().staged),
+      thesis: buildTradeThesis(result.message),
+    })
     // Sub-account intent is now baked into the persisted message — clear the
     // transient tracker so the next staging batch starts clean.
     this._stagedSubAccountIds = []
@@ -840,16 +876,95 @@ export class UnifiedTradingAccount {
 
   async push(approver?: ApproverIdentity): Promise<PushResult> {
     this._assertWritable()
-    this._assertRiskStateAllowsWrite('push')
+    try {
+      this._assertRiskStateAllowsWrite('push')
+    } catch (err) {
+      this._emitRiskRejectedPush(err, approver)
+      throw err
+    }
     if (this._disabled) {
       throw new BrokerError('CONFIG', `Account "${this.label}" is disabled due to configuration error.`)
     }
     if (this.health === 'offline') {
       throw new Error(`Account "${this.label}" is offline. Cannot execute trades.`)
     }
+    const pending = this.git.status()
+    const operations = [...pending.staged]
     const result = await this.git.push(approver)
+    const committed = this.git.show(result.hash)
+    const pushedOperations = committed?.operations ?? operations
+    const pushedResults = committed?.results ?? [...result.submitted, ...result.rejected]
+    const guards = collectGuardVerdicts(pushedOperations, pushedResults)
+    const risk = riskSnapshot(this.getRiskState())
+    const guardSummary = buildGuardSummary(this._configuredGuardTypes, guards)
+    if (result.submitted.length > 0) {
+      this._emitEvent('trade.pushed', {
+        id: result.hash,
+        accountId: this.id,
+        operationCount: result.operationCount,
+        operations: summarizeOperations(pushedOperations, pushedResults),
+        approver: approver ?? { via: 'loopback', at: new Date().toISOString() },
+        guards,
+        guardSummary,
+        risk,
+      })
+    }
+    if (result.rejected.length > 0) {
+      const rejectingGuards = guards.filter((g) => g.verdict === 'reject')
+      this._emitEvent('trade.rejected', {
+        id: result.hash,
+        accountId: this.id,
+        operationCount: result.operationCount,
+        operations: summarizeOperations(pushedOperations, pushedResults),
+        reason: result.rejected.map((r) => r.error).filter(Boolean).join('; ') || 'Trading push rejected',
+        ...(approver ? { approver } : {}),
+        guards,
+        rejectingGuards,
+        risk,
+      })
+    }
+    pushedResults.forEach((opResult, index) => {
+      if (opResult.status !== 'filled') return
+      const op = pushedOperations[index] ?? pushedOperations[0]
+      if (!op) return
+      this._emitEvent('trade.executed', {
+        id: `${result.hash}:${opResult.orderId ?? index}`,
+        accountId: this.id,
+        commitHash: result.hash,
+        operation: summarizeOperation(op),
+        ...(opResult.orderId ? { orderId: opResult.orderId } : {}),
+        status: 'filled',
+        ...(opResult.filledQty ? { filledQty: opResult.filledQty } : {}),
+        ...(opResult.filledPrice ? { filledPrice: opResult.filledPrice } : {}),
+        source: 'push',
+      })
+    })
     Promise.resolve(this._onPostPush?.(this.id)).catch(() => {})
     return result
+  }
+
+  private _emitRiskRejectedPush(err: unknown, approver?: ApproverIdentity): void {
+    const status = this.git.status()
+    const reason = err instanceof Error ? err.message : String(err)
+    this._emitEvent('trade.rejected', {
+      id: status.pendingHash ?? `${this.id}:risk-rejected:${Date.now()}`,
+      accountId: this.id,
+      operationCount: status.staged.length,
+      operations: summarizeOperations(status.staged),
+      reason,
+      ...(approver ? { approver } : {}),
+      guards: [],
+      rejectingGuards: [],
+      risk: riskSnapshot(this.getRiskState()),
+    })
+  }
+
+  private _emitEvent<K extends UtaLifecycleEventType>(type: K, payload: AgentEventMap[K]): void {
+    try {
+      this._eventSink?.emit(type, payload)
+    } catch (err) {
+      console.error(`UTA[${this.id}]: dropped ${type} event after sink failure`, err)
+    }
   }
 
   async reject(reason?: string): Promise<RejectResult> {
@@ -960,7 +1075,22 @@ export class UnifiedTradingAccount {
     }
 
     const state = await this._getState()
-    return this.git.sync(updates, state)
+    const syncResult = await this.git.sync(updates, state)
+    for (const update of updates) {
+      if (update.currentStatus !== 'filled') continue
+      this._emitEvent('trade.executed', {
+        id: `${syncResult.hash}:${update.orderId}`,
+        accountId: this.id,
+        commitHash: syncResult.hash,
+        operation: { action: 'syncOrders', symbol: update.symbol, status: 'filled', orderId: update.orderId },
+        orderId: update.orderId,
+        status: 'filled',
+        ...(update.filledQty ? { filledQty: update.filledQty } : {}),
+        ...(update.filledPrice ? { filledPrice: update.filledPrice } : {}),
+        source: 'sync',
+      })
+    }
+    return syncResult
   }
 
   getPendingOrderIds(): Array<{ orderId: string; symbol: string; localSymbol?: string }> {
@@ -1087,6 +1217,14 @@ export class UnifiedTradingAccount {
     })
     const succeeded = cancelResults.filter((r) => r.success).length
     console.warn(`UTA[${this.id}]: [emergency-stop] audit ${hash}; cancelled ${succeeded}/${cancelResults.length} open order(s)`)
+    this._emitEvent('risk.emergency-stop', {
+      accountId: this.id,
+      hash,
+      reason: input.reason,
+      cancelOrders: input.cancelOrders,
+      ...(input.triggerIdentity ? { triggerIdentity: input.triggerIdentity } : {}),
+      outcomes: cancelResults,
+    })
     return { hash, cancelResults }
   }
 
@@ -1121,6 +1259,12 @@ export class UnifiedTradingAccount {
     const hash = await this.git.recordFlatten({ positions: records, stateAfter, approver: triggerIdentity })
     const succeeded = results.filter((r) => r.success).length
     console.warn(`UTA[${this.id}]: [flatten] audit ${hash}; closed ${succeeded}/${results.length} open position(s)`)
+    this._emitEvent('risk.flatten', {
+      accountId: this.id,
+      hash,
+      ...(triggerIdentity ? { triggerIdentity } : {}),
+      outcomes: results,
+    })
     return { hash, results }
   }
 

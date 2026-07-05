@@ -23,6 +23,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, watch } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -81,6 +82,8 @@ const MCP_PORT = pickPort('OPENALICE_MCP_PORT', portsFile.mcp, 47332)
 const UTA_PORT = pickPort('OPENALICE_UTA_PORT', portsFile.uta, 47333)
 const FLAG_PATH = resolve(DATA_HOME, 'data/control/restart-uta.flag')
 const UTA_URL = `http://127.0.0.1:${UTA_PORT}`
+const INTERNAL_EVENT_TOKEN = randomBytes(32).toString('hex')
+const EVENT_INGEST_URL = `http://127.0.0.1:${WEB_PORT}/api/events/ingest`
 
 let stopping = false
 let utaChild = null
@@ -103,6 +106,8 @@ function makeUTASpec() {
     env: {
       ...process.env,
       OPENALICE_UTA_PORT: String(UTA_PORT),
+      OPENALICE_EVENT_INGEST_URL: EVENT_INGEST_URL,
+      OPENALICE_EVENT_INGEST_TOKEN: INTERNAL_EVENT_TOKEN,
       OPENALICE_HOME: DATA_HOME,
       OPENALICE_LAUNCHER: 'docker',
     },
@@ -128,6 +133,7 @@ function spawnAlice() {
       OPENALICE_MCP_PORT: String(MCP_PORT),
       OPENALICE_TOOL_BASE_URL: `http://127.0.0.1:${MCP_PORT}/cli`,
       OPENALICE_UTA_URL: UTA_URL,
+      OPENALICE_INTERNAL_EVENT_TOKEN: INTERNAL_EVENT_TOKEN,
       OPENALICE_HOME: DATA_HOME,
       OPENALICE_LAUNCHER: 'docker',
     },

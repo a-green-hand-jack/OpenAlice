@@ -19,6 +19,7 @@ import type { EventLog } from '@/core/event-log.js'
 import type { ToolCenter } from '@/core/tool-center.js'
 import type { ReconnectResult } from '@/core/types.js'
 import type { FxService } from './fx-service.js'
+import type { UtaEventSink } from './events.js'
 import './contract-ext.js'
 
 // Manager-level shapes live in `@traderalice/uta-protocol` (the SDK
@@ -39,12 +40,14 @@ export class UTAManager {
   private reconnecting = new Set<string>()
 
   private eventLog?: EventLog
+  private eventSink?: UtaEventSink
   private toolCenter?: ToolCenter
   private _snapshotHooks?: SnapshotHooks
   private fxService?: FxService
 
-  constructor(deps?: { eventLog: EventLog; toolCenter: ToolCenter; fxService?: FxService }) {
+  constructor(deps?: { eventLog: EventLog; toolCenter: ToolCenter; fxService?: FxService; eventSink?: UtaEventSink }) {
     this.eventLog = deps?.eventLog
+    this.eventSink = deps?.eventSink
     this.toolCenter = deps?.toolCenter
     this.fxService = deps?.fxService
   }
@@ -68,6 +71,7 @@ export class UTAManager {
       keyless: cfg.keyless,
       readOnly: cfg.readOnly,
       savedState,
+      eventSink: this.eventSink,
       onCommit: createGitPersister(cfg.id),
       onHealthChange: (utaId, health) => {
         this.eventLog?.append('account.health', { accountId: utaId, ...health })

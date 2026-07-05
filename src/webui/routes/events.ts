@@ -6,11 +6,32 @@ import type { ProducerHandle } from '../../core/producer.js'
 import { readWebhookConfig } from '../../core/config.js'
 import { checkAuth, extractPresentedToken } from './webhook-auth.js'
 
+export type WebhookIngestEventTypes = readonly [
+  'agent.work.requested',
+  'trade.committed',
+  'trade.pushed',
+  'trade.executed',
+  'trade.rejected',
+  'risk.state-changed',
+  'risk.emergency-stop',
+  'risk.flatten',
+]
+
+const INTERNAL_UTA_EVENT_TYPES = new Set<string>([
+  'trade.committed',
+  'trade.pushed',
+  'trade.executed',
+  'trade.rejected',
+  'risk.state-changed',
+  'risk.emergency-stop',
+  'risk.flatten',
+])
+
 interface EventsDeps {
   ctx: EngineContext
-  /** Producer for webhook-ingested events. Narrowed to the set of external
-   *  types; extend its declaration in WebPlugin when adding new external types. */
-  ingestProducer: ProducerHandle<readonly ['agent.work.requested']>
+  /** Producer for HTTP-ingested events. Public webhook types require
+   *  `external: true`; internal UTA events require Guardian's runtime token. */
+  ingestProducer: ProducerHandle<WebhookIngestEventTypes>
 }
 
 /** Event log routes: GET /, GET /recent, GET /stream (SSE), POST /ingest, GET /auth-status */
@@ -33,9 +54,11 @@ export function createEventsRoutes({ ctx, ingestProducer }: EventsDeps) {
   // Body shape: { type: string, payload: unknown }
   // Gates, in order:
   //   1. Auth token (Authorization: Bearer / X-OpenAlice-Token) against
-  //      `data/config/webhook.json`. Empty allowlist = 503 default-deny.
-  //   2. isExternalEventType — prevents forging internal state transitions
-  //      like `cron.done`.
+  //      `data/config/webhook.json` or Guardian's per-boot internal UTA
+  //      event token. Empty allowlist + no internal token = 503 default-deny.
+  //   2. isExternalEventType OR Guardian's internal UTA token for trade/risk
+  //      lifecycle events — prevents ordinary webhook tokens from forging
+  //      broker audit history.
   //   3. validateEventPayload — TypeBox schema validation.
   app.post('/ingest', async (c) => {
     const cfg = await readWebhookConfig()
@@ -43,7 +66,10 @@ export function createEventsRoutes({ ctx, ingestProducer }: EventsDeps) {
       authorization: c.req.header('authorization') ?? null,
       'x-openalice-token': c.req.header('x-openalice-token') ?? null,
     })
-    const auth = checkAuth(cfg, presented)
+    const auth = checkAuth(cfg, presented, process.env['OPENALICE_INTERNAL_EVENT_TOKEN']
+      ? [{ id: 'internal-uta-events', token: process.env['OPENALICE_INTERNAL_EVENT_TOKEN'] }]
+      : [])
+    const isInternalUtaCaller = auth.kind === 'ok' && auth.tokenId === 'internal-uta-events'
     switch (auth.kind) {
       case 'unconfigured':
         return c.json(
@@ -90,7 +116,7 @@ export function createEventsRoutes({ ctx, ingestProducer }: EventsDeps) {
       canonicalPayload = { source: 'task', prompt: p.prompt ?? '' }
     }
 
-    if (!isExternalEventType(canonicalType)) {
+    if (!isExternalEventType(canonicalType) && !(isInternalUtaCaller && INTERNAL_UTA_EVENT_TYPES.has(canonicalType))) {
       return c.json(
         { error: `Event type '${type}' is not in the external allowlist` },
         403,

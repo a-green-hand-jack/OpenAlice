@@ -53,6 +53,146 @@ export interface MessageSentPayload {
   durationMs: number
 }
 
+export type TradeEventGuardVerdictStatus = 'pass' | 'reject' | 'skipped'
+export type TradeEventRiskState = 'NORMAL' | 'CAUTIOUS' | 'READ_ONLY' | 'HALT'
+export type TradeEventRiskTransitionBy = 'auto' | 'human'
+
+export interface TradeEventApproverIdentity {
+  via: 'alice-bff' | 'loopback'
+  fingerprint?: string
+  at: string
+}
+
+export type TradeEventMetricValue = string | number | boolean | null
+export type TradeEventMetrics = Record<string, TradeEventMetricValue>
+
+export interface TradeEventOperationSummary {
+  action: string
+  symbol: string
+  side?: string
+  orderType?: string
+  quantity?: string
+  cashQuantity?: string
+  price?: string
+  orderId?: string
+  status?: string
+  error?: string
+}
+
+export interface TradeEventGuardVerdict {
+  operationIndex: number
+  operationAction: string
+  symbol: string
+  guard: string
+  verdict: TradeEventGuardVerdictStatus
+  reason?: string
+  metrics?: TradeEventMetrics
+}
+
+export interface TradeEventRiskSnapshot {
+  state: TradeEventRiskState
+  reason?: string
+  updatedAt?: string
+  metrics?: TradeEventMetrics
+}
+
+export interface TradeEventGuardSummary {
+  configured: string[]
+  evaluated: number
+  passed: number
+  rejected: number
+  skipped: number
+}
+
+export interface TradeCommittedPayload {
+  id: string
+  accountId: string
+  operationCount: number
+  operations: TradeEventOperationSummary[]
+  thesis: {
+    excerpt: string
+    hash: string
+  }
+}
+
+export interface TradePushedPayload {
+  id: string
+  accountId: string
+  operationCount: number
+  operations: TradeEventOperationSummary[]
+  approver: TradeEventApproverIdentity
+  guards: TradeEventGuardVerdict[]
+  guardSummary: TradeEventGuardSummary
+  risk: TradeEventRiskSnapshot
+}
+
+export interface TradeExecutedPayload {
+  id: string
+  accountId: string
+  commitHash: string
+  operation: TradeEventOperationSummary
+  orderId?: string
+  status: 'filled'
+  filledQty?: string
+  filledPrice?: string
+  source: 'push' | 'sync'
+}
+
+export interface TradeRejectedPayload {
+  id: string
+  accountId: string
+  operationCount: number
+  operations: TradeEventOperationSummary[]
+  reason: string
+  approver?: TradeEventApproverIdentity
+  guards: TradeEventGuardVerdict[]
+  rejectingGuards: TradeEventGuardVerdict[]
+  risk: TradeEventRiskSnapshot
+}
+
+export interface RiskStateChangedPayload {
+  accountId: string
+  from: TradeEventRiskState
+  to: TradeEventRiskState
+  by: TradeEventRiskTransitionBy
+  reason: string
+  at: string
+  triggerIdentity?: TradeEventApproverIdentity
+  metrics?: TradeEventMetrics
+}
+
+export interface RiskEmergencyStopPayload {
+  accountId: string
+  hash: string
+  reason: string
+  cancelOrders: boolean
+  triggerIdentity?: TradeEventApproverIdentity
+  outcomes: Array<{
+    orderId: string
+    symbol: string
+    aliceId?: string
+    success: boolean
+    status: string
+    error?: string
+  }>
+}
+
+export interface RiskFlattenPayload {
+  accountId: string
+  hash: string
+  triggerIdentity?: TradeEventApproverIdentity
+  outcomes: Array<{
+    symbol: string
+    aliceId?: string
+    side: string
+    quantity: string
+    success: boolean
+    orderId?: string
+    status: string
+    error?: string
+  }>
+}
+
 // ==================== Canonical AgentWork events ====================
 //
 // DORMANT since World B was deleted: the in-process consumer
@@ -103,6 +243,13 @@ export interface AgentEventMap {
   'cron.fire': CronFirePayload
   'message.received': MessageReceivedPayload
   'message.sent': MessageSentPayload
+  'trade.committed': TradeCommittedPayload
+  'trade.pushed': TradePushedPayload
+  'trade.executed': TradeExecutedPayload
+  'trade.rejected': TradeRejectedPayload
+  'risk.state-changed': RiskStateChangedPayload
+  'risk.emergency-stop': RiskEmergencyStopPayload
+  'risk.flatten': RiskFlattenPayload
   'agent.work.requested': AgentWorkRequestedPayload
   'agent.work.done':      AgentWorkDonePayload
   'agent.work.skip':      AgentWorkSkipPayload
@@ -132,6 +279,159 @@ const MessageSentSchema = Type.Object({
   prompt: Type.String(),
   reply: Type.String(),
   durationMs: Type.Number(),
+})
+
+const TradeMetricValueSchema = Type.Union([
+  Type.String(),
+  Type.Number(),
+  Type.Boolean(),
+  Type.Null(),
+])
+
+const TradeMetricsSchema = Type.Record(Type.String(), TradeMetricValueSchema)
+
+const ApproverIdentitySchema = Type.Object({
+  via: Type.Union([Type.Literal('alice-bff'), Type.Literal('loopback')]),
+  fingerprint: Type.Optional(Type.String()),
+  at: Type.String(),
+})
+
+const TradeOperationSummarySchema = Type.Object({
+  action: Type.String(),
+  symbol: Type.String(),
+  side: Type.Optional(Type.String()),
+  orderType: Type.Optional(Type.String()),
+  quantity: Type.Optional(Type.String()),
+  cashQuantity: Type.Optional(Type.String()),
+  price: Type.Optional(Type.String()),
+  orderId: Type.Optional(Type.String()),
+  status: Type.Optional(Type.String()),
+  error: Type.Optional(Type.String()),
+})
+
+const TradeGuardVerdictSchema = Type.Object({
+  operationIndex: Type.Number(),
+  operationAction: Type.String(),
+  symbol: Type.String(),
+  guard: Type.String(),
+  verdict: Type.Union([
+    Type.Literal('pass'),
+    Type.Literal('reject'),
+    Type.Literal('skipped'),
+  ]),
+  reason: Type.Optional(Type.String()),
+  metrics: Type.Optional(TradeMetricsSchema),
+})
+
+const RiskStateUnion = Type.Union([
+  Type.Literal('NORMAL'),
+  Type.Literal('CAUTIOUS'),
+  Type.Literal('READ_ONLY'),
+  Type.Literal('HALT'),
+])
+
+const TradeRiskSnapshotSchema = Type.Object({
+  state: RiskStateUnion,
+  reason: Type.Optional(Type.String()),
+  updatedAt: Type.Optional(Type.String()),
+  metrics: Type.Optional(TradeMetricsSchema),
+})
+
+const TradeGuardSummarySchema = Type.Object({
+  configured: Type.Array(Type.String()),
+  evaluated: Type.Number(),
+  passed: Type.Number(),
+  rejected: Type.Number(),
+  skipped: Type.Number(),
+})
+
+const TradeCommittedSchema = Type.Object({
+  id: Type.String(),
+  accountId: Type.String(),
+  operationCount: Type.Number(),
+  operations: Type.Array(TradeOperationSummarySchema),
+  thesis: Type.Object({
+    excerpt: Type.String(),
+    hash: Type.String(),
+  }),
+})
+
+const TradePushedSchema = Type.Object({
+  id: Type.String(),
+  accountId: Type.String(),
+  operationCount: Type.Number(),
+  operations: Type.Array(TradeOperationSummarySchema),
+  approver: ApproverIdentitySchema,
+  guards: Type.Array(TradeGuardVerdictSchema),
+  guardSummary: TradeGuardSummarySchema,
+  risk: TradeRiskSnapshotSchema,
+})
+
+const TradeExecutedSchema = Type.Object({
+  id: Type.String(),
+  accountId: Type.String(),
+  commitHash: Type.String(),
+  operation: TradeOperationSummarySchema,
+  orderId: Type.Optional(Type.String()),
+  status: Type.Literal('filled'),
+  filledQty: Type.Optional(Type.String()),
+  filledPrice: Type.Optional(Type.String()),
+  source: Type.Union([Type.Literal('push'), Type.Literal('sync')]),
+})
+
+const TradeRejectedSchema = Type.Object({
+  id: Type.String(),
+  accountId: Type.String(),
+  operationCount: Type.Number(),
+  operations: Type.Array(TradeOperationSummarySchema),
+  reason: Type.String(),
+  approver: Type.Optional(ApproverIdentitySchema),
+  guards: Type.Array(TradeGuardVerdictSchema),
+  rejectingGuards: Type.Array(TradeGuardVerdictSchema),
+  risk: TradeRiskSnapshotSchema,
+})
+
+const RiskStateChangedSchema = Type.Object({
+  accountId: Type.String(),
+  from: RiskStateUnion,
+  to: RiskStateUnion,
+  by: Type.Union([Type.Literal('auto'), Type.Literal('human')]),
+  reason: Type.String(),
+  at: Type.String(),
+  triggerIdentity: Type.Optional(ApproverIdentitySchema),
+  metrics: Type.Optional(TradeMetricsSchema),
+})
+
+const RiskEmergencyStopSchema = Type.Object({
+  accountId: Type.String(),
+  hash: Type.String(),
+  reason: Type.String(),
+  cancelOrders: Type.Boolean(),
+  triggerIdentity: Type.Optional(ApproverIdentitySchema),
+  outcomes: Type.Array(Type.Object({
+    orderId: Type.String(),
+    symbol: Type.String(),
+    aliceId: Type.Optional(Type.String()),
+    success: Type.Boolean(),
+    status: Type.String(),
+    error: Type.Optional(Type.String()),
+  })),
+})
+
+const RiskFlattenSchema = Type.Object({
+  accountId: Type.String(),
+  hash: Type.String(),
+  triggerIdentity: Type.Optional(ApproverIdentitySchema),
+  outcomes: Type.Array(Type.Object({
+    symbol: Type.String(),
+    aliceId: Type.Optional(Type.String()),
+    side: Type.String(),
+    quantity: Type.String(),
+    success: Type.Boolean(),
+    orderId: Type.Optional(Type.String()),
+    status: Type.String(),
+    error: Type.Optional(Type.String()),
+  })),
 })
 
 // ---- Canonical agent-work event schemas ----
@@ -200,6 +500,34 @@ export const AgentEvents: { [K in keyof AgentEventMap]: AgentEventMeta } = {
   'message.sent': {
     schema: MessageSentSchema,
     description: 'An assistant reply was dispatched on a connector.',
+  },
+  'trade.committed': {
+    schema: TradeCommittedSchema,
+    description: 'UTA prepared a pending trading commit and is waiting for approval.',
+  },
+  'trade.pushed': {
+    schema: TradePushedSchema,
+    description: 'A pending trading commit was approved and pushed to the broker; includes approver, guard verdicts, and risk state.',
+  },
+  'trade.executed': {
+    schema: TradeExecutedSchema,
+    description: 'A pushed trading operation reached a terminal filled state, either immediately or through sync.',
+  },
+  'trade.rejected': {
+    schema: TradeRejectedSchema,
+    description: 'A trading push was refused by guards or the risk state machine.',
+  },
+  'risk.state-changed': {
+    schema: RiskStateChangedSchema,
+    description: 'UTA risk state changed by a human action or automatic P1 risk transition.',
+  },
+  'risk.emergency-stop': {
+    schema: RiskEmergencyStopSchema,
+    description: 'A human-triggered emergency stop ran, including trigger identity and per-order cancellation outcomes.',
+  },
+  'risk.flatten': {
+    schema: RiskFlattenSchema,
+    description: 'A human-triggered flatten action ran, including trigger identity and per-position close outcomes.',
   },
   'agent.work.requested': {
     schema: AgentWorkRequestedSchema,
