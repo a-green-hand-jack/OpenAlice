@@ -1,4 +1,4 @@
-import { rm } from 'node:fs/promises'
+import { readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -9,6 +9,8 @@ import { createTradingRoutes } from './routes-trading.js'
 import type { UTAEngineContext } from '../types.js'
 import { UnifiedTradingAccount } from '../domain/trading/UnifiedTradingAccount.js'
 import { MockBroker, makeContract, makePosition } from '../domain/trading/brokers/mock/index.js'
+import { riskStatePath } from '../domain/trading/risk-state.js'
+import type { ApproverIdentity } from '@traderalice/uta-protocol'
 
 let tempDirs: string[] = []
 
@@ -18,7 +20,7 @@ function makeTempDir(): string {
   return dir
 }
 
-function createUTA(id = 'mock-paper'): { uta: UnifiedTradingAccount; broker: MockBroker; routes: ReturnType<typeof createTradingRoutes> } {
+function createUTA(id = 'mock-paper'): { uta: UnifiedTradingAccount; broker: MockBroker; routes: ReturnType<typeof createTradingRoutes>; baseDir: string } {
   const baseDir = makeTempDir()
   const broker = new MockBroker({ id })
   const uta = new UnifiedTradingAccount(broker, {
@@ -40,17 +42,40 @@ function createUTA(id = 'mock-paper'): { uta: UnifiedTradingAccount; broker: Moc
     fxService: {},
     snapshotService: undefined,
   } as unknown as UTAEngineContext
-  return { uta, broker, routes: createTradingRoutes(ctx) }
+  return { uta, broker, routes: createTradingRoutes(ctx), baseDir }
 }
 
-async function post(routes: ReturnType<typeof createTradingRoutes>, path: string, body: unknown) {
+async function post(
+  routes: ReturnType<typeof createTradingRoutes>,
+  path: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+) {
   const res = await routes.request(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),
   })
   const json = await res.json().catch(() => null)
   return { status: res.status, body: json }
+}
+
+const APPROVER_HEADER = 'X-OpenAlice-Approver'
+const APPROVER_FINGERPRINT = 'fp-admin-session'
+const RAW_ADMIN_TOKEN = 'raw-admin-token-never-persist'
+
+function approverHeader(fingerprint = APPROVER_FINGERPRINT): Record<string, string> {
+  return {
+    [APPROVER_HEADER]: JSON.stringify({ via: 'alice-bff', fingerprint }),
+  }
+}
+
+function expectAliceApprover(value: ApproverIdentity | undefined, fingerprint = APPROVER_FINGERPRINT): void {
+  expect(value).toMatchObject({
+    via: 'alice-bff',
+    fingerprint,
+    at: expect.any(String),
+  })
 }
 
 async function placeRestingOrder(broker: MockBroker, symbol = 'AAPL'): Promise<string> {
@@ -70,6 +95,55 @@ afterEach(async () => {
   tempDirs = []
 })
 
+describe('POST /uta/:id/wallet/push approver identity', () => {
+  it('persists approver identity on a mock account and survives account rebuild', async () => {
+    const { uta, routes, baseDir } = createUTA()
+    await uta.waitForConnect()
+    uta.stagePlaceOrder({
+      aliceId: 'mock-paper|AAPL',
+      symbol: 'AAPL',
+      action: 'BUY',
+      orderType: 'MKT',
+      totalQuantity: '1',
+    })
+    uta.commit('human approved buy')
+
+    const { status, body } = await post(routes, '/uta/mock-paper/wallet/push', {}, approverHeader())
+
+    expect(status).toBe(200)
+    const hash = (body as { hash: string }).hash
+    expectAliceApprover(uta.show(hash)?.approver)
+    const persisted = JSON.stringify(uta.exportGitState())
+    expect(persisted).toContain(APPROVER_FINGERPRINT)
+    expect(persisted).not.toContain(RAW_ADMIN_TOKEN)
+
+    const savedState = JSON.parse(JSON.stringify(uta.exportGitState()))
+    const restored = new UnifiedTradingAccount(new MockBroker({ id: 'mock-paper' }), {
+      savedState,
+      guardStateBaseDir: baseDir,
+      riskStateBaseDir: baseDir,
+    })
+    expectAliceApprover(restored.show(hash)?.approver)
+  })
+
+  it('records loopback when UTA receives push without an Alice approver descriptor', async () => {
+    const { uta, routes, baseDir } = createUTA()
+    await uta.waitForConnect()
+    uta.stageCancelOrder({ orderId: 'order-to-cancel' })
+    uta.commit('cancel stale order')
+
+    const { status, body } = await post(routes, '/uta/mock-paper/wallet/push', {})
+
+    expect(status).toBe(200)
+    const commit = uta.show((body as { hash: string }).hash)
+    expect(commit?.approver).toMatchObject({
+      via: 'loopback',
+      at: expect.any(String),
+    })
+    expect(commit?.approver?.fingerprint).toBeUndefined()
+  })
+})
+
 describe('POST /uta/:id/emergency-stop', () => {
   it.each(['NORMAL', 'CAUTIOUS', 'READ_ONLY'] as const)('sets HALT, records history, and broker-cancels all open orders from %s', async (priorState) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -80,7 +154,7 @@ describe('POST /uta/:id/emergency-stop', () => {
 
     const { status, body } = await post(routes, '/uta/mock-paper/emergency-stop', {
       reason: 'human saw runaway orders',
-    })
+    }, approverHeader())
 
     expect(status).toBe(200)
     expect(body).toMatchObject({
@@ -100,6 +174,7 @@ describe('POST /uta/:id/emergency-stop', () => {
       by: 'human',
       reason: 'human saw runaway orders',
     })
+    expectAliceApprover(uta.getRiskState().history.at(-1)?.triggerIdentity)
     expect(await broker.getOpenOrders()).toHaveLength(0)
 
     const hash = (body as { hash: string }).hash
@@ -109,6 +184,7 @@ describe('POST /uta/:id/emergency-stop', () => {
       operations: [{ action: 'emergencyCancelOrder', orderId }],
       results: [{ action: 'emergencyCancelOrder', orderId, success: true, status: 'cancelled' }],
     })
+    expectAliceApprover(commit?.approver)
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('EMERGENCY STOP'))
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('[emergency-stop] audit'))
   })
@@ -214,7 +290,7 @@ describe('POST /uta/:id/flatten', () => {
       makePosition({ contract: makeContract({ symbol: 'MSFT', aliceId: 'mock-paper|MSFT' }), quantity: new Decimal(2) }),
     ])
 
-    const { status, body } = await post(routes, '/uta/mock-paper/flatten', { confirm: 'FLATTEN' })
+    const { status, body } = await post(routes, '/uta/mock-paper/flatten', { confirm: 'FLATTEN' }, approverHeader())
 
     expect(status).toBe(200)
     expect(body).toMatchObject({
@@ -225,7 +301,8 @@ describe('POST /uta/:id/flatten', () => {
     })
     expect(await broker.getPositions()).toHaveLength(0)
     const hash = (body as { hash: string }).hash
-    expect(uta.show(hash)).toMatchObject({
+    const commit = uta.show(hash)
+    expect(commit).toMatchObject({
       message: expect.stringContaining('[flatten]'),
       operations: [
         { action: 'emergencyClosePosition' },
@@ -236,6 +313,7 @@ describe('POST /uta/:id/flatten', () => {
         { action: 'emergencyClosePosition', success: true, status: 'filled' },
       ],
     })
+    expectAliceApprover(commit?.approver)
   })
 
   it('bypasses the HALT pipeline wall: normal close-position is refused, flatten succeeds', async () => {
@@ -309,7 +387,7 @@ describe('POST /uta/:id/flatten', () => {
 
 describe('HALT recovery', () => {
   it('recovers from HALT through the existing risk-state route without accepting HALT as a target', async () => {
-    const { uta, routes } = createUTA()
+    const { uta, routes, baseDir } = createUTA()
     await uta.waitForConnect()
     const stopped = await post(routes, '/uta/mock-paper/emergency-stop', { reason: 'manual stop', cancelOrders: false })
     expect(stopped.status).toBe(200)
@@ -318,7 +396,7 @@ describe('HALT recovery', () => {
     const recovered = await post(routes, '/uta/mock-paper/risk-state', {
       state: 'NORMAL',
       reason: 'human reviewed halted account',
-    })
+    }, approverHeader())
     expect(recovered.status).toBe(200)
     expect(recovered.body).toMatchObject({ riskState: { state: 'NORMAL' } })
     expect(uta.getRiskState().history.at(-1)).toMatchObject({
@@ -327,6 +405,10 @@ describe('HALT recovery', () => {
       by: 'human',
       reason: 'human reviewed halted account',
     })
+    expectAliceApprover(uta.getRiskState().history.at(-1)?.triggerIdentity)
+    const riskStateFile = await readFile(riskStatePath('mock-paper', { baseDir }), 'utf-8')
+    expect(riskStateFile).toContain(APPROVER_FINGERPRINT)
+    expect(riskStateFile).not.toContain(RAW_ADMIN_TOKEN)
 
     const invalid = await post(routes, '/uta/mock-paper/risk-state', { state: 'HALT' })
     expect(invalid.status).toBe(400)

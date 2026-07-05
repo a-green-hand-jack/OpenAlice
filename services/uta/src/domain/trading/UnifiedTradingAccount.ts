@@ -15,7 +15,7 @@ const REACH_RANK: Record<UTAReach, number> = { down: 0, connected: 1, readable: 
 import { TradingGit } from './git/TradingGit.js'
 import { recomputeCostBasisFromCommits } from './cost-basis.js'
 import { projectOrderHistory, projectTradeHistory } from './order-history.js'
-import type { OrderHistoryEntry, TradeHistoryEntry, RiskState, RiskStateInfo } from '@traderalice/uta-protocol'
+import type { ApproverIdentity, OrderHistoryEntry, TradeHistoryEntry, RiskState, RiskStateInfo } from '@traderalice/uta-protocol'
 import { pnlOf } from './position-math.js'
 import type {
   Operation,
@@ -359,8 +359,8 @@ export class UnifiedTradingAccount {
     return this._riskStateStore.current()
   }
 
-  async setRiskState(state: RiskState, reason: string): Promise<RiskStateInfo> {
-    return this._riskStateStore.humanSet({ state, reason })
+  async setRiskState(state: RiskState, reason: string, triggerIdentity?: ApproverIdentity): Promise<RiskStateInfo> {
+    return this._riskStateStore.humanSet({ state, reason, triggerIdentity })
   }
 
   /** Probe the capability ladder up to this account's target reach. Stages:
@@ -838,7 +838,7 @@ export class UnifiedTradingAccount {
     return ids.length ? `${message} [sub:${ids.join(',')}]` : message
   }
 
-  async push(): Promise<PushResult> {
+  async push(approver?: ApproverIdentity): Promise<PushResult> {
     this._assertWritable()
     this._assertRiskStateAllowsWrite('push')
     if (this._disabled) {
@@ -847,7 +847,7 @@ export class UnifiedTradingAccount {
     if (this.health === 'offline') {
       throw new Error(`Account "${this.label}" is offline. Cannot execute trades.`)
     }
-    const result = await this.git.push()
+    const result = await this.git.push(approver)
     Promise.resolve(this._onPostPush?.(this.id)).catch(() => {})
     return result
   }
@@ -1037,6 +1037,7 @@ export class UnifiedTradingAccount {
   async emergencyCancelAllOpenOrders(input: {
     reason: string
     cancelOrders: boolean
+    triggerIdentity?: ApproverIdentity
   }): Promise<EmergencyStopResult> {
     this._assertWritable()
 
@@ -1082,6 +1083,7 @@ export class UnifiedTradingAccount {
       cancelOrders: input.cancelOrders,
       cancellations,
       stateAfter,
+      approver: input.triggerIdentity,
     })
     const succeeded = cancelResults.filter((r) => r.success).length
     console.warn(`UTA[${this.id}]: [emergency-stop] audit ${hash}; cancelled ${succeeded}/${cancelResults.length} open order(s)`)
@@ -1093,7 +1095,7 @@ export class UnifiedTradingAccount {
    * HALT, by closing broker positions directly instead of entering the guarded
    * close-position pipeline.
    */
-  async flattenAllOpenPositions(): Promise<FlattenResult> {
+  async flattenAllOpenPositions(triggerIdentity?: ApproverIdentity): Promise<FlattenResult> {
     this._assertWritable()
 
     const positions = await this._callBroker(() => this.broker.getPositions())
@@ -1116,7 +1118,7 @@ export class UnifiedTradingAccount {
     }
 
     const stateAfter = await this._getState()
-    const hash = await this.git.recordFlatten({ positions: records, stateAfter })
+    const hash = await this.git.recordFlatten({ positions: records, stateAfter, approver: triggerIdentity })
     const succeeded = results.filter((r) => r.success).length
     console.warn(`UTA[${this.id}]: [flatten] audit ${hash}; closed ${succeeded}/${results.length} open position(s)`)
     return { hash, results }

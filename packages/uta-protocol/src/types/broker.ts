@@ -9,6 +9,7 @@
 
 import type { Contract, ContractDescription, ContractDetails, Order, OrderState, Execution, OrderCancel } from '@traderalice/ibkr'
 import type Decimal from 'decimal.js'
+import type { ApproverIdentity } from './git.js'
 import './contract-ext.js'
 
 // ==================== Errors ====================
@@ -367,6 +368,8 @@ export interface RiskStateTransition {
   by: RiskStateActor
   reason: string
   metrics?: RiskStateMetrics
+  /** Human trigger identity. Optional for pre-issue-31 risk-state files. */
+  triggerIdentity?: ApproverIdentity
   at: string
 }
 
