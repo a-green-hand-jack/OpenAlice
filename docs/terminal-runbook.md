@@ -403,6 +403,115 @@ curl -sS \
 
 Honesty note: `agent.work.requested` currently lands in the event log; the old in-process AI consumer is dormant/removed (`src/core/agent-event.ts:58-63`, `204-208`). Use headless workspace dispatch for actual autonomous work.
 
+### 3.10 Reconstruct a trade audit from persisted files
+
+For a pushed trade, the audit trail should answer five questions from files
+under `OPENALICE_HOME` without relying on a live in-memory UTA object:
+
+- What it saw: `data/trading/$UTA_ID/commit.json` commit `message`, plus the
+  matching `trade.committed` event thesis excerpt/hash.
+- Why: the same TradingGit commit `message` is the thesis / commit rationale.
+- Who approved: the pushed commit `approver` and the `trade.pushed`
+  `payload.approver`. These should contain `via`, `fingerprint`, and `at`,
+  never the raw admin token or session id.
+- Which checks ran: `trade.pushed.payload.guards` and
+  `trade.pushed.payload.guardSummary`, including passing checks and explicit
+  empty lists when no operation guard verdicts were produced. The event also
+  carries the push-time `risk` snapshot; risk transitions are persisted in
+  `data/trading/$UTA_ID/risk-state.json` when the risk state has changed or
+  been manually set.
+- Outcome: order lifecycle projected from `commit.json` (the same data behind
+  `/order-history`) and the matching `trade.executed` event, reconciled with
+  the latest commit `stateAfter`.
+
+Set file paths:
+
+```bash
+export HOME_ROOT="${OPENALICE_HOME:-$HOME/.openalice}"
+export COMMIT_FILE="$HOME_ROOT/data/trading/$UTA_ID/commit.json"
+export EVENTS_FILE="$HOME_ROOT/data/event-log/events.jsonl"
+export RISK_FILE="$HOME_ROOT/data/trading/$UTA_ID/risk-state.json"
+```
+
+Find the pending/pushed commit hash and thesis:
+
+```bash
+jq -r '.commits[] | [.hash, .timestamp, .message] | @tsv' "$COMMIT_FILE"
+
+export HASH='paste-8-char-commit-hash'
+
+jq --arg h "$HASH" '
+  .commits[] | select(.hash == $h) |
+  {hash, timestamp, message, approver, operations, results}
+' "$COMMIT_FILE"
+```
+
+Read the event evidence. Sort by timestamp, not by `seq`: in the co-located
+deployment Alice and UTA can both append to `events.jsonl` with independent
+sequence counters, so issue #38 makes `seq` unsuitable as a global ordering
+key.
+
+```bash
+jq -s --arg account "$UTA_ID" --arg h "$HASH" '
+  map(select(.payload.accountId? == $account))
+  | map(select(.payload.id? == $h or .payload.commitHash? == $h))
+  | sort_by(.ts, .type, (.payload.id // .payload.commitHash // ""))
+  | map({ts, seq, type, payload})
+' "$EVENTS_FILE"
+```
+
+Inspect the approval and guard answer:
+
+```bash
+jq -s --arg h "$HASH" '
+  .[]
+  | select(.type == "trade.pushed" and .payload.id == $h)
+  | {
+      approver: .payload.approver,
+      guards: .payload.guards,
+      guardSummary: .payload.guardSummary,
+      risk: .payload.risk
+    }
+' "$EVENTS_FILE"
+```
+
+Confirm raw secrets did not enter the audit trail:
+
+```bash
+# These should print nothing. Use placeholders unless you are in a disposable home.
+grep -R --line-number 'raw-admin-token-or-session-id' "$COMMIT_FILE" "$EVENTS_FILE" "$RISK_FILE" 2>/dev/null || true
+```
+
+Reconcile the outcome. For a submitted-then-synced order, correlate the
+terminal `trade.executed` event by `orderId`, because its `commitHash` is the
+sync commit rather than the original approval commit:
+
+```bash
+export ORDER_ID="$(
+  jq -r --arg h "$HASH" '
+    .commits[] | select(.hash == $h) | .results[]?.orderId // empty
+  ' "$COMMIT_FILE" | head -n 1
+)"
+
+jq -s --arg order "$ORDER_ID" '
+  map(select(.type == "trade.executed" and .payload.orderId == $order))
+  | sort_by(.ts, .type)
+  | map({ts, seq, payload})
+' "$EVENTS_FILE"
+
+jq --arg order "$ORDER_ID" '
+  {
+    orderRows: [
+      .commits[] as $commit
+      | $commit.results[]?
+      | select(.orderId? == $order)
+      | {commitHash: $commit.hash, timestamp: $commit.timestamp, status, filledQty, filledPrice}
+    ],
+    finalState: .commits[-1].stateAfter
+  }
+' "$COMMIT_FILE"
+```
+
 ## 4. MCP Surfaces
 
 ### 4.1 Paths, port, and security model
