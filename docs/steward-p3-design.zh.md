@@ -1,6 +1,6 @@
 # Steward P3 设计稿 — 渐进授权阶梯
 
-> 版本：草案 v0.2（2026-07-05）——§8 五个待决问题 maintainer 已裁决（见该节），本版据此更新 §3/§5 并新增 §11 精确工具映射表待过目
+> 版本：v0.3（2026-07-05）——§8 五个待决问题 + §11 精确工具映射表 maintainer 均已批准。**设计稿定稿，P3 开工。** P3-1 起按 §7 顺序实现。
 > 地位：**设计稿**，从属于 [steward-plan.zh.md](steward-plan.zh.md) v1.0 冻结计划的 P3。
 > 冻结计划 P3 明确要求：**"实现前先出一页设计稿给用户过目"**、**"设计稿经用户批准后才动工"**。本文就是那页设计稿。**maintainer 批准前不写任何实现代码。**
 > 用法：maintainer 直接在文中批注（`>` 引用块），orchestrator 内联答复并升版本号；§8 的待决问题是本稿的核心，请优先裁决。
@@ -176,7 +176,7 @@
 1. **账户类型闸**：`paper` 档只能作用于 **paper/mock 账户**；对实盘账户，即使 workspace 档=paper 也拒绝其提案类工具生效（实盘账户的授权路径是 read_only → small_live → limited_autonomy，跳过 paper）。落点：账户×workspace 绑定校验。
 2. **`tradingReject` 归写档**：它虽然不触 broker，但会改动待审批队列（丢弃别的会话/人可能想审的 commit）。放在写档，read_only 不给——保守。
 
-**请你确认这张表**（尤其：`tradingSync` / `simulatePriceChange` 放在 read_only 是否 OK；`tradingPush` 全档移除是否同意；账户类型闸的处理）。确认后我按 §7 开 P3-1 issue 开始实现。
+**✅ maintainer 已确认这张表（2026-07-05）**：三点均批准——`tradingSync`/`simulatePriceChange` 留 read_only、`tradingPush` 全档移除、账户类型闸按上述处理。P3-1 据此实现。
 
 ---
 
