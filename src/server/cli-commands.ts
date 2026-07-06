@@ -17,12 +17,12 @@
  *                                            macro series, calendars). Named after
  *                                            the hosted hub so the binary name IS
  *                                            the domain name.
- *   - `alice-uta`       (key `uta`)       → global ToolCenter — TRADING (accounts,
- *                                            portfolio, orders, trading-as-git approval
- *                                            flow). Boundary-reviewed 2026-06-11: broker
- *                                            mutations are deliberate product surface
- *                                            (users want agent trading); cron stays
- *                                            MCP-only — no scheduling from the CLI.
+ *   - `alice-uta`       (key `uta`)       → global ToolCenter — TRADING
+ *                                            read/proposal surface (accounts,
+ *                                            portfolio, orders, trading-as-git
+ *                                            staging/commit flow). Broker push
+ *                                            stays off the agent-reachable CLI;
+ *                                            cron stays MCP-only.
  *
  * The (group, verb) → internal-tool-name map IS each export's contract,
  * deliberately decoupled from internal tool names: a verb like `rss grep` maps
@@ -217,7 +217,6 @@ export const CLI_EXPORTS: Record<string, CliExport> = {
         log: 'tradingLog',
         show: 'tradingShow',
         commit: 'tradingCommit',
-        push: 'tradingPush',
         reject: 'tradingReject',
         sync: 'tradingSync',
       },

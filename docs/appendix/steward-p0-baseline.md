@@ -34,7 +34,7 @@ counterpart of regression group 1/2 below).
 
 | Group | Status | Where |
 |---|---|---|
-| 1. AI push gate (`allowAiTrading=false` → tool never pushes) | covered by existing | `src/tool/trading.spec.ts:218-252` (also asserts fail-closed on missing flag getter) |
+| 1. AI push gate (`allowAiTrading=false` → tool never pushes) | superseded by P3-1 | `tradingPush` is removed from the agent tool surface entirely; see `src/tool/trading.spec.ts` and `src/core/workspace-tool-center.spec.ts`. |
 | 2. Human-only push route | added | `services/uta/src/http/trading-order-entry.spec.ts` — in-process Hono asserts POST `/uta/:id/wallet/push` invokes `push()` and sibling wallet-git routes do not. (One-shot manual routes `place-order`/`close-position`/`cancel-order` intentionally push; already spec'd) |
 | 3. readOnly enforcement | partially covered + **gap found** | Stage refusal + keyless⟹readOnly covered in `UnifiedTradingAccount.spec.ts:27-48`. **Gap: commit/push do not call `_assertWritable()` in production code** — needs a production change, out of P0 scope → follow-up issue |
 | 4. TradingGit commit persistence | added | `TradingGit.spec.ts:539-604` — JSON round-trip of the persisted export: head/hash/parentHash/thesis/operations/results/stateAfter (incl. rehydrated position quantities)/timestamp |

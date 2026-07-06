@@ -4,6 +4,7 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { exec as gitExec } from 'dugite';
+import { DEFAULT_AUTHZ_LEVEL } from '@traderalice/uta-protocol';
 
 import { readCredentials, readWorkspaceCredentialDefaults } from '@/core/config.js';
 
@@ -269,6 +270,7 @@ export class WorkspaceCreator {
       createdAt: new Date().toISOString(),
       template: templateName,
       spawnedFromVersion: template.version,
+      authzLevel: DEFAULT_AUTHZ_LEVEL,
       agents,
     };
     await this.opts.registry.add(workspace);

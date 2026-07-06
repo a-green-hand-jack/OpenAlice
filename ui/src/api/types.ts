@@ -506,6 +506,8 @@ export interface ToolCallRecord {
 
 // ==================== Trading Config ====================
 
+export type AuthzLevel = 'read_only' | 'paper' | 'small_live' | 'limited_autonomy'
+
 /**
  * One Unified Trading Account configuration record. The user-facing
  * concept that wraps a broker connection — distinct from `AccountInfo`,
@@ -520,6 +522,8 @@ export interface UTAConfig {
   guards: GuardEntry[]
   /** User-filled form values for the preset's schema. */
   presetConfig: Record<string, unknown>
+  /** Steward account-side authorization ceiling. Absent resolves to read_only. */
+  maxAuthzLevel?: AuthzLevel
 }
 
 // ==================== Broker Preset Metadata (from /broker-presets endpoint) ====================

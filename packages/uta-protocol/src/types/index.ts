@@ -11,6 +11,7 @@
  */
 
 export * from './errors.js'
+export * from './authz.js'
 export * from './broker.js'
 export * from './git.js'
 export * from './manager.js'
