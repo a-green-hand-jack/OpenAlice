@@ -287,7 +287,7 @@ curl -sS -b "$COOKIE" \
   "$OA/api/trading/uta/$UTA_ID/wallet/reject" | jq .
 ```
 
-The AI-facing `tradingPush` tool refuses execution unless AI trading is explicitly allowed (`src/tool/trading.ts:722-767`). The live-testing guide treats HTTP wallet push as the stand-in for the user's approval button (`docs/uta-live-testing.md:20-26`).
+The AI-facing `tradingPush` tool has been removed from the agent surface. The live-testing guide treats HTTP wallet push as the stand-in for the user's approval button (`docs/uta-live-testing.md:20-26`).
 
 Human-only approval route, paper/demo only:
 

@@ -4,7 +4,7 @@
  * server from the SessionPool).
  */
 
-import type { WireShape } from '../../api'
+import type { AuthzLevel, WireShape } from '../../api'
 
 export interface Workspace {
   readonly id: string;
@@ -24,6 +24,8 @@ export interface Workspace {
    * Overview card ("from {template} v{spawnedFromVersion}").
    */
   readonly spawnedFromVersion?: string;
+  /** Launcher-owned Steward authorization level. Absent resolves to read_only. */
+  readonly authzLevel?: AuthzLevel;
   /**
    * The instance's currently self-reported version, read from
    * `<workspace>/README.md` frontmatter on every list call. The agent can

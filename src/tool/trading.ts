@@ -15,7 +15,7 @@ import type { UTAManagerSDK } from '@/services/uta-client/index.js'
 import { normalizeBrokerSearchPattern } from '@traderalice/uta-protocol'
 import {
   compactAccountInfo, compactCommit, compactContract, compactContractDetails,
-  compactOperation, compactOrderFields, compactPushResult, compactStageResult, compactStatus,
+  compactOrderFields, compactStageResult, compactStatus,
   money, price,
 } from './trading-compact.js'
 // `Contract.aliceId` declaration merge is registered as a side-effect
@@ -179,21 +179,12 @@ async function stageAndMaybeCommit(
   return {
     ...staged,
     committed: { hash: committed['hash'], message: committed['message'] },
-    nextStep: 'Awaiting user approval — they approve in the Web UI (push executes there).',
+    nextStep: 'Awaiting user approval or deterministic auto-push outside the agent tool surface.',
   }
 }
 
-/**
- * @param manager        UTA SDK manager (account resolution + FX).
- * @param allowAiTrading  Live getter for the `agent.allowAiTrading` master
- *   switch. Read at call time (not captured) so toggling it in Settings takes
- *   effect without a restart. Gates `tradingPush`: false ⇒ stage + ask the user
- *   to approve in the Web UI; true ⇒ the AI pushes to the broker directly.
- */
-export function createTradingTools(
-  manager: UTAManagerSDK,
-  allowAiTrading: () => boolean = () => false,
-): Record<string, Tool> {
+/** Build the agent-facing trading proposal and read surface. */
+export function createTradingTools(manager: UTAManagerSDK): Record<string, Tool> {
   return {
     listUTAs: tool({
       description: 'List all registered trading accounts with their id, provider, label, and capabilities.',
@@ -619,9 +610,9 @@ IMPORTANT: Check this BEFORE making new trading decisions.`,
     // ==================== Mutations ====================
 
     placeOrder: tool({
-      description: `Stage an order (will execute on tradingPush).
+      description: `Stage an order proposal.
 BEFORE placing orders: check tradingLog, getPortfolio, verify strategy alignment.
-NOTE: This stages the operation. Call tradingCommit + tradingPush to execute.
+NOTE: This stages the operation. Call tradingCommit to package it for human approval or deterministic auto-push outside the agent tool surface.
 Required params by orderType:
   MKT: totalQuantity (or cashQty)
   LMT: totalQuantity + lmtPrice
@@ -656,7 +647,7 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
           limitPrice: z.string().optional().describe('Limit price for stop-limit SL (omit for stop-market)'),
         }).optional().describe('Stop loss order (single-level, full quantity)'),
         subAccountId: z.string().optional().describe('Target wallet on multi-wallet venues (e.g. Binance: "spot" / "derivatives"). REQUIRED when the account spans multiple wallets — staging loud-refuses without it and lists the valid ids. Single-wallet brokers ignore it.'),
-        commitMessage: z.string().optional().describe('Stage AND commit in one step with this message (your trading thesis). Push/approval still required.'),
+        commitMessage: z.string().optional().describe('Stage AND commit in one step with this message (your trading thesis). Approval/execution still happens outside the agent tool surface.'),
       }).meta({ examples: [{ aliceId: 'alpaca-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: '1', commitMessage: 'Entry: momentum breakout' }] }),
       execute: async ({ source, commitMessage, ...params }) => {
         const uta = await manager.resolveOne(source ?? parseAliceId(params.aliceId)?.utaId ?? '')
@@ -665,7 +656,7 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
     }),
 
     modifyOrder: tool({
-      description: 'Stage an order modification.\nNOTE: This stages the operation. Call tradingCommit + tradingPush to execute.',
+      description: 'Stage an order modification proposal.\nNOTE: This stages the operation. Call tradingCommit to package it for approval/execution outside the agent tool surface.',
       inputSchema: z.object({
         source: z.string().describe(sourceDesc(true)),
         orderId: z.string().describe('Order ID to modify'),
@@ -677,7 +668,7 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
         orderType: z.enum(['MKT', 'LMT', 'STP', 'STP LMT', 'TRAIL', 'TRAIL LIMIT', 'MOC']).optional().describe('New order type'),
         tif: z.enum(['DAY', 'GTC', 'IOC', 'FOK', 'OPG', 'GTD']).optional().describe('New time in force'),
         goodTillDate: z.string().optional().describe('New expiration date'),
-        commitMessage: z.string().optional().describe('Stage AND commit in one step with this message. Push/approval still required.'),
+        commitMessage: z.string().optional().describe('Stage AND commit in one step with this message. Approval/execution still happens outside the agent tool surface.'),
       }).meta({ examples: [{ source: 'alpaca-paper', orderId: '1', lmtPrice: '150' }] }),
       execute: async ({ source, commitMessage, ...params }) => {
         const uta = await manager.resolveOne(source)
@@ -686,14 +677,14 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
     }),
 
     closePosition: tool({
-      description: 'Stage a position close.\nNOTE: This stages the operation. Call tradingCommit + tradingPush to execute.',
+      description: 'Stage a position close proposal.\nNOTE: This stages the operation. Call tradingCommit to package it for approval/execution outside the agent tool surface.',
       inputSchema: z.object({
         source: z.string().optional().describe(sourceDesc(false, 'Defaults to the account inside aliceId.')),
         aliceId: z.string().describe('Contract ID (format: accountId|nativeKey, from searchContracts)'),
         symbol: z.string().optional().describe('Human-readable symbol. Optional.'),
         qty: positiveNumeric.optional().describe('Number of shares to sell. Decimal string. Default: sell all.'),
         subAccountId: z.string().optional().describe('Target wallet on multi-wallet venues (e.g. Binance: "spot" / "derivatives"). REQUIRED when the account spans multiple wallets. Single-wallet brokers ignore it.'),
-        commitMessage: z.string().optional().describe('Stage AND commit in one step with this message. Push/approval still required.'),
+        commitMessage: z.string().optional().describe('Stage AND commit in one step with this message. Approval/execution still happens outside the agent tool surface.'),
       }).meta({ examples: [{ aliceId: 'alpaca-paper|AAPL', commitMessage: 'Exit: thesis invalidated' }] }),
       execute: async ({ source, commitMessage, ...params }) => {
         const uta = await manager.resolveOne(source ?? parseAliceId(params.aliceId)?.utaId ?? '')
@@ -702,11 +693,11 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
     }),
 
     cancelOrder: tool({
-      description: 'Stage an order cancellation.\nNOTE: This stages the operation. Call tradingCommit + tradingPush to execute.',
+      description: 'Stage an order cancellation proposal.\nNOTE: This stages the operation. Call tradingCommit to package it for approval/execution outside the agent tool surface.',
       inputSchema: z.object({
         source: z.string().describe(sourceDesc(true)),
         orderId: z.string().describe('Order ID to cancel'),
-        commitMessage: z.string().optional().describe('Stage AND commit in one step with this message. Push/approval still required.'),
+        commitMessage: z.string().optional().describe('Stage AND commit in one step with this message. Approval/execution still happens outside the agent tool surface.'),
       }).meta({ examples: [{ source: 'alpaca-paper', orderId: '1', commitMessage: 'Cancel: stale level' }] }),
       execute: async ({ source, orderId, commitMessage }) => {
         const uta = await manager.resolveOne(source)
@@ -715,7 +706,7 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
     }),
 
     tradingCommit: tool({
-      description: 'Commit staged trading operations with a message (like "git commit -m"). Does NOT execute yet.',
+      description: 'Commit staged trading operations with a message (like "git commit -m"). Does NOT execute; approval/auto-push happens outside the agent tool surface.',
       inputSchema: z.object({
         source: z.string().optional().describe(sourceDesc(false, 'If omitted, commits all accounts with staged operations.')),
         message: z.string().describe('Commit message explaining your trading decision'),
@@ -730,54 +721,6 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
         }
         if (results.length === 0) return { message: 'No staged operations to commit.' }
         return results.length === 1 ? results[0] : results
-      },
-    }),
-
-    tradingPush: tool({
-      description: `Push committed operations to the broker — the final, real execution step.
-
-By DEFAULT this does NOT execute: it returns the pending operations and you must ask the user to approve them in the Web UI (Trading as Git page, or the account detail page).
-
-ONLY if the operator has enabled "Allow AI to push trades" in Settings does this execute directly — committed operations are sent to the broker as live orders. Use deliberately.`,
-      inputSchema: z.object({
-        source: z.string().optional().describe(sourceDesc(false, 'If omitted, checks all accounts.')),
-      }).meta({ examples: [{ source: 'alpaca-paper' }] }),
-      execute: async ({ source }) => {
-        const targets = await manager.resolve(source)
-        const statuses = await Promise.all(targets.map(async (uta) => ({ uta, status: await uta.status() })))
-        const pending = statuses.filter(({ status }) => status.pendingMessage)
-        if (pending.length === 0) {
-          const uncommitted = statuses.filter(({ status }) => status.staged.length > 0)
-          if (uncommitted.length > 0) {
-            return {
-              error: 'You have staged operations that are NOT committed yet. Call tradingCommit first, then tradingPush.',
-              uncommitted: uncommitted.map(({ uta, status }) => ({ source: uta.id, staged: status.staged.map(compactOperation) })),
-            }
-          }
-          return { message: 'No committed operations to push.' }
-        }
-        // Gate: AI-initiated execution is OFF by default. Without the operator's
-        // explicit opt-in, surface the pending ops for manual Web-UI approval
-        // rather than sending live orders to the broker.
-        if (!allowAiTrading()) {
-          return {
-            message: 'Push requires manual approval (AI trading is disabled). Tell the user to review and approve the pending operations in the Web UI (Trading as Git page, or the account detail page).',
-            pending: pending.map(({ uta, status }) => ({
-              source: uta.id,
-              ...compactStatus(status),
-            })),
-          }
-        }
-        // AI trading enabled — execute for real. Each push() sends the committed
-        // operations to the broker. Per-account failures degrade individually.
-        const results = await Promise.all(pending.map(async ({ uta }) => {
-          try {
-            return { source: uta.id, ...compactPushResult(await uta.push()) }
-          } catch (err) {
-            return { source: uta.id, ...handleBrokerError(err) }
-          }
-        }))
-        return { message: 'AI trading is enabled — pushed committed operations to the broker.', results }
       },
     }),
 

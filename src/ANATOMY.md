@@ -51,9 +51,11 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
 - `webui` routes keep the browser on Alice while proxying trading to UTA:
   `src/webui/plugin.ts:228-236` -> `src/webui/routes/trading-proxy.ts:32-41`
   -> `services/uta/src/http/routes-trading.ts:121`.
-- `tool/` definitions register with `ToolCenter`, then MCP exports the enabled
-  catalog: `src/main.ts:217-253` -> `src/core/tool-center.ts:17-21` ->
-  `src/server/mcp.ts:74-83`.
+- `tool/` definitions register with `ToolCenter`; global MCP exports the enabled
+  catalog with trading trimmed to read-only, while workspace MCP exports a
+  Steward-authz-filtered union of global tools plus workspace-scoped tools:
+  `src/main.ts:217-253` -> `src/core/tool-center.ts:17-21` ->
+  `src/core/workspace-tool-center.ts:33-143` -> `src/server/mcp.ts:74-128`.
 - `workspaces/` computes adapter commands, then `SessionPool` owns live PTYs:
   `src/workspaces/service.ts:94-104` -> `src/workspaces/session-pool.ts:72-84`
   -> `src/workspaces/persistent-session.ts:128-150`.
@@ -81,9 +83,10 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   `src/core/tool-call-log.ts:83-100`, `src/core/inbox-store.ts:21-29`, and
   `src/core/event-log.ts:112-118`.
 - Workspace state is outside `data/`: launcher root comes from
-  `src/workspaces/config.ts:107-109`; session records and scrollback are
-  `src/workspaces/session-registry.ts:81-87` and
-  `src/workspaces/scrollback-store.ts:23-35`.
+  `src/workspaces/config.ts:107-109`; launcher-owned workspace `authzLevel`
+  lives in `workspaces.json` via `src/workspaces/workspace-registry.ts:6-39`;
+  session records and scrollback are `src/workspaces/session-registry.ts:81-87`
+  and `src/workspaces/scrollback-store.ts:23-35`.
 - `sealing.key` lives beside the portable data root, not inside it:
   `src/core/sealing.ts:1-8` and `src/core/sealing.ts:49-50`.
 

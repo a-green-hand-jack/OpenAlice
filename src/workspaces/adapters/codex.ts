@@ -47,7 +47,7 @@ const CODEX_PROVIDER_NAME = 'workspace';
  *      isolated from global state.
  *
  * No symlinks, no global-fallback inheritance. The `-c` flag is OpenAlice's
- * "local MCP registration" — analogous to claude's `.mcp.json` cwd
+ * workspace-scoped MCP registration — analogous to claude's `.mcp.json` cwd
  * discovery, but driven via codex's CLI override flag since codex has no
  * cwd-MCP convention of its own.
  */
@@ -307,9 +307,9 @@ export const codexAdapter: CliAdapter = {
  * Optional `codex -c mcp_servers.*` head. When MCP is disabled, return the
  * bare codex command and let the workspace use the injected `alice*` CLIs.
  *
- * Reads OPENALICE_MCP_URL / AQ_WS_ID from the spawn-bound env. The URL exists
- * only when the optional MCP server is enabled; otherwise the workspace uses
- * the injected `alice*` CLI tools.
+ * Reads OPENALICE_MCP_URL / AQ_WS_ID from the spawn-bound env and points Codex
+ * at `/mcp/:wsId`, the workspace-scoped union catalog. Do not also register
+ * the global `/mcp` server here: that bypasses the Steward authz filter.
  */
 function codexMcpHead(ctx: SpawnContext): string[] {
   const mcpUrl = ctx.env['OPENALICE_MCP_URL'];
@@ -323,14 +323,7 @@ function codexMcpHead(ctx: SpawnContext): string[] {
   return [
     'codex',
     '-c',
-    `mcp_servers.openalice.url="${mcpUrl}"`,
-    '-c',
-    // `openalice-workspace` is a valid TOML bare key (hyphen is allowed in bare
-    // keys), so it needs NO quoting. Quoting the segment as
-    // `"openalice-workspace"` made codex carry the literal quotes into the MCP
-    // server name, which then failed codex's own `^[a-zA-Z0-9_-]+$` name check
-    // ("Invalid MCP server name '\"openalice-workspace\"'").
-    `mcp_servers.openalice-workspace.url="${mcpUrl}/${workspaceId}"`,
+    `mcp_servers.openalice.url="${mcpUrl}/${workspaceId}"`,
   ];
 }
 

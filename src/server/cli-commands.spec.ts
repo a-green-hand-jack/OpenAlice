@@ -77,6 +77,10 @@ describe('CLI_EXPORTS — uta export (global trading tools)', () => {
     expect(exportKeyForBinary('alice-uta')).toBe('uta')
     expect(getExport('uta')?.scope).toBe('global')
   })
+
+  it('does not expose tradingPush through the agent-reachable CLI', () => {
+    expect(mappedToolNames('uta')).not.toContain('tradingPush')
+  })
 })
 
 describe('CLI_EXPORTS — workspace export (scoped collaboration tools)', () => {

@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { readFile, writeFile, mkdir, unlink, rm, rename, chmod } from 'fs/promises'
 import { resolve, join, dirname } from 'path'
 import { homedir } from 'os'
+import { AUTHZ_LEVELS } from '@traderalice/uta-protocol'
 import { newsCollectorSchema } from '../domain/news/config.js'
 import { runMigrations } from '../migrations/runner.js'
 import { dataPath } from '@/core/paths.js'
@@ -216,11 +217,9 @@ export type AIProviderConfig = z.infer<typeof aiProviderSchema>
 
 const agentSchema = z.object({
   maxSteps: z.number().int().positive().default(20),
-  /** Master switch for AI-initiated trade execution. When false (default),
-   *  `tradingPush` only stages + asks the user to approve in the Web UI; when
-   *  true, the AI may push committed operations straight to the broker. Gated
-   *  in the UI behind a danger warning + double-confirm. Per-account `readOnly`
-   *  still wins (read-only accounts can't stage in the first place). */
+  /** Legacy master switch for the removed AI push tool. Kept for config
+   *  compatibility until the P3 authz-change UI replaces it; P3-1 no longer
+   *  exposes `tradingPush` to agents at any authorization level. */
   allowAiTrading: z.boolean().default(false),
   claudeCode: z.object({
     allowedTools: z.array(z.string()).optional(),
@@ -455,6 +454,11 @@ export const utaConfigSchema = z.object({
   /** Read-only — write operations (stage/commit/push of orders) are refused.
    *  Implied by keyless; can also be set on a keyed account for a watch-only view. */
   readOnly: z.boolean().default(false),
+  /**
+   * Steward account-side authorization ceiling. Optional for P3-1 so old
+   * accounts remain valid without a migration; absent resolves to read_only.
+   */
+  maxAuthzLevel: z.enum(AUTHZ_LEVELS).optional(),
   /** Whether this UTA can be edited/removed via the config UI. The built-in
    *  keyless data UTAs (binance/okx/bybit-readonly) are non-editable. */
   editable: z.boolean().default(true),

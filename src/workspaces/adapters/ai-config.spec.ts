@@ -94,7 +94,7 @@ describe('claudeAdapter AI-config', () => {
 });
 
 describe('codexAdapter AI-config', () => {
-  it('injects both global and workspace MCP servers into fresh commands', () => {
+  it('injects the workspace-scoped MCP union server into fresh commands', () => {
     expect(codexAdapter.composeCommand(['ignored'], {
       cwd: dir,
       env: {
@@ -104,13 +104,11 @@ describe('codexAdapter AI-config', () => {
     })).toEqual([
       'codex',
       '-c',
-      'mcp_servers.openalice.url="http://127.0.0.1:47332/mcp"',
-      '-c',
-      'mcp_servers.openalice-workspace.url="http://127.0.0.1:47332/mcp/ws-abc"',
+      'mcp_servers.openalice.url="http://127.0.0.1:47332/mcp/ws-abc"',
     ]);
   });
 
-  it('preserves both MCP servers when resuming codex sessions', () => {
+  it('preserves the workspace-scoped MCP union server when resuming codex sessions', () => {
     const env = {
       OPENALICE_MCP_URL: 'http://127.0.0.1:47332/mcp',
       AQ_WS_ID: 'ws-abc',
@@ -118,18 +116,14 @@ describe('codexAdapter AI-config', () => {
     expect(codexAdapter.composeCommand([], { cwd: dir, env, resume: 'last' })).toEqual([
       'codex',
       '-c',
-      'mcp_servers.openalice.url="http://127.0.0.1:47332/mcp"',
-      '-c',
-      'mcp_servers.openalice-workspace.url="http://127.0.0.1:47332/mcp/ws-abc"',
+      'mcp_servers.openalice.url="http://127.0.0.1:47332/mcp/ws-abc"',
       'resume',
       '--last',
     ]);
     expect(codexAdapter.composeCommand([], { cwd: dir, env, resume: { sessionId: 'rollout-id' } })).toEqual([
       'codex',
       '-c',
-      'mcp_servers.openalice.url="http://127.0.0.1:47332/mcp"',
-      '-c',
-      'mcp_servers.openalice-workspace.url="http://127.0.0.1:47332/mcp/ws-abc"',
+      'mcp_servers.openalice.url="http://127.0.0.1:47332/mcp/ws-abc"',
       'resume',
       'rollout-id',
     ]);

@@ -215,38 +215,9 @@ describe('trading tools — connecting state (cold-start)', () => {
   })
 })
 
-describe('tradingPush — AI-trading gate (#95)', () => {
-  function pushFixture() {
-    let pushed = 0
-    const uta = {
-      id: 'binance-demo',
-      status: async () => ({ pendingMessage: 'ready to push', staged: [], pendingHash: 'h1' }),
-      push: async () => { pushed++; return { hash: 'h1', message: 'sent', operationCount: 1, submitted: [{}], rejected: [] } },
-    }
-    const manager = { resolve: async () => [uta] } as never
-    return { manager, pushed: () => pushed }
-  }
-
-  it('does NOT execute the push when AI trading is disabled — returns a manual-approval message', async () => {
-    const { manager, pushed } = pushFixture()
-    const tools = createTradingTools(manager, () => false)
-    const res = await run(tools.tradingPush, {}) as { message: string }
-    expect(pushed()).toBe(0)
-    expect(res.message).toMatch(/manual approval|disabled/i)
-  })
-
-  it('executes the push to the broker when AI trading is enabled', async () => {
-    const { manager, pushed } = pushFixture()
-    const tools = createTradingTools(manager, () => true)
-    const res = await run(tools.tradingPush, {}) as { results: Array<{ source: string }> }
-    expect(pushed()).toBe(1)
-    expect(res.results[0].source).toBe('binance-demo')
-  })
-
-  it('fails closed — no flag getter defaults to disabled (no push)', async () => {
-    const { manager, pushed } = pushFixture()
-    const tools = createTradingTools(manager)
-    await run(tools.tradingPush, {})
-    expect(pushed()).toBe(0)
+describe('tradingPush — removed from the agent tool surface', () => {
+  it('does not register a push tool for agents at any authz level', () => {
+    const tools = createTradingTools(fakeManager([]))
+    expect(Object.keys(tools)).not.toContain('tradingPush')
   })
 })

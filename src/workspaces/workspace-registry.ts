@@ -1,6 +1,8 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+import { isAuthzLevel, type AuthzLevel } from '@traderalice/uta-protocol';
+
 import type { Logger } from './logger.js';
 
 export interface WorkspaceMeta {
@@ -24,6 +26,14 @@ export interface WorkspaceMeta {
    * missing this field — treat as unknown rather than back-filling.
    */
   readonly spawnedFromVersion?: string;
+  /**
+   * Launcher-owned Steward authorization level. This must stay in
+   * workspaces.json, not `.alice/workspace.json`, because agent-editable
+   * workspace files must never be able to self-escalate authorization.
+   *
+   * Optional for P3-1 compatibility; absent resolves to read_only.
+   */
+  readonly authzLevel?: AuthzLevel;
   /**
    * Adapter ids enabled in this workspace. Order is significant: the first
    * entry is the default for one-click spawns. Legacy rows (missing this
@@ -162,6 +172,12 @@ function validateFile(value: unknown): WorkspaceMeta[] {
       : base;
     if (typeof e['spawnedFromVersion'] === 'string') {
       withTemplate = { ...withTemplate, spawnedFromVersion: e['spawnedFromVersion'] };
+    }
+    if (e['authzLevel'] !== undefined) {
+      if (!isAuthzLevel(e['authzLevel'])) {
+        throw new Error(`workspaces.json: entry ${i} has invalid authzLevel`);
+      }
+      withTemplate = { ...withTemplate, authzLevel: e['authzLevel'] };
     }
     return withTemplate;
   });
