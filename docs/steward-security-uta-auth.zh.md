@@ -217,3 +217,16 @@ Alice **自己的 Web 端口**（`127.0.0.1:<webPort>`）上挂着 `/api/trading
 > 2. 修法选 A / B / C？其中 A 的"遗留"（凭证保险库等其他敏感面）：这一轮一并修，还是先只修交易面、其余单开 issue？
 > 3. 排期：门 #2 修好前 P3-4a 一直按住（我的默认）。认可吗？
 > 4. 关于 #51 我已合并这件事：它作为"UTA 端口锁"是有效的一层，我建议**留着不回退**，门 #2 的修复作为它的补全。认可吗？
+
+### 7.6 决议（maintainer 已批，2026-07-06）
+
+| 项 | 决定 |
+|---|---|
+| **修法** | **A（外科手术）+ 含凭证保险库**。对敏感路由取消 loopback 旁路，即使本机也强制要 session；不做全局 B。 |
+| **本轮覆盖的敏感前缀** | `/api/trading`（执行 BFF + `/config` 账户授权/broker 凭证）、`/api/simulator`（paper god-view）、`/api/config`（AI 凭证保险库，`GET /credentials` 明文回传 apiKey）、`/api/workspaces`（含 `PATCH /:id/authz-level` 工作区授权变更 + `/credentials` 凭证）。 |
+| **机制** | `auth.ts` 里给这几个前缀开"loopback 豁免的例外"——命中即跳过 loopback 放行、落到 session 校验。浏览器有 cookie 照常；agent 无 session 被 401。cron/headless 派发是**进程内**、不走 HTTP，不受影响；UTA→Alice 的 `/api/events/ingest` 有自己的 #32 token 且不在此列，不受影响。 |
+| **纵深防御** | 把 `OPENALICE_WEB_PORT` 也加进 `spawn-env` 剥离清单。 |
+| **排期** | 门 #2 修好前 P3-4a 一直按住。#51 留着不回退（有效的一层，UTA 端口锁 + 未来分离的前提）。 |
+| **UX 代价（A 的固有代价，已接受）** | 本机用户对交易/配置/工作区操作需先登录（登录流程已存在，SPA 壳 + `/api/auth/*` 均为公开路由，登录页照常渲染）。 |
+
+**下一步**：GitHub issue → `.worktrees/issue-N/` → codex 实现 → 门禁 → sonnet 活体复审（必须实测：零凭证 agent 打这四个前缀全 401、人类登录后照常、headless/autonomous 不回归）→ PR（不自动合并）。之后再把 P3-4a 挂到门 #2 补好的地基上重跑活体审查。
