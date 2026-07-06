@@ -31,6 +31,7 @@ import type { CurrencyClientLike } from '@/domain/market-data/client/types.js'
 import { buildSDKCredentials } from '@/domain/market-data/credential-map.js'
 import { startOrderSyncPoller } from './domain/trading/order-sync-poller.js'
 import { createUtaEventSinkFromEnv } from './domain/trading/events.js'
+import { createUtaInternalAuth } from './http/internal-auth.js'
 import { createTradingRoutes } from './http/routes-trading.js'
 import { createSimulatorRoutes } from './http/routes-simulator.js'
 import type { UTAEngineContext } from './types.js'
@@ -174,6 +175,11 @@ async function main(): Promise<void> {
     fxService,
     snapshotService,
   }
+  const internalAuth = createUtaInternalAuth()
+  app.use('/api/trading', internalAuth)
+  app.use('/api/trading/*', internalAuth)
+  app.use('/api/simulator', internalAuth)
+  app.use('/api/simulator/*', internalAuth)
   app.route('/api/trading', createTradingRoutes(tradingCtx))
   // Simulator endpoints — MockBroker-only god-view operations the
   // /dev/simulator UI tab drives. Lives next to the trading routes

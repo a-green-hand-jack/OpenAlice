@@ -7,6 +7,7 @@ import { Hono } from 'hono'
 import { createSession, _reset, revokeAllSessions } from '@/services/auth/session-store.js'
 import { createAuthMiddleware } from '../middleware/auth.js'
 import { createTradingProxyRoutes } from './trading-proxy.js'
+import { UTA_INTERNAL_TOKEN_HEADER } from '@traderalice/uta-protocol'
 
 type RecordedApprover =
   | { via: 'alice-bff'; fingerprint?: string; at: string }
@@ -96,9 +97,19 @@ describe('trading proxy approver hand-off', () => {
     })
     expect(persisted.commits[0].approver.fingerprint).toBeUndefined()
   })
+
+  it('forwards the Guardian internal token to UTA when configured', async () => {
+    const persisted = installRecordingUta()
+    const app = createAuthedTradingApp(undefined, 'proxy-internal-token')
+
+    const res = await push(app)
+
+    expect(res.status).toBe(200)
+    expect(forwardedHeaders(persisted.fetchSpy).get(UTA_INTERNAL_TOKEN_HEADER)).toBe('proxy-internal-token')
+  })
 })
 
-function createAuthedTradingApp(onAfterAuth?: (sessionValue: unknown) => void): Hono {
+function createAuthedTradingApp(onAfterAuth?: (sessionValue: unknown) => void, internalToken?: string): Hono {
   const app = new Hono()
   app.use('*', createAuthMiddleware({ trustedProxies: [], csrfTrustedOrigins: [] }))
   if (onAfterAuth) {
@@ -107,7 +118,7 @@ function createAuthedTradingApp(onAfterAuth?: (sessionValue: unknown) => void): 
       await next()
     })
   }
-  app.route('/api/trading', createTradingProxyRoutes({ utaBaseUrl: 'http://127.0.0.1:47333' }))
+  app.route('/api/trading', createTradingProxyRoutes({ utaBaseUrl: 'http://127.0.0.1:47333', internalToken }))
   return app
 }
 
