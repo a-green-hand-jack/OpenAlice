@@ -28,7 +28,6 @@ const requiredFiles = [
   'src/workspaces/templates/chat/bootstrap.mjs',
   'vendor/manifest.json',
   'vendor/pi/package.json',
-  'vendor/pi/package-lock.json',
   'vendor/pi/node_modules/@earendil-works/pi-coding-agent/dist/cli.js',
 ]
 
