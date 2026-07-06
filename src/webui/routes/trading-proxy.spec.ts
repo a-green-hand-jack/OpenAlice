@@ -34,7 +34,13 @@ afterEach(async () => {
 })
 
 describe('trading proxy approver hand-off', () => {
-  it('persists alice-bff approver for a default loopback request with a valid session cookie', async () => {
+  // Post-#55: /api/trading/* is loopback-exempt in the auth middleware — a
+  // loopback request now requires a valid session, so the legitimate browser
+  // path (valid cookie) still reaches the proxy and is attributed alice-bff,
+  // while the old "loopback push with no/invalid session is authorized and
+  // recorded as via:loopback" path is now rejected with 401 before it ever
+  // reaches UTA. That anonymous-loopback push was the door #55 closes.
+  it('validates the session and persists an alice-bff approver for a loopback request with a valid session cookie', async () => {
     const session = await createSession()
     const expectedFingerprint = fingerprint(session.sid)
     const persisted = installRecordingUta()
@@ -46,7 +52,11 @@ describe('trading proxy approver hand-off', () => {
     const res = await push(app, { Cookie: `alice_session=${encodeURIComponent(session.sid)}` })
 
     expect(res.status).toBe(200)
-    expect(sessionAttachedByMiddleware).toBeUndefined()
+    // The request went through the real session-check path (not the loopback
+    // bypass, which is no longer honored for /api/trading/*), so the middleware
+    // validated and attached the session.
+    expect(sessionAttachedByMiddleware).not.toBe('not-observed')
+    expect(sessionAttachedByMiddleware).toBeTruthy()
     expect(persisted.commits).toHaveLength(1)
     const persistedCommit = await readPersistedCommit(persisted.commitFile, 0)
     expect(persistedCommit.approver).toMatchObject({
@@ -59,7 +69,7 @@ describe('trading proxy approver hand-off', () => {
     expect(JSON.stringify([...headers.entries()])).not.toContain(session.sid)
   })
 
-  it('persists loopback approver for invalid, expired, or malformed loopback session cookies', async () => {
+  it('rejects a loopback push with invalid, expired, or malformed session cookies (401) and never reaches UTA', async () => {
     const expired = await createSession({ ttlMs: -1_000 })
     const persisted = installRecordingUta()
     const app = createAuthedTradingApp()
@@ -70,39 +80,32 @@ describe('trading proxy approver hand-off', () => {
       'alice_session=%E0%A4%A',
     ]) {
       const res = await push(app, { Cookie: cookie })
-      expect(res.status).toBe(200)
+      expect(res.status).toBe(401)
     }
 
-    expect(persisted.commits.map((commit) => commit.approver)).toEqual([
-      expect.objectContaining({ via: 'loopback', at: expect.any(String) }),
-      expect.objectContaining({ via: 'loopback', at: expect.any(String) }),
-      expect.objectContaining({ via: 'loopback', at: expect.any(String) }),
-    ])
-    for (const commit of persisted.commits) {
-      expect(commit.approver.fingerprint).toBeUndefined()
-    }
+    // The auth gate rejected every request before the proxy ran, so no commit
+    // was ever forwarded to UTA.
+    expect(persisted.commits).toHaveLength(0)
+    expect(persisted.fetchSpy).not.toHaveBeenCalled()
   })
 
-  it('keeps loopback push authorized without any session cookie and records loopback', async () => {
+  it('rejects a loopback push with no session cookie (401) and never reaches UTA', async () => {
     const persisted = installRecordingUta()
     const app = createAuthedTradingApp()
 
     const res = await push(app)
 
-    expect(res.status).toBe(200)
-    expect(persisted.commits).toHaveLength(1)
-    expect(persisted.commits[0].approver).toMatchObject({
-      via: 'loopback',
-      at: expect.any(String),
-    })
-    expect(persisted.commits[0].approver.fingerprint).toBeUndefined()
+    expect(res.status).toBe(401)
+    expect(persisted.commits).toHaveLength(0)
+    expect(persisted.fetchSpy).not.toHaveBeenCalled()
   })
 
-  it('forwards the Guardian internal token to UTA when configured', async () => {
+  it('forwards the Guardian internal token to UTA when configured (authenticated request)', async () => {
+    const session = await createSession()
     const persisted = installRecordingUta()
     const app = createAuthedTradingApp(undefined, 'proxy-internal-token')
 
-    const res = await push(app)
+    const res = await push(app, { Cookie: `alice_session=${encodeURIComponent(session.sid)}` })
 
     expect(res.status).toBe(200)
     expect(forwardedHeaders(persisted.fetchSpy).get(UTA_INTERNAL_TOKEN_HEADER)).toBe('proxy-internal-token')
