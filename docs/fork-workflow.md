@@ -67,11 +67,9 @@ Every change — code or docs — moves through the same stations:
 ## Worktree recipe
 
 ```bash
-# From the main checkout, always branch off fresh jieke/dev:
+# From the main checkout, do not switch the current branch:
 git fetch origin upstream
-git checkout jieke/dev
-git pull origin jieke/dev
-git worktree add -b feat/issue-N-<slug> .worktrees/issue-N jieke/dev
+git worktree add -b feat/issue-N-<slug> .worktrees/issue-N origin/jieke/dev
 
 cd .worktrees/issue-N
 pnpm install --filter='!@traderalice/desktop'     # ~748M per worktree
@@ -80,6 +78,12 @@ pnpm install --filter='!@traderalice/desktop'     # ~748M per worktree
 export OPENALICE_HOME=$PWD/.sandbox-home          # data/ + sealing.key
 export AQ_LAUNCHER_ROOT=$PWD/.sandbox-ws          # workspace launcher root
 ```
+
+Do not branch from a stale or locally-ahead `jieke/dev` by accident.
+If local `jieke/dev` has unpushed commits, either push/merge them first
+or intentionally name the local commit SHA in the work order. Default
+worktrees come from `origin/jieke/dev` so another local agent's checkout
+state cannot leak into the new branch.
 
 Why the sandbox is non-negotiable: `data/` is one global store shared
 by every checkout, and **migrations run against whatever store the
@@ -94,6 +98,96 @@ OPENALICE_WEB_PORT=48331 OPENALICE_MCP_PORT=48332 \
 OPENALICE_UTA_PORT=48333 OPENALICE_UI_PORT=6173 \
 pnpm dev
 ```
+
+## Worktree bootstrap contract
+
+Opening a worktree is not just `git worktree add`. Treat it as a small
+environment build with tracked inputs and local-only outputs.
+
+1. **Preflight** — before creating anything, run `git status -sb` and
+   `git worktree list` in the main checkout. If a worktree or branch for
+   the issue already exists, resume it instead of creating a duplicate.
+   If the main checkout is dirty or locally ahead/behind, do not "fix"
+   it as part of worktree setup unless the work order says so.
+   Always create worktrees from the main checkout's repo root, never
+   from inside another worktree.
+2. **Tracked source only** — the new worktree starts from
+   `origin/jieke/dev` plus the issue branch. Never copy uncommitted files
+   from another checkout unless the work order explicitly says which
+   files and why.
+   One worktree belongs to one issue; after merge, do not recycle it for
+   a new issue with a new branch.
+3. **Node dependencies** — run the documented install command in the
+   worktree. Use `pnpm install --filter='!@traderalice/desktop'` for
+   normal agent work and full `pnpm install` only when the Electron
+   package is in scope. Do not symlink or copy `node_modules` between
+   worktrees; pnpm's store already deduplicates safely. Do not commit
+   lockfile changes caused only by a routine install; lockfile changes
+   belong to dependency-change PRs.
+4. **Python / uv surfaces** — only create Python state when the touched
+   subsystem actually needs it (`pyproject.toml`, `requirements*.txt`,
+   notebooks, scripts, or benchmark tooling). Use `uv venv` /
+   `uv run` / `uv pip sync` inside the worktree; never install project
+   dependencies into system Python. If sandbox cache permissions get in
+   the way, set `UV_CACHE_DIR=/tmp/uv-cache` for that command.
+5. **OpenAlice state sandbox** — app runs, smoke tests, migrations, and
+   live-ish drills must set `OPENALICE_HOME=$PWD/.sandbox-home` and
+   `AQ_LAUNCHER_ROOT=$PWD/.sandbox-ws`. Never copy real
+   `~/.openalice/data`, `sealing.key`, `provider-keys.json`, broker
+   credentials, or account files into a worktree.
+6. **Provider-key isolation** — `OPENALICE_HOME` does not move
+   user-global provider keys. If a task touches credential injection,
+   AI-provider settings, or provider-key loading, also set
+   `OPENALICE_GLOBAL_DIR=$PWD/.sandbox-global` and use fake/test keys
+   only.
+7. **Port isolation** — if any dev stack may already be running, assign
+   the worktree its own port profile before `pnpm dev` or browser tests.
+   Record the chosen ports in the work order. Do not reuse another
+   worktree's ports while its server may still be alive.
+8. **Local datasets and caches** — any large local asset, dataset, model
+   cache, or generated mirror lives outside git or under an ignored
+   path. Restore it from a documented command, env var, or symlink rule.
+   If a task discovers an undocumented asset requirement, add or update
+   a checked-in setup note/script in the same PR instead of leaving it in
+   agent memory.
+9. **External repos / mirrors** — satellite checkouts, generated
+   template mirrors, downloaded benchmarks, and other non-repo inputs
+   must be pinned by URL plus commit/version in the work order or setup
+   doc. Keep them under ignored paths and never vendor them into this
+   repo unless the issue explicitly asks for that.
+10. **Secrets and env files** — do not copy `.env`, real broker config,
+    session cookies, admin tokens, or shell history from another
+    checkout. If an env file is needed, create a worktree-local ignored
+    file from a checked-in example and use placeholders.
+11. **Generated artifacts** — build outputs, reports, screenshots,
+    traces, coverage, logs, temporary downloads, and recorder output go
+    under ignored paths. If a tool writes generated files into tracked
+    locations, stop and either configure the output path or document why
+    the generated file is intentionally part of the PR.
+12. **Sub-agent handoff** — the implementation prompt must include the
+    issue number, worktree path, branch name, base ref/SHA, sandbox env
+    exports, port profile, restored local assets, intended write scope,
+    and required verification commands. Do not make a sub-agent infer
+    bootstrap state from the parent session's memory.
+13. **Readiness check** — before handing the worktree to an
+    implementation agent, record: `git status -sb`, the branch/base,
+    dependency install command used, sandbox env paths, any dataset/cache
+    links restored, and the first verification command the agent should
+    run.
+
+Generated state belongs in ignored paths such as `node_modules/`,
+`.venv/`, `.uv-cache/`, `.sandbox-home/`, `.sandbox-ws/`,
+`.sandbox-global/`, `reports/`, `tmp/`, or an explicit subsystem cache.
+If `git status --short` shows generated files, fix the ignore/setup rule
+before starting feature work.
+
+Cleanup is part of the same contract. After the PR merges and the merge
+commit is visible on the target branch, use `git worktree remove
+.worktrees/issue-N` from the main checkout, then delete the stale local
+and remote feature branch. Do not remove worktrees with `rm -rf`: it can
+leave Git's worktree metadata and branch checkout locks behind. If
+cleanup fails, run `git worktree list` and report the exact blocker
+instead of half-cleaning.
 
 ## Sync and conflict policy
 
