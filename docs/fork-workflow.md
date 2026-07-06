@@ -10,21 +10,30 @@
 
 ## Branch model
 
-- **`master` (fork)** — the integration base. Every PR targets it. CI
-  (`.github/workflows/ci.yml`: build-and-test + dev-smoke matrix) runs
-  on every PR.
+- **Maintainer identity** — `jieke` is the maintainer operating the
+  `a-green-hand-jack/OpenAlice` fork. In local git, `origin` is that
+  fork and `upstream` is `TraderAlice/OpenAlice`.
+- **`jieke/dev`** — the primary development integration branch. It was
+  originally cut from `upstream/master`, and new feature/fix PRs target
+  this branch first. CI (`.github/workflows/ci.yml`: build-and-test +
+  dev-smoke matrix) runs on every PR.
+- **`master` (fork)** — the stabilized fork line. It is kept in sync
+  with `upstream/master` and periodically receives mature batches from
+  `jieke/dev`; it is not the default target for feature/fix PRs.
 - **`feat/issue-N-<slug>`** — one branch per GitHub issue, developed in
   an isolated worktree under `.worktrees/issue-N/`.
-- **`jieke/dev`** — the maintainer's manual scratch branch. Not part of
-  the pipeline; never a PR base.
-- **Upstream sync** — a dedicated PR that merges `upstream/master` into
-  fork `master`. Never mixed with feature work. Conflicts with
-  fork-local doctrine sections (CLAUDE.md / AGENTS.md fork-mode
-  section, this file) are resolved in favor of the fork.
+- **Upstream sync** — a dedicated sync path updates fork `master` from
+  `upstream/master`, then brings `origin/master` back into `jieke/dev`.
+  Never mix upstream sync with feature work.
+- **Stabilization merge** — when a coherent feature group or plan stage
+  is complete, merge `jieke/dev` into fork `master` through an explicit
+  stabilization PR or maintainer-approved merge.
 
 Branch safety rules from CLAUDE.md still apply: never commit directly
-to master, merge with `--merge` (never `--squash` by default), never
-`--delete-branch`, sync the source branch after merge.
+to `master` or `jieke/dev`, merge with `--merge` (never `--squash` by
+default), and never force-push long-lived branches. After merge, clean
+up obsolete feature branches and their worktrees deliberately; never
+delete `master`, `jieke/dev`, `dev`, `local`, or archived branches.
 
 ## The per-issue pipeline
 
@@ -32,34 +41,37 @@ Every change — code or docs — moves through the same stations:
 
 1. **Issue** — filed on the fork with What / Why / Acceptance sections.
    Acceptance criteria are checkable, not aspirational.
-2. **Work order** — the orchestrator session translates the issue into
+2. **Branch / worktree** — create `feat/issue-N-<slug>` from current
+   `jieke/dev` in an isolated `.worktrees/issue-N/` checkout.
+3. **Work order** — the orchestrator session translates the issue into
    a concrete brief (files, anchors, constraints, verification steps),
    citing ANATOMY.md maps and `docs/steward-plan.zh.md` invariants
    where they apply.
-3. **Implement** — codex (or another implementation agent) works inside
-   the issue's worktree. Self-verification is part of implementation:
+4. **Implement** — a sub-agent (codex or another implementation agent)
+   works inside the issue's worktree. Self-verification is part of implementation:
    `npx tsc --noEmit`, `pnpm test`, plus the scoped checks the diff
    demands (see Verification matrix below).
-4. **Review** — the orchestrator reads the full diff and spot-checks
-   real behavior through the terminal runbook (curl / MCP / alice-uta),
-   not just test output.
-5. **Audit** — an independent sub-agent (cheap model is fine) reviews
-   the diff against the issue intent, the steward-plan global
-   invariants (I1–I9), and ANATOMY citation sync. Findings are fixed
-   before the PR advances. The implementer and the auditor are never
-   the same agent.
-6. **PR → CI → merge** — PR body: Summary / Test plan / Boundary touch
-   (+ `Closes #N`). Merge only with CI green and audit clean.
-7. **Post-merge** — main checkout: `git checkout master && git pull`,
-   run `pnpm test:smoke` (isolated home), then
-   `git worktree remove .worktrees/issue-N`. The branch stays.
+5. **PR to `jieke/dev`** — PR body: Summary / Test plan / Boundary
+   touch (+ `Closes #N`). Do not point new feature/fix PRs directly at
+   `master`.
+6. **Review / audit** — a different sub-agent or the main agent reads
+   the full diff, spot-checks real behavior through the terminal
+   runbook when relevant, and reviews against the issue intent,
+   steward-plan invariants (I1–I9), and ANATOMY citation sync.
+   Findings are fixed before merge.
+7. **Merge and cleanup** — merge only with CI green and review clean.
+   Then sync the relevant checkout, remove `.worktrees/issue-N`, and
+   delete stale local/remote feature branches once their PR merge commit
+   preserves the history.
 
 ## Worktree recipe
 
 ```bash
-# From the main checkout, always branch off fresh master:
-git fetch origin && git checkout master && git pull origin master
-git worktree add -b feat/issue-N-<slug> .worktrees/issue-N master
+# From the main checkout, always branch off fresh jieke/dev:
+git fetch origin upstream
+git checkout jieke/dev
+git pull origin jieke/dev
+git worktree add -b feat/issue-N-<slug> .worktrees/issue-N jieke/dev
 
 cd .worktrees/issue-N
 pnpm install --filter='!@traderalice/desktop'     # ~748M per worktree
@@ -82,6 +94,38 @@ OPENALICE_WEB_PORT=48331 OPENALICE_MCP_PORT=48332 \
 OPENALICE_UTA_PORT=48333 OPENALICE_UI_PORT=6173 \
 pnpm dev
 ```
+
+## Sync and conflict policy
+
+Keep the three long-lived refs distinct:
+
+- **`upstream/master` → `origin/master`**: dedicated upstream-sync work
+  only. Prefer merge commits or PRs so fork history remains inspectable;
+  never reset or force-push `origin/master` to look like upstream.
+- **`origin/master` → `jieke/dev`**: after fork `master` absorbs
+  upstream, merge that updated `master` into `jieke/dev` so feature
+  branches are built against current upstream plus fork-stable work.
+- **`jieke/dev` → `origin/master`**: only after a coherent feature group
+  or plan stage is reviewed, tested, and ready to become the fork's
+  stable line.
+
+Conflict rule: upstream-sync conflicts are resolved separately from
+feature diffs. Fork-local doctrine files (`AGENTS.md`, `CLAUDE.md`,
+this file, and other fork workflow docs) default to the fork's policy.
+Conflicts in trading, UTA, auth, config, migrations, credentials, or
+workflow automation are high-risk: stop, summarize the competing changes,
+and get maintainer direction before inventing a resolution.
+
+## Milestone tags
+
+Use git tags as durable stage markers. Tag after a coherent feature set
+lands or a plan stage is complete, preferably on the `master` merge
+commit that made it stable. If the milestone is intentionally dev-only,
+tag the `jieke/dev` merge commit with a clearly dev-scoped name.
+
+Tags should be annotated and say what landed, which issues/PRs are
+covered, and what verification was run. Do not move or replace an
+existing tag without explicit maintainer approval.
 
 ## Verification matrix
 
