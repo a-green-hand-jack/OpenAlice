@@ -81,6 +81,7 @@ async function main(): Promise<void> {
 
   const utaUrl = `http://127.0.0.1:${ports.utaPort}`
   const internalEventToken = randomBytes(32).toString('hex')
+  const internalUtaToken = randomBytes(32).toString('hex')
   const eventIngestUrl = `http://127.0.0.1:${ports.webPort}/api/events/ingest`
 
   // ── UTA spec (re-used by Guardian for restart) ────────────
@@ -91,6 +92,7 @@ async function main(): Promise<void> {
     env: {
       ...baseEnv,
       OPENALICE_UTA_PORT: String(ports.utaPort),
+      OPENALICE_UTA_INTERNAL_TOKEN: internalUtaToken,
       OPENALICE_EVENT_INGEST_URL: eventIngestUrl,
       OPENALICE_EVENT_INGEST_TOKEN: internalEventToken,
     },
@@ -123,6 +125,7 @@ async function main(): Promise<void> {
       // allowlist (src/workspaces/config.ts buildDefaultOrigins).
       OPENALICE_UI_PORT: String(ports.uiPort),
       OPENALICE_UTA_URL: utaUrl,
+      OPENALICE_UTA_INTERNAL_TOKEN: internalUtaToken,
       OPENALICE_INTERNAL_EVENT_TOKEN: internalEventToken,
     },
     prefixLogs: true,

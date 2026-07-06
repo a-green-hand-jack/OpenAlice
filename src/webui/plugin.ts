@@ -247,8 +247,9 @@ export class WebPlugin implements Plugin {
     if (!utaUrl) {
       throw new Error('OPENALICE_UTA_URL not set — UTA service should be spawned by Guardian before Alice boots')
     }
-    app.route('/api/trading', createTradingProxyRoutes({ utaBaseUrl: utaUrl }))
-    app.route('/api/simulator', createTradingProxyRoutes({ utaBaseUrl: utaUrl }))
+    const utaInternalToken = process.env['OPENALICE_UTA_INTERNAL_TOKEN']
+    app.route('/api/trading', createTradingProxyRoutes({ utaBaseUrl: utaUrl, internalToken: utaInternalToken }))
+    app.route('/api/simulator', createTradingProxyRoutes({ utaBaseUrl: utaUrl, internalToken: utaInternalToken }))
     app.route('/api/tools', createToolsRoutes(ctx.toolCenter))
     app.route('/api/agent-status', createAgentStatusRoutes(ctx))
     app.route('/api/news', createNewsRoutes(ctx))

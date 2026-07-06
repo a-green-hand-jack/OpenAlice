@@ -24,7 +24,7 @@ vi.mock('../../core/config.js', async () => {
 
 import { createTradingConfigRoutes } from './trading-config.js'
 import type { EngineContext } from '../../core/types.js'
-import { deriveUtaId, OKX_PRESET, SIMULATOR_PRESET } from '@traderalice/uta-protocol'
+import { deriveUtaId, OKX_PRESET, SIMULATOR_PRESET, UTA_INTERNAL_TOKEN_HEADER } from '@traderalice/uta-protocol'
 import type { ProducerHandle } from '../../core/producer.js'
 import { createSession, _reset, revokeAllSessions } from '@/services/auth/session-store.js'
 import { adminSessionFingerprint } from './approver-identity.js'
@@ -74,6 +74,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.unstubAllGlobals()
   await _reset()
   delete process.env['OPENALICE_SESSIONS_FILE']
   if (sessionTmpDir) await rm(sessionTmpDir, { recursive: true, force: true })
@@ -314,6 +315,39 @@ describe('PUT /uta/:id — edit-only', () => {
         },
       },
     }])
+  })
+})
+
+// ==================== POST /test-connection ====================
+
+describe('POST /test-connection — UTA passthrough auth', () => {
+  it('forwards the Guardian internal token to UTA', async () => {
+    const previousUrl = process.env['OPENALICE_UTA_URL']
+    const previousToken = process.env['OPENALICE_UTA_INTERNAL_TOKEN']
+    try {
+      process.env['OPENALICE_UTA_URL'] = 'http://127.0.0.1:47333'
+      process.env['OPENALICE_UTA_INTERNAL_TOKEN'] = 'config-internal-token'
+      const fetchSpy = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+        return new Response(JSON.stringify({ success: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      })
+      vi.stubGlobal('fetch', fetchSpy)
+
+      const routes = makeRoutes()
+      const { status, body } = await req(routes, 'POST', '/test-connection', { presetId: 'mock-simulator' })
+
+      expect(status).toBe(200)
+      expect(body).toEqual({ success: true })
+      const init = fetchSpy.mock.calls[0][1] as RequestInit
+      expect(new Headers(init.headers).get(UTA_INTERNAL_TOKEN_HEADER)).toBe('config-internal-token')
+    } finally {
+      if (previousUrl === undefined) delete process.env['OPENALICE_UTA_URL']
+      else process.env['OPENALICE_UTA_URL'] = previousUrl
+      if (previousToken === undefined) delete process.env['OPENALICE_UTA_INTERNAL_TOKEN']
+      else process.env['OPENALICE_UTA_INTERNAL_TOKEN'] = previousToken
+    }
   })
 })
 
