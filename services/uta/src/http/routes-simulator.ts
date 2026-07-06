@@ -30,6 +30,7 @@ const BAR_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'] as cons
 const setMarkPriceSchema = z.object({
   nativeKey: z.string().min(1),
   price: numericString,
+  asOf: z.union([z.number(), z.string().min(1)]).optional(),
 })
 
 const tickPriceSchema = z.object({
@@ -142,7 +143,9 @@ export function createSimulatorRoutes(ctx: UTAEngineContext) {
     const body = await parseBody(c, setMarkPriceSchema)
     if (!body.ok) return body.error
     try {
+      const asOfMs = body.data.asOf == null ? null : r.broker.parseSimulatorTimestamp(body.data.asOf)
       const filled = r.broker.setMarkPrice(body.data.nativeKey, body.data.price)
+      if (asOfMs != null) r.broker.advanceSimClock(body.data.nativeKey, asOfMs)
       return c.json({ filled })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)

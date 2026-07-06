@@ -340,6 +340,24 @@ describe('getAccount', () => {
 
 // ==================== getHistorical ====================
 
+const DAY_MS = 86_400_000
+const HIST_START_MS = Date.UTC(2026, 0, 1)
+
+function histTs(index: number): number {
+  return HIST_START_MS + index * DAY_MS
+}
+
+function dailyInjectedBars(closes: number[]): Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> {
+  return closes.map((close, index) => ({
+    t: new Date(histTs(index)).toISOString(),
+    o: close,
+    h: close + 1,
+    l: close - 1,
+    c: close,
+    v: 10 + index,
+  }))
+}
+
 describe('getHistorical', () => {
   it('returns deterministic synthetic bars anchored to markPrice (ascending, string-typed)', async () => {
     const acc = new MockBroker({ id: 'mock-paper', cash: 100_000 })
@@ -357,30 +375,131 @@ describe('getHistorical', () => {
     expect(acc.callCount('getHistorical')).toBe(1)
   })
 
-  it('replays injected bars only through the current simulated period (strict no-lookahead)', async () => {
+  it('replays injected bars only through the explicit asOf clock (strict no-lookahead)', async () => {
+    const acc = new MockBroker({ id: 'mock-paper', cash: 100_000 })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
+    const closes = [100, 101, 102, 103, 104]
+    acc.injectBars({
+      nativeKey: 'AAPL',
+      interval: '1d',
+      bars: dailyInjectedBars(closes),
+    })
+
+    await expect(acc.getHistorical(contract, { interval: '1d' })).resolves.toEqual([])
+
+    for (let k = 0; k < closes.length; k++) {
+      acc.advanceSimClock('AAPL', histTs(k))
+      const bars = await acc.getHistorical(contract, { interval: '1d' })
+      expect(bars.map((bar) => bar.close)).toEqual(closes.slice(0, k + 1).map(String))
+      expect(bars.map((bar) => bar.timestamp.getTime())).toEqual(closes.slice(0, k + 1).map((_, i) => histTs(i)))
+    }
+  })
+
+  it('is idempotent when retrying the same asOf across duplicate consecutive closes', async () => {
     const acc = new MockBroker({ id: 'mock-paper', cash: 100_000 })
     const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
     acc.injectBars({
       nativeKey: 'AAPL',
       interval: '1d',
-      bars: [
-        { t: '2026-01-01T00:00:00.000Z', o: 100, h: 101, l: 99, c: 100, v: 10 },
-        { t: '2026-01-02T00:00:00.000Z', o: 101, h: 102, l: 100, c: 101, v: 11 },
-        { t: '2026-01-03T00:00:00.000Z', o: 102, h: 103, l: 101, c: 102, v: 12 },
-        { t: '2026-01-04T00:00:00.000Z', o: 103, h: 104, l: 102, c: 103, v: 13 },
-      ],
+      bars: dailyInjectedBars([100, 101, 101, 102]),
     })
 
-    acc.setMarkPrice('AAPL', 102)
+    acc.setMarkPrice('AAPL', 101)
+    acc.advanceSimClock('AAPL', histTs(2))
+    acc.setMarkPrice('AAPL', 101)
+    acc.advanceSimClock('AAPL', histTs(2))
 
     const bars = await acc.getHistorical(contract, { interval: '1d' })
 
-    expect(bars.map((bar) => bar.close)).toEqual(['100', '101', '102'])
-    expect(bars.map((bar) => bar.timestamp.toISOString())).toEqual([
-      '2026-01-01T00:00:00.000Z',
-      '2026-01-02T00:00:00.000Z',
-      '2026-01-03T00:00:00.000Z',
-    ])
+    expect(bars.map((bar) => bar.close)).toEqual(['100', '101', '101'])
+  })
+
+  it('does not move injected visibility for arbitrary mark prices without asOf', async () => {
+    const acc = new MockBroker({ id: 'mock-paper', cash: 100_000 })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
+    acc.injectBars({
+      nativeKey: 'AAPL',
+      interval: '1d',
+      bars: dailyInjectedBars([100, 101, 102]),
+    })
+
+    acc.setMarkPrice('AAPL', '999.123456')
+    expect(await acc.getHistorical(contract, { interval: '1d' })).toEqual([])
+
+    acc.advanceSimClock('AAPL', histTs(1))
+    expect((await acc.getHistorical(contract, { interval: '1d' })).map((bar) => bar.close)).toEqual(['100', '101'])
+
+    acc.setMarkPrice('AAPL', '1000.987654')
+    expect((await acc.getHistorical(contract, { interval: '1d' })).map((bar) => bar.close)).toEqual(['100', '101'])
+  })
+
+  it('does not let a stale mark price reveal bars when history is injected later', async () => {
+    const acc = new MockBroker({ id: 'mock-paper', cash: 100_000 })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
+
+    acc.setMarkPrice('AAPL', 102)
+    acc.injectBars({
+      nativeKey: 'AAPL',
+      interval: '1d',
+      bars: dailyInjectedBars([100, 101, 102]),
+    })
+
+    expect(await acc.getHistorical(contract, { interval: '1d' })).toEqual([])
+  })
+
+  it('keeps the simulator clock monotonic when an older asOf is retried later', async () => {
+    const acc = new MockBroker({ id: 'mock-paper', cash: 100_000 })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
+    acc.injectBars({
+      nativeKey: 'AAPL',
+      interval: '1d',
+      bars: dailyInjectedBars([100, 101, 102, 103]),
+    })
+
+    acc.advanceSimClock('AAPL', histTs(3))
+    acc.advanceSimClock('AAPL', histTs(1))
+
+    const bars = await acc.getHistorical(contract, { interval: '1d' })
+    expect(bars.map((bar) => bar.close)).toEqual(['100', '101', '102', '103'])
+  })
+
+  it('resets injected visibility when bars are re-injected', async () => {
+    const acc = new MockBroker({ id: 'mock-paper', cash: 100_000 })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
+
+    acc.injectBars({
+      nativeKey: 'AAPL',
+      interval: '1d',
+      bars: dailyInjectedBars([100, 101, 102]),
+    })
+    acc.advanceSimClock('AAPL', histTs(2))
+    expect((await acc.getHistorical(contract, { interval: '1d' })).map((bar) => bar.close)).toEqual(['100', '101', '102'])
+
+    acc.injectBars({
+      nativeKey: 'AAPL',
+      interval: '1d',
+      bars: dailyInjectedBars([200, 201]),
+    })
+    expect(await acc.getHistorical(contract, { interval: '1d' })).toEqual([])
+
+    acc.advanceSimClock('AAPL', histTs(0))
+    expect((await acc.getHistorical(contract, { interval: '1d' })).map((bar) => bar.close)).toEqual(['200'])
+  })
+
+  it('reveals by asOf even when mark-price Decimal precision would not equal the bar close', async () => {
+    const acc = new MockBroker({ id: 'mock-paper', cash: 100_000 })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
+    acc.injectBars({
+      nativeKey: 'AAPL',
+      interval: '1d',
+      bars: dailyInjectedBars([100.3]),
+    })
+
+    acc.setMarkPrice('AAPL', 100.30019999)
+    acc.advanceSimClock('AAPL', histTs(0))
+
+    const bars = await acc.getHistorical(contract, { interval: '1d' })
+    expect(bars.map((bar) => bar.close)).toEqual(['100.3'])
   })
 
   it('honors limit when replaying injected bars', async () => {
@@ -389,15 +508,10 @@ describe('getHistorical', () => {
     acc.injectBars({
       nativeKey: 'AAPL',
       interval: '1d',
-      bars: [
-        { t: '2026-01-01T00:00:00.000Z', o: 100, h: 101, l: 99, c: 100, v: 10 },
-        { t: '2026-01-02T00:00:00.000Z', o: 101, h: 102, l: 100, c: 101, v: 11 },
-        { t: '2026-01-03T00:00:00.000Z', o: 102, h: 103, l: 101, c: 102, v: 12 },
-        { t: '2026-01-04T00:00:00.000Z', o: 103, h: 104, l: 102, c: 103, v: 13 },
-      ],
+      bars: dailyInjectedBars([100, 101, 102, 103]),
     })
 
-    acc.setMarkPrice('AAPL', 103)
+    acc.advanceSimClock('AAPL', histTs(3))
 
     const bars = await acc.getHistorical(contract, { interval: '1d', limit: 2 })
 
