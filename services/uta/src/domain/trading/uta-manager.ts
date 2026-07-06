@@ -11,7 +11,7 @@ import type { AccountCapabilities, BrokerHealth, BrokerHealthInfo } from './brok
 import { CcxtBroker } from './brokers/ccxt/CcxtBroker.js'
 import { createCcxtProviderTools } from './brokers/ccxt/ccxt-tools.js'
 import { createBroker } from './brokers/factory.js'
-import { getBrokerPreset } from '@traderalice/uta-protocol'
+import { getBrokerPreset, resolveAuthzAccountType } from '@traderalice/uta-protocol'
 import { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
 import { loadGitState, createGitPersister } from './git-persistence.js'
 import { readUTAsConfig, type UTAConfig } from '@/core/config.js'
@@ -37,6 +37,7 @@ export interface SnapshotHooks {
 
 export class UTAManager {
   private entries = new Map<string, UnifiedTradingAccount>()
+  private configs = new Map<string, UTAConfig>()
   private reconnecting = new Set<string>()
 
   private eventLog?: EventLog
@@ -80,6 +81,7 @@ export class UTAManager {
       onPostReject: this._snapshotHooks?.onPostReject,
     })
     this.add(uta)
+    this.configs.set(cfg.id, cfg)
     return uta
   }
 
@@ -131,6 +133,7 @@ export class UTAManager {
     const uta = this.entries.get(utaId)
     if (!uta) return
     this.entries.delete(utaId)
+    this.configs.delete(utaId)
     try { await uta.close() } catch { /* best effort */ }
   }
 
@@ -154,6 +157,7 @@ export class UTAManager {
 
   remove(id: string): void {
     this.entries.delete(id)
+    this.configs.delete(id)
   }
 
   // ==================== Lookups ====================
@@ -163,12 +167,19 @@ export class UTAManager {
   }
 
   listUTAs(): UTASummary[] {
-    return Array.from(this.entries.values()).map((uta) => ({
-      id: uta.id,
-      label: uta.label,
-      capabilities: uta.getCapabilities(),
-      health: uta.getHealthInfo(),
-    }))
+    return Array.from(this.entries.values()).map((uta) => {
+      const cfg = this.configs.get(uta.id)
+      return {
+        id: uta.id,
+        label: uta.label,
+        capabilities: uta.getCapabilities(),
+        health: uta.getHealthInfo(),
+        ...(cfg?.maxAuthzLevel ? { maxAuthzLevel: cfg.maxAuthzLevel } : {}),
+        authzAccountType: cfg
+          ? resolveAuthzAccountType({ presetId: cfg.presetId, presetConfig: cfg.presetConfig })
+          : 'unknown',
+      }
+    })
   }
 
   has(id: string): boolean {

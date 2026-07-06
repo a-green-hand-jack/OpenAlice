@@ -4,6 +4,7 @@ import {
   AUTHZ_LEVEL_RANK,
   isAuthzLevelAllowedForAccountType,
   maxAuthzLevel,
+  resolveAuthzAccountType,
   resolveEffectiveAuthzLevel,
 } from './authz.js'
 
@@ -40,6 +41,13 @@ describe('authz level ordering', () => {
     expect(isAuthzLevelAllowedForAccountType('paper', 'mock')).toBe(true)
     expect(isAuthzLevelAllowedForAccountType('paper', 'live')).toBe(false)
     expect(isAuthzLevelAllowedForAccountType('small_live', 'live')).toBe(true)
+  })
+
+  it('derives authz account type from broker preset identity', () => {
+    expect(resolveAuthzAccountType({ presetId: 'mock-simulator', presetConfig: {} })).toBe('mock')
+    expect(resolveAuthzAccountType({ presetId: 'alpaca', presetConfig: { mode: 'paper' } })).toBe('paper')
+    expect(resolveAuthzAccountType({ presetId: 'okx', presetConfig: { mode: 'live' } })).toBe('live')
+    expect(resolveAuthzAccountType({ presetId: 'missing', presetConfig: {} })).toBe('unknown')
   })
 
   it('can conservatively collapse multiple account ceilings for a workspace catalog', () => {

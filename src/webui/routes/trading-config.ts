@@ -1,16 +1,19 @@
 import { Hono } from 'hono'
 import type { EngineContext } from '../../core/types.js'
+import type { ProducerHandle } from '../../core/producer.js'
 import {
   readUTAsConfig, writeUTAsConfig,
   utaConfigSchema, wipeUTATradingData,
 } from '../../core/config.js'
 import {
+  normalizeAuthzLevel,
   BUILTIN_BROKER_PRESETS,
   deriveUtaId,
   getBrokerPreset,
   mintInstanceId,
 } from '@traderalice/uta-protocol'
 import { triggerUTARestart } from '../../services/uta-supervisor/restart-trigger.js'
+import { approverFromAliceRequest } from './approver-identity.js'
 
 /** Fire-and-forget UTA restart after a config mutation. Logs but doesn't
  *  block the HTTP response — UI returns immediately and Guardian flips
@@ -68,7 +71,10 @@ function unmaskSecrets(
 // ==================== Routes ====================
 
 /** Trading config CRUD routes: accounts */
-export function createTradingConfigRoutes(ctx: EngineContext) {
+export function createTradingConfigRoutes(
+  ctx: EngineContext,
+  opts?: { authzProducer?: ProducerHandle<readonly ['authz.level-changed']> },
+) {
   const app = new Hono()
 
   // ==================== Broker presets (for the wizard) ====================
@@ -185,9 +191,24 @@ export function createTradingConfigRoutes(ctx: EngineContext) {
       unmaskSecrets(body, existing as unknown as Record<string, unknown>)
 
       const validated = utaConfigSchema.parse(body)
+      const from = normalizeAuthzLevel(existing.maxAuthzLevel)
+      const to = normalizeAuthzLevel(validated.maxAuthzLevel)
+      const authzProducer = opts?.authzProducer
+      if (from !== to && !authzProducer) {
+        return c.json({ error: 'authz_audit_unavailable' }, 500)
+      }
       const idx = accounts.findIndex((a) => a.id === id)
       accounts[idx] = validated
       await writeUTAsConfig(accounts)
+      if (from !== to && authzProducer) {
+        await authzProducer.emit('authz.level-changed', {
+          scope: 'account',
+          id,
+          from,
+          to,
+          approver: await approverFromAliceRequest(c),
+        })
+      }
       notifyUTAReload()
 
       // Handle enabled state changes at runtime

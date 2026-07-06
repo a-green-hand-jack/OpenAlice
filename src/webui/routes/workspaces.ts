@@ -9,6 +9,9 @@
 import { Hono } from 'hono';
 import { readFile } from 'node:fs/promises';
 import { join, resolve as resolvePath } from 'node:path';
+import { z } from 'zod';
+import { AUTHZ_LEVELS } from '@traderalice/uta-protocol';
+import type { ProducerHandle } from '../../core/producer.js';
 
 import { probeByWireShape } from '../../workspaces/agent-probe.js';
 import type { WireShape } from '../../ai-providers/preset-catalog.js';
@@ -37,6 +40,7 @@ import {
   ensureAgentCredentialReady,
   getAgentCredentialReadiness,
 } from '../../workspaces/agent-credential-readiness.js';
+import { approverFromAliceRequest } from './approver-identity.js';
 
 // The spawn body's `resume` value is an AGENT-side session id, whose shape is
 // adapter-native: uuid for claude/codex/pi, `ses_<base62>` for opencode. This
@@ -98,6 +102,10 @@ function parseSeedPrompt(
 /** Max stored length of a session title (the seed message); the row truncates further. */
 const MAX_SESSION_TITLE = 200;
 
+const authzLevelBodySchema = z.object({
+  authzLevel: z.enum(AUTHZ_LEVELS),
+});
+
 /** The 201 body both `/:id/sessions/spawn` and `/quick-chat` return. */
 interface SpawnedSessionBody {
   readonly sessionId: string;
@@ -115,7 +123,10 @@ type SpawnSessionResult =
   | { readonly ok: true; readonly session: SpawnedSessionBody }
   | { readonly ok: false; readonly status: number; readonly body: { error: string; message?: string } };
 
-export function createWorkspaceRoutes(svc: WorkspaceService): Hono {
+export function createWorkspaceRoutes(
+  svc: WorkspaceService,
+  opts?: { authzProducer?: ProducerHandle<readonly ['authz.level-changed']> },
+): Hono {
   const app = new Hono();
 
   const resolveDefaultAgentId = async (meta: WorkspaceMeta): Promise<string | undefined> => {
@@ -452,6 +463,40 @@ export function createWorkspaceRoutes(svc: WorkspaceService): Hono {
       launcherLogger.warn('workspace.metadata_write_failed', { id, err });
       return c.json({ error: 'write_failed', message: (err as Error).message }, 500);
     }
+  });
+
+  app.patch('/:id/authz-level', async (c) => {
+    const id = c.req.param('id');
+    if (!validId(id)) return c.json({ error: 'not_found' }, 404);
+    if (!svc.registry.get(id)) return c.json({ error: 'not_found' }, 404);
+    if (!opts?.authzProducer) return c.json({ error: 'authz_audit_unavailable' }, 500);
+
+    let body: z.infer<typeof authzLevelBodySchema>;
+    try {
+      body = authzLevelBodySchema.parse(await safeJson(c));
+    } catch (err) {
+      return c.json({
+        error: 'invalid_authz_level',
+        message: err instanceof z.ZodError
+          ? err.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')
+          : String(err),
+      }, 400);
+    }
+
+    const changed = await svc.registry.setAuthzLevel(id, body.authzLevel);
+    if (!changed) return c.json({ error: 'not_found' }, 404);
+    const approver = await approverFromAliceRequest(c);
+    if (changed.changed) {
+      await opts.authzProducer.emit('authz.level-changed', {
+        scope: 'workspace',
+        id,
+        from: changed.from,
+        to: changed.to,
+        approver,
+      });
+    }
+    launcherLogger.info('workspace.authz_level_saved', { id, from: changed.from, to: changed.to });
+    return c.json({ workspace: await svc.publicMeta(changed.workspace) });
   });
 
   // ── single workspace (DELETE + git/files sub-resources) ──────────────────

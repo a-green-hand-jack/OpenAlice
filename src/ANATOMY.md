@@ -38,8 +38,11 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
 - `webui/` - Hono web plugin, admin-token middleware, `/api/*` routes, and
   workspace WebSocket/IPCs. `WebPlugin` starts at `src/webui/plugin.ts:73-94`;
   core API routes are `src/webui/plugin.ts:221-245`; workspace routes are
-  `src/webui/plugin.ts:250-263`; trading proxy is `src/webui/routes/trading-proxy.ts:32-41`;
-  event ingest's external/internal token gate is `src/webui/routes/events.ts:42-60`.
+  `src/webui/plugin.ts:250-263`; workspace `authzLevel` changes live at
+  `src/webui/routes/workspaces.ts:468-500`; account `maxAuthzLevel` changes are
+  audited in `src/webui/routes/trading-config.ts:197-207`; trading proxy is
+  `src/webui/routes/trading-proxy.ts:32-41`; event ingest's external/internal
+  token gate is `src/webui/routes/events.ts:42-60`.
 - `migrations/` - versioned transformations for persisted user state. Registry:
   `src/migrations/registry.ts:27-32`; runner:
   `src/migrations/runner.ts:121-143`.
@@ -53,9 +56,12 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   -> `services/uta/src/http/routes-trading.ts:121`.
 - `tool/` definitions register with `ToolCenter`; global MCP exports the enabled
   catalog with trading trimmed to read-only, while workspace MCP exports a
-  Steward-authz-filtered union of global tools plus workspace-scoped tools:
+  Steward-authz-filtered union of global tools plus workspace-scoped tools; proposal
+  tools are additionally gated against the target account ceiling/type before
+  execution:
   `src/main.ts:217-253` -> `src/core/tool-center.ts:17-21` ->
-  `src/core/workspace-tool-center.ts:33-143` -> `src/server/mcp.ts:74-128`.
+  `src/core/workspace-tool-center.ts:33-143` and
+  `src/core/workspace-tool-center.ts:189-245` -> `src/server/mcp.ts:74-128`.
 - `workspaces/` computes adapter commands, then `SessionPool` owns live PTYs:
   `src/workspaces/service.ts:94-104` -> `src/workspaces/session-pool.ts:72-84`
   -> `src/workspaces/persistent-session.ts:128-150`.
@@ -75,7 +81,9 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
 ## State
 
 - `data/config/` is read through `src/core/config.ts:10` and migrated before
-  config load by `src/core/config.ts:518-522`; applied migrations journal to
+  config load by `src/core/config.ts:518-522`; account `maxAuthzLevel` lives in
+  the UTA account config and is changed through the audited Settings route at
+  `src/webui/routes/trading-config.ts:197-207`; applied migrations journal to
   `_meta.json` through `src/migrations/runner.ts:121-143`.
 - Trading commits are UTA-owned at
   `services/uta/src/domain/trading/git-persistence.ts:14-16`.
@@ -84,7 +92,8 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   `src/core/event-log.ts:112-118`.
 - Workspace state is outside `data/`: launcher root comes from
   `src/workspaces/config.ts:107-109`; launcher-owned workspace `authzLevel`
-  lives in `workspaces.json` via `src/workspaces/workspace-registry.ts:6-39`;
+  lives in `workspaces.json` via `src/workspaces/workspace-registry.ts:116-127`,
+  with corrupt row values degraded at `src/workspaces/workspace-registry.ts:191-200`;
   session records and scrollback are `src/workspaces/session-registry.ts:81-87`
   and `src/workspaces/scrollback-store.ts:23-35`.
 - `sealing.key` lives beside the portable data root, not inside it:

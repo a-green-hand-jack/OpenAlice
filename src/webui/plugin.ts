@@ -76,6 +76,7 @@ export class WebPlugin implements Plugin {
   /** SSE clients grouped by channel ID. Default channel: 'default'. */
   private sseByChannel = new Map<string, Map<string, SSEClient>>()
   private ingestProducer?: ProducerHandle<WebhookIngestEventTypes>
+  private authzProducer?: ProducerHandle<readonly ['authz.level-changed']>
   private workspaceService: WorkspaceService | null = null
   private workspacesWs: AttachedWS | null = null
   private workspacesIpc: AttachedWorkspaceIpc | null = null
@@ -223,6 +224,10 @@ export class WebPlugin implements Plugin {
         'risk.flatten',
       ] as const,
     })
+    this.authzProducer = ctx.listenerRegistry.declareProducer({
+      name: 'authz-routes',
+      emits: ['authz.level-changed'] as const,
+    })
 
     // ==================== Mount route modules ====================
     // /api/channels is the last surviving piece of the legacy web-chat
@@ -234,7 +239,7 @@ export class WebPlugin implements Plugin {
     app.route('/api/market-data', createMarketDataRoutes(ctx))
     app.route('/api/events', createEventsRoutes({ ctx, ingestProducer: this.ingestProducer }))
     app.route('/api/topology', createTopologyRoutes(ctx))
-    app.route('/api/trading/config', createTradingConfigRoutes(ctx))
+    app.route('/api/trading/config', createTradingConfigRoutes(ctx, { authzProducer: this.authzProducer }))
     // `/api/trading/*` and `/api/simulator/*` are proxied to the co-located
     // UTA service (decision #2 of UTA-split v1 — UI stays single-origin).
     // Trading domain + the MockBroker god-view live on UTA's side.
@@ -267,7 +272,7 @@ export class WebPlugin implements Plugin {
     })
     this.workspacesIpc = attachWorkspacesIpc(this.workspaceService)
     if (this.workspaceServiceRef) this.workspaceServiceRef.current = this.workspaceService
-    app.route('/api/workspaces', createWorkspaceRoutes(this.workspaceService))
+    app.route('/api/workspaces', createWorkspaceRoutes(this.workspaceService, { authzProducer: this.authzProducer }))
     app.route('/api/headless', createHeadlessRoutes(this.workspaceService))
     app.route('/api/schedule', createScheduleRoutes(this.workspaceService))
     app.route('/api/issues', createIssuesRoutes(this.workspaceService))
@@ -353,6 +358,8 @@ export class WebPlugin implements Plugin {
     this.sseByChannel.clear()
     this.ingestProducer?.dispose()
     this.ingestProducer = undefined
+    this.authzProducer?.dispose()
+    this.authzProducer = undefined
     this.webIpc?.dispose()
     this.webIpc = null
     this.cliSocketServer?.close()

@@ -66,17 +66,6 @@ export const en = {
       marketData: 'Market Data',
       newsSources: 'News Sources',
     },
-    agent: {
-      title: 'Agent',
-      description: 'Controls what the AI may do on your behalf. Changes apply on the next request.',
-      allowAiTrading: 'Allow AI to push trades',
-      allowAiTradingOn: 'ON — the AI can send orders to the broker by itself, without asking you each time.',
-      allowAiTradingOff: 'OFF — the AI can stage and propose trades, but every push needs your approval in the Web UI.',
-      allowAiTradingWarning: 'AI auto-trading is ON. The AI can place, modify and cancel real orders on its own. Per-account read-only still applies.',
-      allowAiTradingConfirmTitle: 'Enable AI auto-trading?',
-      allowAiTradingConfirmBody: 'This lets the AI send live orders to your broker without asking you each time. The UTA trading interface is still unstable and may have precision or parameter issues. Strongly discouraged on real-money accounts — use a paper / demo account.',
-      allowAiTradingConfirmCta: 'Enable auto-trading',
-    },
     persona: {
       title: 'Persona',
       description: "The system prompt that defines Alice's personality and behavior. Changes take effect on next server restart.",
