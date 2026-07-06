@@ -257,10 +257,13 @@ export class MockBroker implements IBroker {
 
   // ---- Contract search (stub) ----
 
-  async searchContracts(_pattern: string): Promise<ContractDescription[]> {
-    this._record('searchContracts', [_pattern])
+  async searchContracts(pattern: string): Promise<ContractDescription[]> {
+    this._record('searchContracts', [pattern])
     const desc = new ContractDescription()
-    desc.contract = makeContract()
+    const nativeKey = pattern.trim()
+    desc.contract = nativeKey
+      ? this._buildContract(nativeKey, this.resolveNativeKey(nativeKey))
+      : makeContract()
     return [desc]
   }
 

@@ -358,6 +358,52 @@ describe('getHistorical', () => {
   })
 })
 
+describe('searchContracts', () => {
+  it('echoes non-empty patterns into independent instrument contracts and positions', async () => {
+    const assetA = (await broker.searchContracts('  ASSET-A  '))[0].contract
+    const assetB = (await broker.searchContracts('ASSET-B'))[0].contract
+
+    expect(assetA.symbol).toBe('ASSET-A')
+    expect(assetA.localSymbol).toBe('ASSET-A')
+    expect(broker.getNativeKey(assetA)).toBe('ASSET-A')
+    expect(assetB.symbol).toBe('ASSET-B')
+    expect(assetB.localSymbol).toBe('ASSET-B')
+    expect(broker.getNativeKey(assetB)).toBe('ASSET-B')
+
+    broker.setMarkPrice('ASSET-A', 100)
+    broker.setMarkPrice('ASSET-B', 250)
+
+    const buyA = new Order()
+    buyA.action = 'BUY'
+    buyA.orderType = 'MKT'
+    buyA.totalQuantity = new Decimal(1)
+    const buyB = new Order()
+    buyB.action = 'BUY'
+    buyB.orderType = 'MKT'
+    buyB.totalQuantity = new Decimal(2)
+
+    expect((await broker.placeOrder(assetA, buyA)).success).toBe(true)
+    expect((await broker.placeOrder(assetB, buyB)).success).toBe(true)
+
+    const positions = await broker.getPositions()
+    expect(positions).toHaveLength(2)
+
+    const positionBySymbol = new Map(positions.map((position) => [position.contract.symbol, position]))
+    expect(positionBySymbol.get('ASSET-A')?.marketPrice).toBe('100')
+    expect(positionBySymbol.get('ASSET-A')?.marketValue).toBe('100')
+    expect(positionBySymbol.get('ASSET-B')?.marketPrice).toBe('250')
+    expect(positionBySymbol.get('ASSET-B')?.marketValue).toBe('500')
+  })
+
+  it('keeps the AAPL default for empty patterns', async () => {
+    const results = await broker.searchContracts('')
+
+    expect(results).toHaveLength(1)
+    expect(results[0].contract.symbol).toBe('AAPL')
+    expect(results[0].contract.aliceId).toBe('mock-paper|AAPL')
+  })
+})
+
 // ==================== Call tracking ====================
 
 describe('call tracking', () => {
