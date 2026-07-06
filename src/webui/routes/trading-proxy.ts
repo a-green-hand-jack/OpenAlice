@@ -3,8 +3,8 @@
  *
  * UI talks to Alice on a single origin (decision #2 of UTA-split v1); this
  * route forwards every trading request unchanged to the UTA service. v1
- * has no auth between the two — UTA is bound to 127.0.0.1 only, so the
- * trust boundary is the host, not the request.
+ * attaches Guardian's per-launch internal token so UTA can reject direct
+ * loopback calls from workspace processes.
  *
  * Stream-friendly: forwards request body, returns UTA's Response as-is so
  * `Content-Type` / chunked transfer / SSE headers pass through. A short
@@ -13,6 +13,7 @@
  */
 
 import { Hono, type Context } from 'hono'
+import { UTA_INTERNAL_TOKEN_HEADER } from '@traderalice/uta-protocol'
 import { adminSessionFingerprintFromRequest } from './approver-identity.js'
 
 // Total request timeout. UTA is on the loopback interface so connect is
@@ -32,9 +33,10 @@ const PASSTHROUGH_HEADERS: readonly string[] = [
 
 const APPROVER_HEADER = 'x-openalice-approver'
 
-export function createTradingProxyRoutes(opts: { utaBaseUrl: string }): Hono {
+export function createTradingProxyRoutes(opts: { utaBaseUrl: string; internalToken?: string }): Hono {
   const app = new Hono()
   const base = opts.utaBaseUrl.replace(/\/$/, '')
+  const internalToken = opts.internalToken
 
   app.all('*', async (c) => {
     const incoming = c.req.raw
@@ -50,6 +52,7 @@ export function createTradingProxyRoutes(opts: { utaBaseUrl: string }): Hono {
     }
     const approver = await approverDescriptorFromRequest(c)
     if (approver) forwardHeaders.set(APPROVER_HEADER, JSON.stringify(approver))
+    if (internalToken) forwardHeaders.set(UTA_INTERNAL_TOKEN_HEADER, internalToken)
 
     const controller = new AbortController()
     const connectTimer = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS)

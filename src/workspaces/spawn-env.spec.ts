@@ -69,17 +69,26 @@ describe('buildSpawnEnv', () => {
       internal: process.env['OPENALICE_INTERNAL_EVENT_TOKEN'],
       ingest: process.env['OPENALICE_EVENT_INGEST_TOKEN'],
       url: process.env['OPENALICE_EVENT_INGEST_URL'],
+      utaInternal: process.env['OPENALICE_UTA_INTERNAL_TOKEN'],
+      utaUrl: process.env['OPENALICE_UTA_URL'],
+      webPort: process.env['OPENALICE_WEB_PORT'],
     }
     try {
       process.env['OPENALICE_INTERNAL_EVENT_TOKEN'] = 'internal-secret'
       process.env['OPENALICE_EVENT_INGEST_TOKEN'] = 'uta-secret'
       process.env['OPENALICE_EVENT_INGEST_URL'] = 'http://127.0.0.1:47331/api/events/ingest'
+      process.env['OPENALICE_UTA_INTERNAL_TOKEN'] = 'uta-internal-secret'
+      process.env['OPENALICE_UTA_URL'] = 'http://127.0.0.1:47333'
+      process.env['OPENALICE_WEB_PORT'] = '47331'
 
       const out = buildSpawnEnv(process.env, { KEEP: 'safe' })
 
       expect(out['OPENALICE_INTERNAL_EVENT_TOKEN']).toBeUndefined()
       expect(out['OPENALICE_EVENT_INGEST_TOKEN']).toBeUndefined()
       expect(out['OPENALICE_EVENT_INGEST_URL']).toBeUndefined()
+      expect(out['OPENALICE_UTA_INTERNAL_TOKEN']).toBeUndefined()
+      expect(out['OPENALICE_UTA_URL']).toBeUndefined()
+      expect(out['OPENALICE_WEB_PORT']).toBeUndefined()
       expect(out['KEEP']).toBe('safe')
     } finally {
       if (previous.internal === undefined) delete process.env['OPENALICE_INTERNAL_EVENT_TOKEN']
@@ -88,6 +97,12 @@ describe('buildSpawnEnv', () => {
       else process.env['OPENALICE_EVENT_INGEST_TOKEN'] = previous.ingest
       if (previous.url === undefined) delete process.env['OPENALICE_EVENT_INGEST_URL']
       else process.env['OPENALICE_EVENT_INGEST_URL'] = previous.url
+      if (previous.utaInternal === undefined) delete process.env['OPENALICE_UTA_INTERNAL_TOKEN']
+      else process.env['OPENALICE_UTA_INTERNAL_TOKEN'] = previous.utaInternal
+      if (previous.utaUrl === undefined) delete process.env['OPENALICE_UTA_URL']
+      else process.env['OPENALICE_UTA_URL'] = previous.utaUrl
+      if (previous.webPort === undefined) delete process.env['OPENALICE_WEB_PORT']
+      else process.env['OPENALICE_WEB_PORT'] = previous.webPort
     }
   })
 

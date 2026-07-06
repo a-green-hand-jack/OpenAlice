@@ -5,7 +5,7 @@ import type { UTAEngineContext } from '../types.js'
 import { BrokerError } from '../domain/trading/brokers/types.js'
 import type { UnifiedTradingAccount } from '../domain/trading/UnifiedTradingAccount.js'
 import { searchTradeableContracts } from '../domain/trading/contract-search.js'
-import type { ApproverIdentity, AssetClassHint } from '@traderalice/uta-protocol'
+import { AUTHZ_LEVELS, type ApproverIdentity, type AssetClassHint } from '@traderalice/uta-protocol'
 import { executeOneShotOrder, type OrderEntryPhase } from '../domain/trading/order-entry.js'
 import { projectOrderHistory, projectTradeHistory } from '../domain/trading/order-history.js'
 
@@ -18,6 +18,11 @@ import { projectOrderHistory, projectTradeHistory } from '../domain/trading/orde
 
 const numericString = z.string().min(1)
 const message = z.string().min(1, { message: 'Commit message is required' })
+
+const commitSchema = z.object({
+  message,
+  effectiveAuthzLevel: z.enum(AUTHZ_LEVELS).optional(),
+})
 
 const placeOrderSchema = z.object({
   aliceId: z.string().min(1),
@@ -525,23 +530,21 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
     return c.json(uta.status())
   })
 
-  // Commit — finalize the current staging area without pushing. Used by
-  // the AI's `tradingCommit` tool when it wants the user to approve a
-  // staged batch separately from the push step. Returns the prepared
-  // commit (hash + pending message); a subsequent push or reject closes
-  // the cycle.
+  // Commit — finalize the current staging area. Paper/mock commits from an
+  // authorized workspace may be auto-pushed by UTA immediately after this;
+  // otherwise a subsequent human push or reject closes the cycle.
   app.post('/uta/:id/wallet/commit', async (c) => {
     const uta = ctx.utaManager.get(c.req.param('id'))
     if (!uta) return c.json({ error: 'Account not found' }, 404)
     try {
-      const body = await c.req.json().catch(() => ({}))
-      const message = typeof body.message === 'string' ? body.message : ''
-      if (!message.trim()) {
-        return c.json({ error: 'Commit message is required' }, 400)
-      }
-      const result = uta.commit(message)
-      return c.json(result)
+      const body = commitSchema.parse(await c.req.json().catch(() => ({})))
+      const result = uta.commit(body.message)
+      const autoPush = await ctx.utaManager.maybeAutoPushPaperCommit(uta.id, {
+        effectiveAuthzLevel: body.effectiveAuthzLevel,
+      })
+      return c.json({ ...result, autoPush })
     } catch (err) {
+      if (err instanceof z.ZodError) return c.json({ error: err.message }, 400)
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })

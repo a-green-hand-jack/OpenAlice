@@ -44,7 +44,12 @@ function makeApp(opts: Parameters<typeof createAuthMiddleware>[0]) {
   app.use('*', createAuthMiddleware(opts))
   app.get('/api/trading/uta', (c) => c.json({ utas: [] }))
   app.post('/api/trading/uta/x/wallet/push', (c) => c.json({ ok: true }))
+  app.get('/api/simulator/state', (c) => c.json({ ok: true }))
+  app.get('/api/config/credentials', (c) => c.json({ ok: true }))
+  app.patch('/api/workspaces/:id/authz-level', (c) => c.json({ ok: true }))
+  app.get('/api/news', (c) => c.json({ items: [] }))
   app.post('/api/events/ingest', (c) => c.json({ ok: true }))
+  app.get('/api/auth/status', (c) => c.json({ ok: true }))
   app.get('/api/version', (c) => c.json({ ok: true }))
   app.post('/api/auth/login', (c) => c.json({ ok: true }))
   return app
@@ -133,15 +138,15 @@ describe('auth middleware — playbook 01 (auth bypass)', () => {
     expect(res.status).toBe(200)
   })
 
-  it('localhost (true loopback) bypasses without cookie → 200', async () => {
+  it('localhost (true loopback) still bypasses for non-sensitive routes without cookie → 200', async () => {
     const app = makeApp({ trustedProxies: [], csrfTrustedOrigins: [] })
-    const res = await app.request('/api/trading/uta', undefined, envWithIp('127.0.0.1'))
+    const res = await app.request('/api/news', undefined, envWithIp('127.0.0.1'))
     expect(res.status).toBe(200)
   })
 
-  it('::1 bypasses without cookie → 200', async () => {
+  it('::1 still bypasses for non-sensitive routes without cookie → 200', async () => {
     const app = makeApp({ trustedProxies: [], csrfTrustedOrigins: [] })
-    const res = await app.request('/api/trading/uta', undefined, envWithIp('::1'))
+    const res = await app.request('/api/news', undefined, envWithIp('::1'))
     expect(res.status).toBe(200)
   })
 
@@ -167,6 +172,43 @@ describe('auth middleware — playbook 01 (auth bypass)', () => {
       headers: { cookie: `${SESSION_COOKIE_NAME}=` },
     }, envWithIp('203.0.113.5'))
     expect(res.status).toBe(401)
+  })
+
+  it.each([
+    ['GET /api/trading/uta', '/api/trading/uta', undefined],
+    ['GET /api/simulator/state', '/api/simulator/state', undefined],
+    ['GET /api/config/credentials', '/api/config/credentials', undefined],
+    [
+      'PATCH /api/workspaces/abc/authz-level',
+      '/api/workspaces/abc/authz-level',
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      },
+    ],
+  ] as const)('loopback with no session stays gated for sensitive route %s → 401', async (_name, path, init) => {
+    const app = makeApp({ trustedProxies: [], csrfTrustedOrigins: [] })
+    const res = await app.request(path, init, envWithIp('127.0.0.1'))
+    expect(res.status).toBe(401)
+  })
+
+  it('loopback with a valid session can still reach a sensitive route → 200', async () => {
+    const session = await createSession()
+    const app = makeApp({ trustedProxies: [], csrfTrustedOrigins: [] })
+    const res = await app.request('/api/config/credentials', {
+      headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sid}` },
+    }, envWithIp('127.0.0.1'))
+    expect(res.status).toBe(200)
+  })
+
+  it.each([
+    '/api/auth/status',
+    '/api/version',
+  ])('public route %s remains accessible over loopback without cookie', async (path) => {
+    const app = makeApp({ trustedProxies: [], csrfTrustedOrigins: [] })
+    const res = await app.request(path, undefined, envWithIp('127.0.0.1'))
+    expect(res.status).toBe(200)
   })
 })
 

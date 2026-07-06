@@ -117,7 +117,10 @@ async function main() {
   if (!utaUrl) {
     throw new Error('OPENALICE_UTA_URL not set — Guardian must spawn the UTA service before Alice boots')
   }
-  const utaClient = createUTAClient({ baseUrl: utaUrl })
+  const utaClient = createUTAClient({
+    baseUrl: utaUrl,
+    internalToken: process.env['OPENALICE_UTA_INTERNAL_TOKEN'],
+  })
   const utaHealth = await waitForUTAReady({ baseUrl: utaUrl, timeoutMs: 15_000 })
   if (!utaHealth) {
     throw new Error(`UTA service at ${utaUrl} did not become ready within 15s`)

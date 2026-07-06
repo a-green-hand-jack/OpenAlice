@@ -107,6 +107,8 @@ export const TRADING_TOOL_MIN_AUTHZ_LEVEL: Readonly<Record<
 const REMOVED_TRADING_TOOL_SET = new Set<string>(REMOVED_TRADING_TOOL_NAMES)
 const PROPOSAL_TRADING_TOOL_SET = new Set<string>(PROPOSAL_TRADING_TOOL_NAMES)
 
+export const OPENALICE_EFFECTIVE_AUTHZ_BY_ACCOUNT_ARG = '__openaliceEffectiveAuthzByAccount'
+
 function hasTradingAuthzRule(name: string): name is keyof typeof TRADING_TOOL_MIN_AUTHZ_LEVEL {
   return Object.prototype.hasOwnProperty.call(TRADING_TOOL_MIN_AUTHZ_LEVEL, name)
 }
@@ -194,13 +196,27 @@ export function checkTradingProposalAuthz(
     readonly accounts: readonly AccountAuthzSnapshot[]
   },
 ): { ok: true } | { ok: false; message: string } {
-  if (!PROPOSAL_TRADING_TOOL_SET.has(name)) return { ok: true }
+  const resolved = resolveTradingProposalAuthz(name, args, opts)
+  return resolved.ok ? { ok: true } : { ok: false, message: resolved.message }
+}
+
+function resolveTradingProposalAuthz(
+  name: string,
+  args: unknown,
+  opts: {
+    readonly workspaceAuthzLevel: AuthzLevel
+    readonly accounts: readonly AccountAuthzSnapshot[]
+  },
+): { ok: true; effectiveByAccount: Record<string, AuthzLevel> } | { ok: false; message: string } {
+  if (!PROPOSAL_TRADING_TOOL_SET.has(name)) return { ok: true, effectiveByAccount: {} }
   const targets = resolveProposalTargetAccounts(name, args, opts.accounts)
+  const effectiveByAccount: Record<string, AuthzLevel> = {}
   for (const account of targets) {
     const effective = resolveEffectiveAuthzLevel({
       workspaceAuthzLevel: opts.workspaceAuthzLevel,
       accountMaxAuthzLevel: account.maxAuthzLevel,
     })
+    effectiveByAccount[account.id] = effective
     if (AUTHZ_LEVEL_RANK[effective] < AUTHZ_LEVEL_RANK.paper) {
       return {
         ok: false,
@@ -218,7 +234,7 @@ export function checkTradingProposalAuthz(
       }
     }
   }
-  return { ok: true }
+  return { ok: true, effectiveByAccount }
 }
 
 export function wrapTradingProposalToolsWithAuthz(
@@ -236,13 +252,24 @@ export function wrapTradingProposalToolsWithAuthz(
     out[name] = {
       ...tool,
       execute: async (args: unknown, options: unknown) => {
-        const gate = checkTradingProposalAuthz(name, args, opts)
+        const gate = resolveTradingProposalAuthz(name, args, opts)
         if (!gate.ok) return { error: gate.message, code: 'AUTHZ_DENIED' }
-        return await execute(args, options)
+        return await execute(withEffectiveAuthzByAccount(args, gate.effectiveByAccount), options)
       },
     } as Tool
   }
   return out
+}
+
+function withEffectiveAuthzByAccount(
+  args: unknown,
+  effectiveByAccount: Record<string, AuthzLevel>,
+): unknown {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return args
+  return {
+    ...(args as Record<string, unknown>),
+    [OPENALICE_EFFECTIVE_AUTHZ_BY_ACCOUNT_ARG]: effectiveByAccount,
+  }
 }
 
 function resolveProposalTargetAccounts(

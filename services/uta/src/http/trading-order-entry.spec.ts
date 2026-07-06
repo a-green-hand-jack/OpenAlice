@@ -48,6 +48,7 @@ function makeMockUTA(opts: { stageThrows?: 'stage' | 'commit' | 'push' | null; p
         calls.push({ method: 'commit', args: [msg] })
         if (opts.stageThrows === 'commit') throw new Error('Guard rejected')
         pendingMessage = msg
+        return { prepared: true, hash: 'commit123', message: msg, operationCount: 1 }
       }),
       push: vi.fn(async () => {
         calls.push({ method: 'push', args: [] })
@@ -69,7 +70,10 @@ function makeMockUTA(opts: { stageThrows?: 'stage' | 'commit' | 'push' | null; p
   }
 }
 
-function makeRoutes(uta: unknown) {
+function makeRoutes(
+  uta: unknown,
+  maybeAutoPushPaperCommit = vi.fn(async () => ({ status: 'skipped', reason: 'not_configured' })),
+) {
   // Minimal UTAEngineContext — only `utaManager.get` is exercised.
   const ctx = {
     utaManager: {
@@ -77,6 +81,7 @@ function makeRoutes(uta: unknown) {
       resolve: () => [],
       listUTAs: () => [],
       getAggregatedEquity: vi.fn(),
+      maybeAutoPushPaperCommit,
     },
     snapshotService: undefined,
   } as unknown as UTAEngineContext
@@ -130,6 +135,26 @@ describe('POST /uta/:id/wallet/push', () => {
 
     expect(mock.uta.push).not.toHaveBeenCalled()
     expect(mock.calls.map(c => c.method)).toEqual(['commit', 'reject', 'stageCancelOrder'])
+  })
+
+  it('asks UTA-side paper auto-push to consider committed wallet entries with the forwarded authz level', async () => {
+    const mock = makeMockUTA({ pendingMessage: null })
+    const maybeAutoPushPaperCommit = vi.fn(async () => ({ status: 'skipped', reason: 'authz_below_paper' }))
+    const routes = makeRoutes(mock.uta, maybeAutoPushPaperCommit)
+
+    const { status, body } = await post(routes, '/uta/mock-uta/wallet/commit', {
+      message: 'paper proposal',
+      effectiveAuthzLevel: 'paper',
+    })
+
+    expect(status).toBe(200)
+    expect((body as { autoPush: unknown }).autoPush).toEqual({
+      status: 'skipped',
+      reason: 'authz_below_paper',
+    })
+    expect(maybeAutoPushPaperCommit).toHaveBeenCalledWith('mock-uta', {
+      effectiveAuthzLevel: 'paper',
+    })
   })
 })
 
