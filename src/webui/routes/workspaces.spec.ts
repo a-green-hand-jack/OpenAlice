@@ -3,7 +3,7 @@
  * agent-resolution / dispatch branches against a stubbed WorkspaceService
  * (no real spawn). Modeled on trading-config.spec's harness.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +11,13 @@ import { join } from 'node:path';
 import { createWorkspaceRoutes } from './workspaces.js';
 import { HeadlessCapacityError, type WorkspaceService } from '../../workspaces/service.js';
 import { readWorkspaceMetadata } from '../../workspaces/workspace-metadata.js';
+import { createSession, _reset, revokeAllSessions } from '@/services/auth/session-store.js';
+import { adminSessionFingerprint } from './approver-identity.js';
+import {
+  buildWorkspaceToolCatalog,
+  resolveWorkspaceToolAuthzLevel,
+} from '../../core/workspace-tool-center.js';
+import type { ProducerHandle } from '../../core/producer.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -25,8 +32,24 @@ const HEADLESS_RESULT = {
   stderrTail: '',
 };
 
+let sessionTmpDir: string | null = null
+
+beforeEach(async () => {
+  sessionTmpDir = await mkdtemp(join(tmpdir(), 'oa-workspace-route-sessions-'))
+  process.env['OPENALICE_SESSIONS_FILE'] = join(sessionTmpDir, 'sessions.json')
+  await _reset()
+  await revokeAllSessions()
+})
+
+afterEach(async () => {
+  await _reset()
+  delete process.env['OPENALICE_SESSIONS_FILE']
+  if (sessionTmpDir) await rm(sessionTmpDir, { recursive: true, force: true })
+  sessionTmpDir = null
+})
+
 function build(
-  opts: { meta?: any; adapters?: Record<string, any>; resolveTo?: any; dispatch?: any } = {},
+  opts: { meta?: any; adapters?: Record<string, any>; resolveTo?: any; dispatch?: any; authzProducer?: ProducerHandle<readonly ['authz.level-changed']> } = {},
 ) {
   const claude = {
     id: 'claude',
@@ -38,8 +61,17 @@ function build(
   const adapters = opts.adapters ?? { claude };
   const runHeadlessTask = vi.fn(async () => HEADLESS_RESULT);
   const dispatchHeadlessTask = opts.dispatch ?? vi.fn(async () => ({ taskId: 'task-1' }));
+  let liveMeta = meta;
   const svc = {
-    registry: { get: (id: string) => (id === 'ws-1' ? meta : undefined) },
+    registry: {
+      get: (id: string) => (id === 'ws-1' ? liveMeta : undefined),
+      setAuthzLevel: vi.fn(async (id: string, authzLevel: any) => {
+        if (id !== 'ws-1') return undefined
+        const from = liveMeta.authzLevel ?? 'read_only'
+        liveMeta = { ...liveMeta, authzLevel }
+        return { workspace: liveMeta, from, to: authzLevel, changed: from !== authzLevel }
+      }),
+    },
     adapters: { get: (a: string) => adapters[a] },
     resolveAdapter: (_m: any, a?: string) => opts.resolveTo ?? adapters[a ?? 'claude'] ?? claude,
     config: { launcherRepoRoot: '/repo' },
@@ -50,7 +82,7 @@ function build(
       return { ...m, ...(res.ok ? res.metadata : {}) };
     }),
   } as unknown as WorkspaceService;
-  return { app: createWorkspaceRoutes(svc), runHeadlessTask, dispatchHeadlessTask };
+  return { app: createWorkspaceRoutes(svc, { authzProducer: opts.authzProducer }), runHeadlessTask, dispatchHeadlessTask, svc };
 }
 
 async function post(app: any, path: string, body?: unknown) {
@@ -63,10 +95,10 @@ async function post(app: any, path: string, body?: unknown) {
   return { status: res.status, body: json as any };
 }
 
-async function patch(app: any, path: string, body?: unknown) {
+async function patch(app: any, path: string, body?: unknown, headers?: Record<string, string>) {
   const res = await app.request(path, {
     method: 'PATCH',
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    headers: body !== undefined ? { 'Content-Type': 'application/json', ...(headers ?? {}) } : headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const json = await res.json().catch(() => null);
@@ -110,6 +142,81 @@ describe('PATCH /:id/metadata', () => {
     }
   });
 });
+
+describe('PATCH /:id/authz-level', () => {
+  it('persists the launcher-owned level, emits authz.level-changed with approver fingerprint, and updates the effective catalog', async () => {
+    const session = await createSession()
+    const events: Array<{ type: string; payload: any }> = []
+    const authzProducer = {
+      name: 'authz-routes',
+      emits: ['authz.level-changed'],
+      emit: vi.fn(async (type: string, payload: any) => { events.push({ type, payload }) }),
+      dispose: vi.fn(),
+    } as unknown as ProducerHandle<readonly ['authz.level-changed']>
+    const { app, svc } = build({
+      meta: { id: 'ws-1', tag: 'stable-tag', dir: '/w', agents: ['claude'], authzLevel: 'read_only' },
+      authzProducer,
+    })
+
+    const r = await patch(
+      app,
+      '/ws-1/authz-level',
+      { authzLevel: 'paper' },
+      { Cookie: `alice_session=${encodeURIComponent(session.sid)}` },
+    )
+
+    expect(r.status).toBe(200)
+    expect(r.body.workspace).toMatchObject({ id: 'ws-1', authzLevel: 'paper' })
+    expect(svc.registry.get('ws-1')?.authzLevel).toBe('paper')
+    expect(events).toEqual([{
+      type: 'authz.level-changed',
+      payload: {
+        scope: 'workspace',
+        id: 'ws-1',
+        from: 'read_only',
+        to: 'paper',
+        approver: {
+          via: 'alice-bff',
+          fingerprint: adminSessionFingerprint(session.sid),
+          at: expect.any(String),
+        },
+      },
+    }])
+
+    const effective = resolveWorkspaceToolAuthzLevel({
+      workspaceAuthzLevel: svc.registry.get('ws-1')?.authzLevel,
+      accountMaxAuthzLevels: ['paper'],
+    })
+    const catalog = buildWorkspaceToolCatalog(
+      {
+        placeOrder: { description: 'place' } as any,
+        getAccount: { description: 'account' } as any,
+      },
+      {},
+      { authzLevel: effective, groupForTool: () => 'trading' },
+    )
+    expect(Object.keys(catalog).sort()).toEqual(['getAccount', 'placeOrder'])
+  })
+
+  it('rejects invalid levels before writing or emitting', async () => {
+    const authzProducer = {
+      name: 'authz-routes',
+      emits: ['authz.level-changed'],
+      emit: vi.fn(),
+      dispose: vi.fn(),
+    } as unknown as ProducerHandle<readonly ['authz.level-changed']>
+    const { app, svc } = build({
+      meta: { id: 'ws-1', tag: 'stable-tag', dir: '/w', agents: ['claude'], authzLevel: 'read_only' },
+      authzProducer,
+    })
+
+    const r = await patch(app, '/ws-1/authz-level', { authzLevel: 'root' })
+
+    expect(r.status).toBe(400)
+    expect(svc.registry.get('ws-1')?.authzLevel).toBe('read_only')
+    expect(authzProducer.emit).not.toHaveBeenCalled()
+  })
+})
 
 describe('POST /:id/headless', () => {
   it('404 on a malformed workspace id', async () => {

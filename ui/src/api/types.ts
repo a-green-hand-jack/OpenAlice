@@ -162,7 +162,7 @@ export interface AIProviderConfig {
 export interface AppConfig {
   aiProvider: AIProviderConfig
   engine: Record<string, unknown>
-  agent: { allowAiTrading: boolean; claudeCode: Record<string, unknown> }
+  agent: { claudeCode: Record<string, unknown> }
   compaction: { maxContextTokens: number; maxOutputTokens: number }
   snapshot: {
     enabled: boolean
@@ -302,6 +302,8 @@ export interface UTASummary {
   label: string
   capabilities: { supportedSecTypes: string[]; supportedOrderTypes: string[] }
   health: BrokerHealthInfo
+  maxAuthzLevel?: AuthzLevel
+  authzAccountType: AuthzAccountType
 }
 
 export interface TradingAccount {
@@ -507,6 +509,7 @@ export interface ToolCallRecord {
 // ==================== Trading Config ====================
 
 export type AuthzLevel = 'read_only' | 'paper' | 'small_live' | 'limited_autonomy'
+export type AuthzAccountType = 'mock' | 'paper' | 'live' | 'unknown'
 
 /**
  * One Unified Trading Account configuration record. The user-facing

@@ -217,10 +217,6 @@ export type AIProviderConfig = z.infer<typeof aiProviderSchema>
 
 const agentSchema = z.object({
   maxSteps: z.number().int().positive().default(20),
-  /** Legacy master switch for the removed AI push tool. Kept for config
-   *  compatibility until the P3 authz-change UI replaces it; P3-1 no longer
-   *  exposes `tradingPush` to agents at any authorization level. */
-  allowAiTrading: z.boolean().default(false),
   claudeCode: z.object({
     allowedTools: z.array(z.string()).optional(),
     disallowedTools: z.array(z.string()).default([

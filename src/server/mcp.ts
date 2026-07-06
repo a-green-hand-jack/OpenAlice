@@ -7,10 +7,12 @@ import type { Plugin, EngineContext } from '../core/types.js'
 import type { ToolCenter } from '../core/tool-center.js'
 import {
   buildWorkspaceToolCatalog,
+  accountAuthzSnapshotFromConfig,
   filterWorkspaceToolCatalog,
   type WorkspaceToolCenter,
   makeWorkspaceResolver,
   resolveWorkspaceToolAuthzLevel,
+  wrapTradingProposalToolsWithAuthz,
 } from '../core/workspace-tool-center.js'
 import type { IInboxStore } from '../core/inbox-store.js'
 import type { IEntityStore } from '../core/entity-store.js'
@@ -105,6 +107,7 @@ export class McpPlugin implements Plugin {
       const svc = getWorkspaceService()
       const meta = svc?.registry.get(wsId)
       const utas = await readUTAsConfig().catch(() => [])
+      const accounts = utas.map(accountAuthzSnapshotFromConfig)
       const authzLevel = resolveWorkspaceToolAuthzLevel({
         workspaceAuthzLevel: meta?.authzLevel,
         accountMaxAuthzLevels: utas.map((u) => u.maxAuthzLevel),
@@ -130,7 +133,11 @@ export class McpPlugin implements Plugin {
         // server-side from the authoritative registry). Absent → undefined.
         ...(origin ? { origin } : {}),
       })
-      const tools = buildWorkspaceToolCatalog(await toolCenter.getMcpTools(), scopedTools, {
+      const globalTools = wrapTradingProposalToolsWithAuthz(await toolCenter.getMcpTools(), {
+        workspaceAuthzLevel: authzLevel,
+        accounts,
+      })
+      const tools = buildWorkspaceToolCatalog(globalTools, scopedTools, {
         authzLevel,
         groupForTool: (name) => toolCenter.getGroup(name),
       })

@@ -8,12 +8,15 @@
 
 import type { AccountCapabilities, BrokerHealth, BrokerHealthInfo } from './broker.js'
 import type { ContractDescription } from '@traderalice/ibkr'
+import type { AuthzAccountType, AuthzLevel } from './authz.js'
 
 export interface UTASummary {
   id: string
   label: string
   capabilities: AccountCapabilities
   health: BrokerHealthInfo
+  maxAuthzLevel?: AuthzLevel
+  authzAccountType: AuthzAccountType
 }
 
 export interface AggregatedEquity {

@@ -75,7 +75,7 @@ The registry enforces this at declare time.
 | Flow visualization | [ui/src/pages/AutomationFlowSection.tsx](../ui/src/pages/AutomationFlowSection.tsx) |
 | Webhook docs UI | [ui/src/pages/AutomationWebhookSection.tsx](../ui/src/pages/AutomationWebhookSection.tsx) |
 
-## Event catalog: UTA trade / risk lifecycle
+## Event catalog: UTA trade / risk and authz lifecycle
 
 UTA is a separate process, so trade/risk events cross back into Alice through
 `POST /api/events/ingest` rather than writing Alice's `EventLog` directly. The
@@ -99,6 +99,7 @@ webhook tokens cannot forge broker audit history.
 | `risk.state-changed` | UTA risk-state store transition hook | `accountId`, `from`, `to`, `by`, `reason`, `at`, optional `triggerIdentity`, `metrics` |
 | `risk.emergency-stop` | UTA emergency stop | `accountId`, `hash`, `reason`, `cancelOrders`, optional `triggerIdentity`, `outcomes[]` |
 | `risk.flatten` | UTA flatten | `accountId`, `hash`, optional `triggerIdentity`, `outcomes[]` |
+| `authz.level-changed` | Alice human-only authz routes | `scope: "workspace" \| "account"`, `id`, `from`, `to`, `approver` |
 
 For `trade.pushed` and `trade.rejected`, `guards` is always present. An empty
 array means no operation guard verdicts were produced; the `guardSummary` and
@@ -106,6 +107,12 @@ array means no operation guard verdicts were produced; the `guardSummary` and
 When reconstructing a trade lifecycle from `events.jsonl`, correlate by
 `payload.id` / `payload.commitHash` / `payload.orderId` and sort by `ts`; see
 issue #38 for why `seq` is not a cross-process ordering key.
+
+`authz.level-changed` is Alice-local (no UTA HTTP hop): workspace changes come
+from `/api/workspaces/:id/authz-level`; account ceiling changes come from the
+human Settings account-config write path (`/api/trading/config/uta/:id`).
+Both carry the admin-session-derived approver fingerprint when available, or
+`via: "loopback"` for the localhost bypass case.
 
 ## Recipe: add a new event type
 

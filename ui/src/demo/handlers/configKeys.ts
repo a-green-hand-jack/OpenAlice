@@ -12,7 +12,7 @@ export const configKeysHandlers = [
     HttpResponse.json({
       aiProvider: { apiKeys: {}, profiles: {}, activeProfile: '' },
       engine: {},
-      agent: { allowAiTrading: false, claudeCode: {} },
+      agent: { claudeCode: {} },
       compaction: { maxContextTokens: 0, maxOutputTokens: 0 },
       snapshot: { enabled: false, every: '1h' },
       trading: { observeExternalOrdersEvery: '15m' },

@@ -28,10 +28,12 @@ import { z } from 'zod'
 import type { Tool } from 'ai'
 import type { ToolCenter } from '../core/tool-center.js'
 import {
+  accountAuthzSnapshotFromConfig,
   filterWorkspaceToolCatalog,
   type WorkspaceToolCenter,
   makeWorkspaceResolver,
   resolveWorkspaceToolAuthzLevel,
+  wrapTradingProposalToolsWithAuthz,
 } from '../core/workspace-tool-center.js'
 import type { IInboxStore, InboxOrigin } from '../core/inbox-store.js'
 import type { IEntityStore } from '../core/entity-store.js'
@@ -124,12 +126,17 @@ export function registerCliRoutes(app: Hono, deps: CliGatewayDeps): void {
       }
     }
     const authzLevel = await resolveToolAuthzLevel(ws)
+    const utas = await readUTAsConfig().catch(() => [])
     const entries = Object.fromEntries(
       toolCenter.getInventory()
         .map((t) => [t.name, toolCenter.get(t.name)] as const)
         .filter((entry): entry is readonly [string, Tool] => entry[1] !== null),
     )
-    const filtered = filterWorkspaceToolCatalog(entries, {
+    const gated = wrapTradingProposalToolsWithAuthz(entries, {
+      workspaceAuthzLevel: authzLevel,
+      accounts: utas.map(accountAuthzSnapshotFromConfig),
+    })
+    const filtered = filterWorkspaceToolCatalog(gated, {
       authzLevel,
       groupForTool: (name) => toolCenter.getGroup(name),
     })

@@ -6,7 +6,10 @@
  * wiring) is exercised for real.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 // Mock readUTAsConfig / writeUTAsConfig with in-memory store BEFORE importing the route.
 let utaStore: unknown[] = []
@@ -22,10 +25,13 @@ vi.mock('../../core/config.js', async () => {
 import { createTradingConfigRoutes } from './trading-config.js'
 import type { EngineContext } from '../../core/types.js'
 import { deriveUtaId, OKX_PRESET, SIMULATOR_PRESET } from '@traderalice/uta-protocol'
+import type { ProducerHandle } from '../../core/producer.js'
+import { createSession, _reset, revokeAllSessions } from '@/services/auth/session-store.js'
+import { adminSessionFingerprint } from './approver-identity.js'
 
 // ==================== Test fixtures ====================
 
-function makeRoutes() {
+function makeRoutes(authzProducer?: ProducerHandle<readonly ['authz.level-changed']>) {
   const ctx = {
     utaManager: {
       get: vi.fn(),
@@ -35,21 +41,44 @@ function makeRoutes() {
       removeUTA: vi.fn(async () => {}),
     },
   } as unknown as EngineContext
-  return createTradingConfigRoutes(ctx)
+  return createTradingConfigRoutes(ctx, { authzProducer })
 }
 
-async function req(routes: ReturnType<typeof createTradingConfigRoutes>, method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown) {
+async function req(
+  routes: ReturnType<typeof createTradingConfigRoutes>,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+) {
   const init: RequestInit = { method }
   if (body !== undefined) {
-    init.headers = { 'Content-Type': 'application/json' }
+    init.headers = { 'Content-Type': 'application/json', ...(headers ?? {}) }
     init.body = JSON.stringify(body)
+  } else if (headers) {
+    init.headers = headers
   }
   const res = await routes.request(path, init)
   const json = res.status === 204 ? null : await res.json().catch(() => null)
   return { status: res.status, body: json }
 }
 
-beforeEach(() => { utaStore = [] })
+let sessionTmpDir: string | null = null
+
+beforeEach(async () => {
+  utaStore = []
+  sessionTmpDir = await mkdtemp(join(tmpdir(), 'oa-trading-config-sessions-'))
+  process.env['OPENALICE_SESSIONS_FILE'] = join(sessionTmpDir, 'sessions.json')
+  await _reset()
+  await revokeAllSessions()
+})
+
+afterEach(async () => {
+  await _reset()
+  delete process.env['OPENALICE_SESSIONS_FILE']
+  if (sessionTmpDir) await rm(sessionTmpDir, { recursive: true, force: true })
+  sessionTmpDir = null
+})
 
 // ==================== POST /uta ====================
 
@@ -234,6 +263,57 @@ describe('PUT /uta/:id — edit-only', () => {
     // Rotation actually landed in the store, unmasked.
     const stored = (utaStore[0] as { presetConfig: Record<string, string> }).presetConfig
     expect(stored.apiKey).toBe('new-key-9999')
+  })
+
+  it('emits authz.level-changed with approver fingerprint when maxAuthzLevel changes', async () => {
+    const session = await createSession()
+    const events: Array<{ type: string; payload: any }> = []
+    const authzProducer = {
+      name: 'authz-routes',
+      emits: ['authz.level-changed'],
+      emit: vi.fn(async (type: string, payload: any) => { events.push({ type, payload }) }),
+      dispose: vi.fn(),
+    } as unknown as ProducerHandle<readonly ['authz.level-changed']>
+    const routes = makeRoutes(authzProducer)
+    const created = await req(routes, 'POST', '/uta', {
+      presetId: 'mock-simulator',
+      label: 'paper sim',
+      presetConfig: { cash: 1000 },
+    })
+    const account = created.body as { id: string; presetConfig: Record<string, unknown> }
+
+    const edited = await req(
+      routes,
+      'PUT',
+      `/uta/${account.id}`,
+      {
+        id: account.id,
+        presetId: 'mock-simulator',
+        label: 'paper sim',
+        enabled: true,
+        guards: [],
+        presetConfig: account.presetConfig,
+        maxAuthzLevel: 'paper',
+      },
+      { Cookie: `alice_session=${encodeURIComponent(session.sid)}` },
+    )
+
+    expect(edited.status).toBe(200)
+    expect((utaStore[0] as { maxAuthzLevel?: string }).maxAuthzLevel).toBe('paper')
+    expect(events).toEqual([{
+      type: 'authz.level-changed',
+      payload: {
+        scope: 'account',
+        id: account.id,
+        from: 'read_only',
+        to: 'paper',
+        approver: {
+          via: 'alice-bff',
+          fingerprint: adminSessionFingerprint(session.sid),
+          at: expect.any(String),
+        },
+      },
+    }])
   })
 })
 

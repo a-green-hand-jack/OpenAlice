@@ -59,7 +59,8 @@ state, or ownership.
   checkout. `src/core/paths.ts:4-18` explains the split between user data and
   app resources.
 
-- Config files live under `data/config/`; migrations journal to
+- Config files live under `data/config/`; account config includes the
+  per-account `maxAuthzLevel` ceiling. Migrations journal to
   `data/config/_meta.json` through the runner documented at
   `src/migrations/INDEX.md:6`.
 
@@ -67,9 +68,9 @@ state, or ownership.
   `services/uta/src/domain/trading/git-persistence.ts:14-16`.
 
 - Workspace launcher state is sibling user state under the launcher root:
-  registry (including launcher-owned workspace `authzLevel`), session records,
-  scrollback, headless tasks, and workspace repos. The default root is
-  `src/workspaces/config.ts:107-109`.
+  registry (including launcher-owned workspace `authzLevel` changed through
+  Alice's audited workspace route), session records, scrollback, headless tasks,
+  and workspace repos. The default root is `src/workspaces/config.ts:107-109`.
 
 - Secrets are not stored in plaintext data files after sealing. The machine key
   is outside portable `data/`, at `src/core/sealing.ts:49-50`.

@@ -6,8 +6,10 @@ import {
   READ_ONLY_TRADING_TOOL_NAMES,
   REMOVED_TRADING_TOOL_NAMES,
   buildWorkspaceToolCatalog,
+  checkTradingProposalAuthz,
   makeWorkspaceResolver,
   resolveWorkspaceToolAuthzLevel,
+  wrapTradingProposalToolsWithAuthz,
 } from './workspace-tool-center.js'
 import type { AuthzLevel } from '@traderalice/uta-protocol'
 
@@ -108,6 +110,49 @@ describe('workspace tool surface authz filtering', () => {
       ].sort())
     },
   )
+})
+
+describe('trading proposal per-account authz binding', () => {
+  const accounts = [
+    { id: 'mock-read', maxAuthzLevel: 'read_only' as const, authzAccountType: 'mock' as const },
+    { id: 'mock-paper', maxAuthzLevel: 'paper' as const, authzAccountType: 'mock' as const },
+    { id: 'alpaca-live', maxAuthzLevel: 'small_live' as const, authzAccountType: 'live' as const },
+  ]
+
+  it('refuses a paper workspace staging against a live account with a distinct account-type error', () => {
+    const gate = checkTradingProposalAuthz('placeOrder', { aliceId: 'alpaca-live|AAPL' }, {
+      workspaceAuthzLevel: 'paper',
+      accounts,
+    })
+    expect(gate.ok).toBe(false)
+    expect(gate.ok ? '' : gate.message).toMatch(/paper-level access only applies to paper\/mock accounts/)
+  })
+
+  it('refuses a paper workspace staging against a read_only-ceiling mock account', () => {
+    const gate = checkTradingProposalAuthz('placeOrder', { aliceId: 'mock-read|AAPL' }, {
+      workspaceAuthzLevel: 'paper',
+      accounts,
+    })
+    expect(gate.ok).toBe(false)
+    expect(gate.ok ? '' : gate.message).toMatch(/effective authzLevel is read_only/)
+  })
+
+  it('allows a paper workspace staging against a paper-ceiling mock account', async () => {
+    const wrapped = wrapTradingProposalToolsWithAuthz({
+      placeOrder: {
+        description: 'place',
+        execute: async () => ({ ok: true }),
+      } as unknown as Tool,
+    }, {
+      workspaceAuthzLevel: 'paper',
+      accounts,
+    })
+    const result = await (wrapped.placeOrder.execute as (args: unknown, opts: unknown) => Promise<unknown>)(
+      { aliceId: 'mock-paper|AAPL' },
+      {},
+    )
+    expect(result).toEqual({ ok: true })
+  })
 })
 
 describe('makeWorkspaceResolver', () => {
