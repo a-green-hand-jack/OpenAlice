@@ -127,6 +127,42 @@ describe('POST /uta/:id/mark-price', () => {
   })
 })
 
+describe('POST /uta/:id/inject-bars', () => {
+  it('stores injected bars and getHistorical replays them through the simulated cursor', async () => {
+    const mock = new MockBroker({ id: 'sim' })
+    const routes = createSimulatorRoutes(makeCtx({ sim: mock }))
+
+    const { status } = await req(routes, 'POST', '/uta/sim/inject-bars', {
+      nativeKey: 'AAPL',
+      interval: '1d',
+      bars: [
+        { t: '2026-01-01T00:00:00.000Z', o: 100, h: 101, l: 99, c: 100, v: 10 },
+        { t: '2026-01-02T00:00:00.000Z', o: 101, h: 102, l: 100, c: 101, v: 11 },
+        { t: '2026-01-03T00:00:00.000Z', o: 102, h: 103, l: 101, c: 102, v: 12 },
+      ],
+    })
+    expect(status).toBe(200)
+
+    await req(routes, 'POST', '/uta/sim/mark-price', { nativeKey: 'AAPL', price: '102' })
+    const bars = await mock.getHistorical(mock.resolveNativeKey('AAPL'), { interval: '1d' })
+
+    expect(bars.map((bar) => bar.close)).toEqual(['100', '101', '102'])
+  })
+
+  it('rejects malformed injected bars with 400', async () => {
+    const mock = new MockBroker({ id: 'sim' })
+    const routes = createSimulatorRoutes(makeCtx({ sim: mock }))
+
+    const { status } = await req(routes, 'POST', '/uta/sim/inject-bars', {
+      nativeKey: 'AAPL',
+      interval: 'bogus',
+      bars: [],
+    })
+
+    expect(status).toBe(400)
+  })
+})
+
 describe('POST /uta/:id/external-deposit', () => {
   it('adds a wallet-source position bypassing the order pipeline', async () => {
     const mock = new MockBroker({ id: 'sim' })

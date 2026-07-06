@@ -356,6 +356,53 @@ describe('getHistorical', () => {
     expect(Number(bars[bars.length - 1].close)).toBeCloseTo(200 + 4 * 0.1) // newest drifted up
     expect(acc.callCount('getHistorical')).toBe(1)
   })
+
+  it('replays injected bars only through the current simulated period (strict no-lookahead)', async () => {
+    const acc = new MockBroker({ id: 'mock-paper', cash: 100_000 })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
+    acc.injectBars({
+      nativeKey: 'AAPL',
+      interval: '1d',
+      bars: [
+        { t: '2026-01-01T00:00:00.000Z', o: 100, h: 101, l: 99, c: 100, v: 10 },
+        { t: '2026-01-02T00:00:00.000Z', o: 101, h: 102, l: 100, c: 101, v: 11 },
+        { t: '2026-01-03T00:00:00.000Z', o: 102, h: 103, l: 101, c: 102, v: 12 },
+        { t: '2026-01-04T00:00:00.000Z', o: 103, h: 104, l: 102, c: 103, v: 13 },
+      ],
+    })
+
+    acc.setMarkPrice('AAPL', 102)
+
+    const bars = await acc.getHistorical(contract, { interval: '1d' })
+
+    expect(bars.map((bar) => bar.close)).toEqual(['100', '101', '102'])
+    expect(bars.map((bar) => bar.timestamp.toISOString())).toEqual([
+      '2026-01-01T00:00:00.000Z',
+      '2026-01-02T00:00:00.000Z',
+      '2026-01-03T00:00:00.000Z',
+    ])
+  })
+
+  it('honors limit when replaying injected bars', async () => {
+    const acc = new MockBroker({ id: 'mock-paper', cash: 100_000 })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
+    acc.injectBars({
+      nativeKey: 'AAPL',
+      interval: '1d',
+      bars: [
+        { t: '2026-01-01T00:00:00.000Z', o: 100, h: 101, l: 99, c: 100, v: 10 },
+        { t: '2026-01-02T00:00:00.000Z', o: 101, h: 102, l: 100, c: 101, v: 11 },
+        { t: '2026-01-03T00:00:00.000Z', o: 102, h: 103, l: 101, c: 102, v: 12 },
+        { t: '2026-01-04T00:00:00.000Z', o: 103, h: 104, l: 102, c: 103, v: 13 },
+      ],
+    })
+
+    acc.setMarkPrice('AAPL', 103)
+
+    const bars = await acc.getHistorical(contract, { interval: '1d', limit: 2 })
+
+    expect(bars.map((bar) => bar.close)).toEqual(['102', '103'])
+  })
 })
 
 describe('searchContracts', () => {
