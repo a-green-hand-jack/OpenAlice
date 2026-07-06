@@ -517,6 +517,13 @@ describe('getHistorical', () => {
 
     expect(bars.map((bar) => bar.close)).toEqual(['102', '103'])
   })
+
+  it('parses a pure-digit epoch-ms string timestamp and rejects garbage', () => {
+    const acc = new MockBroker({ id: 'mock-paper', cash: 100_000 })
+    // asOf / injected timestamps may arrive as a pure-digit epoch-ms string.
+    expect(acc.parseSimulatorTimestamp(String(histTs(0)))).toBe(histTs(0))
+    expect(() => acc.parseSimulatorTimestamp('not-a-timestamp')).toThrow(/invalid simulator timestamp/)
+  })
 })
 
 describe('searchContracts', () => {

@@ -931,9 +931,12 @@ export class MockBroker implements IBroker {
   }
 
   private _parseInjectedBarTime(value: number | string): number {
-    const timestampMs = typeof value === 'number' ? value : Date.parse(value)
+    // Accept epoch-ms as a number OR a pure-digit string; otherwise parse as a
+    // date string. (Used for both injectBars timestamps and mark-price asOf.)
+    const timestampMs =
+      typeof value === 'number' ? value : /^\d+$/.test(value.trim()) ? Number(value) : Date.parse(value)
     if (!Number.isFinite(timestampMs)) {
-      throw new Error(`MockBroker[${this.id}]: injectBars — invalid timestamp ${String(value)}`)
+      throw new Error(`MockBroker[${this.id}]: invalid simulator timestamp ${String(value)}`)
     }
     return timestampMs
   }
