@@ -13,11 +13,15 @@
 export interface UTAClientOptions {
   /** UTA service base URL, e.g. `http://127.0.0.1:47333`. */
   baseUrl: string
+  /** Guardian-minted token for Alice -> UTA loopback calls. */
+  internalToken?: string
   /** Optional fetch override (for testing). Defaults to global fetch. */
   fetch?: typeof globalThis.fetch
   /** Request timeout in ms. Default 15s. */
   timeoutMs?: number
 }
+
+export const UTA_INTERNAL_TOKEN_HEADER = 'x-openalice-internal-token'
 
 export interface UTAClient {
   readonly baseUrl: string
@@ -49,6 +53,7 @@ export function createUTAClient(options: UTAClientOptions): UTAClient {
   const baseUrl = options.baseUrl.replace(/\/$/, '')
   const fetchImpl = options.fetch ?? globalThis.fetch
   const timeoutMs = options.timeoutMs ?? 15_000
+  const internalToken = options.internalToken
 
   function buildUrl(path: string, params?: Record<string, string | number | undefined>): string {
     const url = new URL(`${baseUrl}${path.startsWith('/') ? path : `/${path}`}`)
@@ -67,7 +72,10 @@ export function createUTAClient(options: UTAClientOptions): UTAClient {
     const signal = opts.signal ?? controller.signal
     const init: RequestInit = {
       method,
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        ...(internalToken ? { [UTA_INTERNAL_TOKEN_HEADER]: internalToken } : {}),
+      },
       signal,
     }
     if (opts.body !== undefined) init.body = JSON.stringify(opts.body)

@@ -11,6 +11,7 @@ import {
   deriveUtaId,
   getBrokerPreset,
   mintInstanceId,
+  UTA_INTERNAL_TOKEN_HEADER,
 } from '@traderalice/uta-protocol'
 import { triggerUTARestart } from '../../services/uta-supervisor/restart-trigger.js'
 import { approverFromAliceRequest } from './approver-identity.js'
@@ -272,9 +273,12 @@ export function createTradingConfigRoutes(
     }
     try {
       const body = await c.req.json()
+      const headers: Record<string, string> = { 'content-type': 'application/json' }
+      const internalToken = process.env['OPENALICE_UTA_INTERNAL_TOKEN']
+      if (internalToken) headers[UTA_INTERNAL_TOKEN_HEADER] = internalToken
       const res = await fetch(`${utaUrl.replace(/\/$/, '')}/api/trading/test-connection`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers,
         body: JSON.stringify(body),
       })
       const data = await res.json()
