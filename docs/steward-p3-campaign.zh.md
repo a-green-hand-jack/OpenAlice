@@ -1,6 +1,6 @@
 # Steward P3 后半排期 + Paper 多市场行为评估战役
 
-> 版本：草案 v0.1（2026-07-06）
+> 版本：v0.2（2026-07-06）——**确认点 A 已过**：maintainer 批准排期顺序（P3-2 → P3-4a → 战役 → P3-3+P3-4b）、战役设计与 §4.3 匿名化对策。P3-2 开工。
 > 地位：**阶段执行文档**，从属于 [steward-plan.zh.md](steward-plan.zh.md)（v1.0 冻结）与 [steward-p3-design.zh.md](steward-p3-design.zh.md)（v0.3 已批准）。战役是 I8/I9（验证门 + paper 优先）范围内的**行为评估强化**，同时为 P4 模板设计和 P6 晋升标准收集实证——不构成计划变更。
 > 用法：maintainer 直接批注，orchestrator 内联答复升版本。**§4 战役设计（尤其 §4.3 方法论坑）与 §2 排期顺序是需要你确认的核心。**
 
