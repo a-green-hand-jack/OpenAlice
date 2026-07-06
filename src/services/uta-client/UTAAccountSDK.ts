@@ -42,6 +42,7 @@ import type {
   StageClosePositionParams,
   ExpandContractFilters,
   ContractExpansion,
+  AuthzLevel,
 } from '@traderalice/uta-protocol'
 import type { Contract, ContractDescription, ContractDetails } from '@traderalice/ibkr'
 
@@ -314,10 +315,13 @@ export class UTAAccountSDK {
 
   // ==================== Write / lifecycle ====================
 
-  commit(message: string): Promise<CommitPrepareResult> {
+  commit(message: string, opts: { effectiveAuthzLevel?: AuthzLevel } = {}): Promise<CommitPrepareResult> {
     return this.client.post<CommitPrepareResult>(
       `/api/trading/uta/${encodeURIComponent(this.id)}/wallet/commit`,
-      { message },
+      {
+        message,
+        ...(opts.effectiveAuthzLevel ? { effectiveAuthzLevel: opts.effectiveAuthzLevel } : {}),
+      },
     )
   }
 

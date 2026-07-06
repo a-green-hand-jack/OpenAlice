@@ -11,7 +11,11 @@ import type { AccountCapabilities, BrokerHealth, BrokerHealthInfo } from './brok
 import { CcxtBroker } from './brokers/ccxt/CcxtBroker.js'
 import { createCcxtProviderTools } from './brokers/ccxt/ccxt-tools.js'
 import { createBroker } from './brokers/factory.js'
-import { getBrokerPreset, resolveAuthzAccountType } from '@traderalice/uta-protocol'
+import {
+  getBrokerPreset,
+  resolveAuthzAccountType,
+  type AuthzLevel,
+} from '@traderalice/uta-protocol'
 import { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
 import { loadGitState, createGitPersister } from './git-persistence.js'
 import { readUTAsConfig, type UTAConfig } from '@/core/config.js'
@@ -20,6 +24,7 @@ import type { ToolCenter } from '@/core/tool-center.js'
 import type { ReconnectResult } from '@/core/types.js'
 import type { FxService } from './fx-service.js'
 import type { UtaEventSink } from './events.js'
+import { tryAutoPushPaper, type PaperAutoPushResult } from './paper-auto-push.js'
 import './contract-ext.js'
 
 // Manager-level shapes live in `@traderalice/uta-protocol` (the SDK
@@ -158,6 +163,25 @@ export class UTAManager {
   remove(id: string): void {
     this.entries.delete(id)
     this.configs.delete(id)
+  }
+
+  async maybeAutoPushPaperCommit(
+    utaId: string,
+    opts: { effectiveAuthzLevel?: AuthzLevel | null } = {},
+  ): Promise<PaperAutoPushResult> {
+    const uta = this.entries.get(utaId)
+    const cfg = this.configs.get(utaId)
+    if (!uta || !cfg) return { status: 'skipped', reason: 'not_configured' }
+
+    return tryAutoPushPaper({
+      uta,
+      accountType: resolveAuthzAccountType({
+        presetId: cfg.presetId,
+        presetConfig: cfg.presetConfig,
+      }),
+      accountMaxAuthzLevel: cfg.maxAuthzLevel,
+      effectiveAuthzLevel: opts.effectiveAuthzLevel,
+    })
   }
 
   // ==================== Lookups ====================

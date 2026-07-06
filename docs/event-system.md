@@ -104,6 +104,11 @@ webhook tokens cannot forge broker audit history.
 For `trade.pushed` and `trade.rejected`, `guards` is always present. An empty
 array means no operation guard verdicts were produced; the `guardSummary` and
 `risk` snapshot still answer which guard set/risk state existed at push time.
+The `approver.via` vocabulary is deliberately small and auditable:
+`alice-bff` means a human admin session flowed through Alice's BFF,
+`loopback` means local/manual fallback without a session fingerprint, and
+`auto-push-paper` means UTA's deterministic paper/mock auto-push fired. The
+`auto-push-paper` value is explicitly not a human fingerprint.
 When reconstructing a trade lifecycle from `events.jsonl`, correlate by
 `payload.id` / `payload.commitHash` / `payload.orderId` and sort by `ts`; see
 issue #38 for why `seq` is not a cross-process ordering key.

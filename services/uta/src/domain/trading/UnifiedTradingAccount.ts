@@ -156,6 +156,7 @@ export class UnifiedTradingAccount {
   private readonly _riskStateStore: RiskStateStore
   private readonly _riskStateEvaluator: RiskStateEvaluator
   private _lastRiskContext: Pick<GuardContext, 'positions' | 'account'> | null = null
+  private _pushInFlightHash: string | null = null
 
   // ---- Health tracking ----
   private static readonly DEGRADED_THRESHOLD = 3
@@ -889,58 +890,74 @@ export class UnifiedTradingAccount {
       throw new Error(`Account "${this.label}" is offline. Cannot execute trades.`)
     }
     const pending = this.git.status()
+    const pendingHash = pending.pendingHash
+    // Idempotency guard for manual and auto triggers alike: two callers racing
+    // the same committed hash must not both enter TradingGit.push(), because
+    // the staging area is only cleared after broker dispatch completes.
+    if (pendingHash) {
+      if (this._pushInFlightHash === pendingHash) {
+        throw new Error(`Push already in progress for commit ${pendingHash}`)
+      }
+      this._pushInFlightHash = pendingHash
+    }
     const operations = [...pending.staged]
-    const result = await this.git.push(approver)
-    const committed = this.git.show(result.hash)
-    const pushedOperations = committed?.operations ?? operations
-    const pushedResults = committed?.results ?? [...result.submitted, ...result.rejected]
-    const guards = collectGuardVerdicts(pushedOperations, pushedResults)
-    const risk = riskSnapshot(this.getRiskState())
-    const guardSummary = buildGuardSummary(this._configuredGuardTypes, guards)
-    if (result.submitted.length > 0) {
-      this._emitEvent('trade.pushed', {
-        id: result.hash,
-        accountId: this.id,
-        operationCount: result.operationCount,
-        operations: summarizeOperations(pushedOperations, pushedResults),
-        approver: approver ?? { via: 'loopback', at: new Date().toISOString() },
-        guards,
-        guardSummary,
-        risk,
+    try {
+      const result = await this.git.push(approver)
+      const committed = this.git.show(result.hash)
+      const pushedOperations = committed?.operations ?? operations
+      const pushedResults = committed?.results ?? [...result.submitted, ...result.rejected]
+      const guards = collectGuardVerdicts(pushedOperations, pushedResults)
+      const risk = riskSnapshot(this.getRiskState())
+      const guardSummary = buildGuardSummary(this._configuredGuardTypes, guards)
+      if (result.submitted.length > 0) {
+        this._emitEvent('trade.pushed', {
+          id: result.hash,
+          accountId: this.id,
+          operationCount: result.operationCount,
+          operations: summarizeOperations(pushedOperations, pushedResults),
+          approver: approver ?? { via: 'loopback', at: new Date().toISOString() },
+          guards,
+          guardSummary,
+          risk,
+        })
+      }
+      if (result.rejected.length > 0) {
+        const rejectingGuards = guards.filter((g) => g.verdict === 'reject')
+        this._emitEvent('trade.rejected', {
+          id: result.hash,
+          accountId: this.id,
+          operationCount: result.operationCount,
+          operations: summarizeOperations(pushedOperations, pushedResults),
+          reason: result.rejected.map((r) => r.error).filter(Boolean).join('; ') || 'Trading push rejected',
+          ...(approver ? { approver } : {}),
+          guards,
+          rejectingGuards,
+          risk,
+        })
+      }
+      pushedResults.forEach((opResult, index) => {
+        if (opResult.status !== 'filled') return
+        const op = pushedOperations[index] ?? pushedOperations[0]
+        if (!op) return
+        this._emitEvent('trade.executed', {
+          id: `${result.hash}:${opResult.orderId ?? index}`,
+          accountId: this.id,
+          commitHash: result.hash,
+          operation: summarizeOperation(op),
+          ...(opResult.orderId ? { orderId: opResult.orderId } : {}),
+          status: 'filled',
+          ...(opResult.filledQty ? { filledQty: opResult.filledQty } : {}),
+          ...(opResult.filledPrice ? { filledPrice: opResult.filledPrice } : {}),
+          source: 'push',
+        })
       })
+      Promise.resolve(this._onPostPush?.(this.id)).catch(() => {})
+      return result
+    } finally {
+      if (pendingHash && this._pushInFlightHash === pendingHash) {
+        this._pushInFlightHash = null
+      }
     }
-    if (result.rejected.length > 0) {
-      const rejectingGuards = guards.filter((g) => g.verdict === 'reject')
-      this._emitEvent('trade.rejected', {
-        id: result.hash,
-        accountId: this.id,
-        operationCount: result.operationCount,
-        operations: summarizeOperations(pushedOperations, pushedResults),
-        reason: result.rejected.map((r) => r.error).filter(Boolean).join('; ') || 'Trading push rejected',
-        ...(approver ? { approver } : {}),
-        guards,
-        rejectingGuards,
-        risk,
-      })
-    }
-    pushedResults.forEach((opResult, index) => {
-      if (opResult.status !== 'filled') return
-      const op = pushedOperations[index] ?? pushedOperations[0]
-      if (!op) return
-      this._emitEvent('trade.executed', {
-        id: `${result.hash}:${opResult.orderId ?? index}`,
-        accountId: this.id,
-        commitHash: result.hash,
-        operation: summarizeOperation(op),
-        ...(opResult.orderId ? { orderId: opResult.orderId } : {}),
-        status: 'filled',
-        ...(opResult.filledQty ? { filledQty: opResult.filledQty } : {}),
-        ...(opResult.filledPrice ? { filledPrice: opResult.filledPrice } : {}),
-        source: 'push',
-      })
-    })
-    Promise.resolve(this._onPostPush?.(this.id)).catch(() => {})
-    return result
   }
 
   private _emitRiskRejectedPush(err: unknown, approver?: ApproverIdentity): void {
