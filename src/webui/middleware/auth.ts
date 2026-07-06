@@ -6,9 +6,11 @@
  *   1. Public allowlist  — `/api/auth/*`, `/api/version`, static assets,
  *                          MCP routes (own protection).
  *   2. Localhost trust   — true-loopback bypass when no trusted proxy is
- *                          configured. Carefully NOT spoofable through
- *                          X-Forwarded-For unless an explicit trusted
- *                          proxy IP is in `OPENALICE_TRUSTED_PROXIES`.
+ *                          configured, except for sensitive route prefixes
+ *                          that must still require a session. Carefully NOT
+ *                          spoofable through X-Forwarded-For unless an
+ *                          explicit trusted proxy IP is in
+ *                          `OPENALICE_TRUSTED_PROXIES`.
  *   3. Session cookie    — looked up in sessions.json, expiry checked,
  *                          window slid forward on use.
  *   4. CSRF Origin check — mutating methods (POST/PUT/DELETE/PATCH) must
@@ -38,6 +40,16 @@ const PUBLIC_PATH_PREFIX = [
   '/favicon',         // favicon.ico, favicon-*.png, etc.
   '/assets/',         // bundled UI static assets
   '/mcp',             // MCP transport — has its own protection model
+] as const
+
+/** Prefixes that must require a session EVEN on loopback — the localhost-trust
+ *  bypass does not apply. A same-host untrusted workspace agent reaches these
+ *  over loopback otherwise (see safe/playbooks/03-localhost-spoofing.md, issue #55). */
+const LOOPBACK_EXEMPT_PREFIX = [
+  '/api/trading',     // execution BFF + /config account authz / broker creds
+  '/api/simulator',   // paper god-view (mock fills, mark-price)
+  '/api/config',      // AI credential vault — GET /credentials returns apiKey plaintext
+  '/api/workspaces',  // PATCH /:id/authz-level (authz mutation) + /credentials
 ] as const
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'DELETE', 'PATCH'])
@@ -76,7 +88,7 @@ export function createAuthMiddleware(opts: AuthMiddlewareOptions): MiddlewareHan
     // configured. With a trusted proxy in front, the proxy IS at 127.0.0.1
     // from Alice's view, so trusting "localhost requests" would let every
     // public request through. See safe/playbooks/03-localhost-spoofing.md.
-    if (trustedProxies.size === 0) {
+    if (trustedProxies.size === 0 && !isLoopbackExemptPath(path)) {
       const clientIp = getSocketRemoteAddress(c)
       if (clientIp && isLoopbackIp(clientIp)) {
         return next()
@@ -147,6 +159,10 @@ export function isLoopbackIp(ip: string): boolean {
   return false
 }
 
+function isLoopbackExemptPath(path: string): boolean {
+  return LOOPBACK_EXEMPT_PREFIX.some((p) => path === p || path.startsWith(p + '/'))
+}
+
 function readSessionCookie(cookieHeader: string): string | null {
   if (!cookieHeader) return null
   const pairs = cookieHeader.split(';')
@@ -159,7 +175,17 @@ function readSessionCookie(cookieHeader: string): string | null {
       const value = entry.slice(eq + 1).trim()
       // Empty value is "no session" — explicitly do NOT treat empty
       // string as a valid SID. See safe/playbooks/01-auth-bypass.md.
-      return value.length > 0 ? decodeURIComponent(value) : null
+      if (value.length === 0) return null
+      // Malformed percent-encoding (e.g. a truncated `%E0%A4%A`) makes
+      // decodeURIComponent throw. Treat it as "no session" rather than
+      // letting the middleware 500 — a bad cookie must fail closed to 401,
+      // not crash. This path is now reachable on loopback too (issue #55
+      // requires a session on sensitive routes even from 127.0.0.1).
+      try {
+        return decodeURIComponent(value)
+      } catch {
+        return null
+      }
     }
   }
   return null
