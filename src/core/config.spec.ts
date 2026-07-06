@@ -210,13 +210,15 @@ describe('readUTAsConfig', () => {
 
   it('parses preset-shaped accounts from file', async () => {
     fileReturns([
-      { id: 'okx-main', presetId: 'okx', enabled: true, guards: [], presetConfig: { mode: 'live', apiKey: 'k', secret: 's', password: 'p' } },
+      { id: 'okx-main', presetId: 'okx', enabled: true, guards: [], presetConfig: { mode: 'live', apiKey: 'k', secret: 's', password: 'p' }, maxAuthzLevel: 'small_live' },
       { id: 'alpaca-paper', presetId: 'alpaca', enabled: true, guards: [], presetConfig: { mode: 'paper', apiKey: 'k', apiSecret: 's' } },
     ])
     const accounts = await readUTAsConfig()
     expect(accounts).toHaveLength(2)
     expect(accounts[0].presetId).toBe('okx')
     expect(accounts[1].presetId).toBe('alpaca')
+    expect(accounts[0].maxAuthzLevel).toBe('small_live')
+    expect(accounts[1].maxAuthzLevel).toBeUndefined()
   })
 
   it('auto-migrates pre-preset (legacy) ccxt shape and backs up the original', async () => {
@@ -262,10 +264,12 @@ describe('writeUTAsConfig', () => {
     await writeUTAsConfig([{
       id: 'acc-1', presetId: 'alpaca', enabled: true, guards: [],
       presetConfig: { mode: 'paper', apiKey: 'k', apiSecret: 's' },
-      keyless: false, readOnly: false, editable: true,
+      keyless: false, readOnly: false, maxAuthzLevel: 'paper', editable: true,
     }])
     const filePath = mockWriteFile.mock.calls[0][0] as string
     expect(filePath).toMatch(/accounts\.json$/)
+    const written = JSON.parse(mockWriteFile.mock.calls[0][1] as string) as Array<{ maxAuthzLevel?: string }>
+    expect(written[0]?.maxAuthzLevel).toBe('paper')
   })
 
   it('throws ZodError for missing required fields', async () => {
@@ -364,4 +368,3 @@ describe('deleteCredential', () => {
     expect(mockWriteFile).toHaveBeenCalled()
   })
 })
-

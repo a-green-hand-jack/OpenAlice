@@ -16,11 +16,10 @@
  *   instead of HTTP status codes; the route layer maps the union to
  *   appropriate transport-level signals.
  *
- * Push is normally gated by manual approval (see `tool/trading.ts`
- * `tradingPush` which intentionally tells the agent to ask the user
- * first). One-shot bypasses that gate because the user supplying the
- * full order spec via a form IS the manual approval — re-prompting
- * would be redundant.
+ * Push is normally gated by manual approval and is no longer exposed as an
+ * agent tool. One-shot bypasses that gate because the user supplying the full
+ * order spec via a form IS the manual approval — re-prompting would be
+ * redundant.
  */
 
 import type { UnifiedTradingAccount } from './UnifiedTradingAccount.js'

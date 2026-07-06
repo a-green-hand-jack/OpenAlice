@@ -5,7 +5,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import type { Plugin, EngineContext } from '../core/types.js'
 import type { ToolCenter } from '../core/tool-center.js'
-import { type WorkspaceToolCenter, makeWorkspaceResolver } from '../core/workspace-tool-center.js'
+import {
+  buildWorkspaceToolCatalog,
+  filterWorkspaceToolCatalog,
+  type WorkspaceToolCenter,
+  makeWorkspaceResolver,
+  resolveWorkspaceToolAuthzLevel,
+} from '../core/workspace-tool-center.js'
 import type { IInboxStore } from '../core/inbox-store.js'
 import type { IEntityStore } from '../core/entity-store.js'
 import type { WorkspaceService } from '../workspaces/service.js'
@@ -13,23 +19,23 @@ import type { InboxOrigin } from '../core/inbox-store.js'
 import { extractMcpShape, wrapToolExecute } from '../core/mcp-export.js'
 import { registerCliRoutes } from './cli.js'
 import { resolveInboxOrigin } from './inbox-origin.js'
+import { readUTAsConfig } from '../core/config.js'
 
 /**
  * MCP Plugin — exposes OpenAlice tools via Streamable HTTP, plus the CLI gateway.
  *
- *   GET/POST /mcp           Workspace-independent surface (ToolCenter).
- *                           Trading / market / news / brain / etc. — what
- *                           OpenAlice provides to any MCP client. No
- *                           identity required.
+ *   GET/POST /mcp           Workspace-independent surface (ToolCenter),
+ *                           with trading conservatively trimmed to read-only
+ *                           because no workspace authz level is present.
  *
- *   GET/POST /mcp/:wsId     Workspace-scoped surface (WorkspaceToolCenter).
- *                           inbox_push / inbox_read + workspace_path +
- *                           entity_upsert / entity_search; tools
- *                           that need workspaceId close over it via the factory
- *                           pattern. The URL path IS the identity carrier —
- *                           agent never sees or supplies workspaceId, and
- *                           bootstrap.sh bakes the per-workspace URL into
- *                           the workspace's own .mcp.json.
+ *   GET/POST /mcp/:wsId     Workspace-scoped union surface: filtered global
+ *                           ToolCenter tools plus WorkspaceToolCenter tools.
+ *                           Trading tools are trimmed by the workspace's
+ *                           effective Steward authz level; inbox_push /
+ *                           inbox_read + workspace_path + entity_* + issue_*
+ *                           close over wsId via factories. The URL path IS the
+ *                           identity carrier — agent never sees or supplies
+ *                           workspaceId.
  *
  *   GET  /cli/:wsId/:export/manifest   Same identity-by-URL trick — the gateway
  *   POST /cli/:wsId/:export/invoke     for the workspace-local CLIs (alice*, traderhub)
@@ -73,7 +79,10 @@ export class McpPlugin implements Plugin {
 
     /** Build a per-request McpServer with the global ToolCenter catalog. */
     const createGlobalMcpServer = async () => {
-      const tools = await toolCenter.getMcpTools()
+      const tools = filterWorkspaceToolCatalog(await toolCenter.getMcpTools(), {
+        authzLevel: 'read_only',
+        groupForTool: (name) => toolCenter.getGroup(name),
+      })
       const mcp = new McpServer({ name: 'open-alice', version: '1.0.0' })
       for (const [name, t] of Object.entries(tools)) {
         if (!t.execute) continue
@@ -86,14 +95,21 @@ export class McpPlugin implements Plugin {
     }
 
     /** Build a per-request McpServer scoped to a specific workspace.
-     *  Each WorkspaceToolFactory is invoked with the URL's wsId so its
-     *  tools' execute() closes over that identity. */
-    const createWorkspaceMcpServer = (wsId: string, wsLabel: string, origin?: InboxOrigin) => {
+     *  Global tools are filtered by the effective Steward authz level, and each
+     *  WorkspaceToolFactory is invoked with the URL's wsId so its tools'
+     *  execute() closes over that identity. */
+    const createWorkspaceMcpServer = async (wsId: string, wsLabel: string, origin?: InboxOrigin) => {
       // GLOBAL issue-board reader, backed by the live WorkspaceService — parity
       // with the CLI gateway so issue_list / issue_show read EVERY workspace's
       // issues here too. Absent when the service isn't up → tools self-read.
       const svc = getWorkspaceService()
-      const tools = workspaceToolCenter.build({
+      const meta = svc?.registry.get(wsId)
+      const utas = await readUTAsConfig().catch(() => [])
+      const authzLevel = resolveWorkspaceToolAuthzLevel({
+        workspaceAuthzLevel: meta?.authzLevel,
+        accountMaxAuthzLevels: utas.map((u) => u.maxAuthzLevel),
+      })
+      const scopedTools = workspaceToolCenter.build({
         workspaceId: wsId,
         workspaceLabel: wsLabel,
         inboxStore,
@@ -113,6 +129,10 @@ export class McpPlugin implements Plugin {
         // Agent-invisible run provenance from the out-of-band header (resolved
         // server-side from the authoritative registry). Absent → undefined.
         ...(origin ? { origin } : {}),
+      })
+      const tools = buildWorkspaceToolCatalog(await toolCenter.getMcpTools(), scopedTools, {
+        authzLevel,
+        groupForTool: (name) => toolCenter.getGroup(name),
       })
       const mcp = new McpServer({ name: 'open-alice-workspace', version: '1.0.0' })
       for (const [name, t] of Object.entries(tools)) {
@@ -167,7 +187,7 @@ export class McpPlugin implements Plugin {
       )
 
       const transport = new WebStandardStreamableHTTPServerTransport()
-      const mcp = createWorkspaceMcpServer(meta.id, meta.tag, origin)
+      const mcp = await createWorkspaceMcpServer(meta.id, meta.tag, origin)
       await mcp.connect(transport)
       return transport.handleRequest(c.req.raw)
     })

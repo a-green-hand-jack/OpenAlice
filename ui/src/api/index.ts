@@ -43,6 +43,7 @@ export type {
   Profile,
   AIBackend,
   Preset,
+  AuthzLevel,
   WireShape,
   SerializedRegion,
   JsonSchema,

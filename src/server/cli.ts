@@ -27,13 +27,20 @@ import type { Hono } from 'hono'
 import { z } from 'zod'
 import type { Tool } from 'ai'
 import type { ToolCenter } from '../core/tool-center.js'
-import { type WorkspaceToolCenter, makeWorkspaceResolver } from '../core/workspace-tool-center.js'
+import {
+  filterWorkspaceToolCatalog,
+  type WorkspaceToolCenter,
+  makeWorkspaceResolver,
+  resolveWorkspaceToolAuthzLevel,
+} from '../core/workspace-tool-center.js'
 import type { IInboxStore, InboxOrigin } from '../core/inbox-store.js'
 import type { IEntityStore } from '../core/entity-store.js'
 import type { WorkspaceService } from '../workspaces/service.js'
 import { extractMcpShape, wrapToolExecute } from '../core/mcp-export.js'
 import { type CliExport, getExport, mappedToolNames } from './cli-commands.js'
 import { resolveInboxOrigin } from './inbox-origin.js'
+import { readUTAsConfig } from '../core/config.js'
+import type { AuthzLevel } from '@traderalice/uta-protocol'
 
 export interface CliGatewayDeps {
   toolCenter: ToolCenter
@@ -45,7 +52,7 @@ export interface CliGatewayDeps {
   getWorkspaceService: () => WorkspaceService | null
 }
 
-type WsMeta = { id: string; tag: string }
+type WsMeta = { id: string; tag: string; authzLevel?: AuthzLevel }
 
 /** Mount /cli/:wsId/:export/* onto an existing Hono app (the MCP server's app). */
 export function registerCliRoutes(app: Hono, deps: CliGatewayDeps): void {
@@ -57,7 +64,19 @@ export function registerCliRoutes(app: Hono, deps: CliGatewayDeps): void {
     if (!svc) return { error: 'unavailable' }
     const meta = svc.registry.get(wsId)
     if (!meta) return { error: 'unknown' }
-    return { meta: { id: meta.id, tag: meta.tag } }
+    return { meta: { id: meta.id, tag: meta.tag, ...(meta.authzLevel ? { authzLevel: meta.authzLevel } : {}) } }
+  }
+
+  const resolveToolAuthzLevel = async (ws: WsMeta) => {
+    const inventory = toolCenter.getInventory()
+    if (!inventory.some((t) => t.group === 'trading')) {
+      return resolveWorkspaceToolAuthzLevel({ workspaceAuthzLevel: ws.authzLevel })
+    }
+    const utas = await readUTAsConfig().catch(() => [])
+    return resolveWorkspaceToolAuthzLevel({
+      workspaceAuthzLevel: ws.authzLevel,
+      accountMaxAuthzLevels: utas.map((u) => u.maxAuthzLevel),
+    })
   }
 
   /**
@@ -65,11 +84,11 @@ export function registerCliRoutes(app: Hono, deps: CliGatewayDeps): void {
    * the (per-workspace) scoped catalog for `workspace`. Never crosses scopes —
    * an export only sees the tools its category owns.
    */
-  const exportCatalog = (
+  const exportCatalog = async (
     exp: CliExport,
     ws: WsMeta,
     origin?: InboxOrigin,
-  ): { resolve: (name: string) => Tool | null; inventoryNames: () => string[] } => {
+  ): Promise<{ resolve: (name: string) => Tool | null; inventoryNames: () => string[] }> => {
     if (exp.scope === 'scoped') {
       // GLOBAL issue-board reader, backed by the live WorkspaceService.
       // Built here so issue_list / issue_show on `alice-workspace` read EVERY
@@ -104,9 +123,19 @@ export function registerCliRoutes(app: Hono, deps: CliGatewayDeps): void {
         inventoryNames: () => Object.keys(wsTools),
       }
     }
+    const authzLevel = await resolveToolAuthzLevel(ws)
+    const entries = Object.fromEntries(
+      toolCenter.getInventory()
+        .map((t) => [t.name, toolCenter.get(t.name)] as const)
+        .filter((entry): entry is readonly [string, Tool] => entry[1] !== null),
+    )
+    const filtered = filterWorkspaceToolCatalog(entries, {
+      authzLevel,
+      groupForTool: (name) => toolCenter.getGroup(name),
+    })
     return {
-      resolve: (name) => toolCenter.get(name) ?? null,
-      inventoryNames: () => toolCenter.getInventory().map((t) => t.name),
+      resolve: (name) => filtered[name] ?? null,
+      inventoryNames: () => Object.keys(filtered),
     }
   }
 
@@ -128,10 +157,10 @@ export function registerCliRoutes(app: Hono, deps: CliGatewayDeps): void {
     return { ok: true, exp, ws: ws.meta }
   }
 
-  app.get('/cli/:wsId/:export/manifest', (c) => {
+  app.get('/cli/:wsId/:export/manifest', async (c) => {
     const r = resolveCtx(c.req.param('wsId'), c.req.param('export'))
     if (!r.ok) return c.json({ error: r.error }, r.status)
-    const cat = exportCatalog(r.exp, r.ws)
+    const cat = await exportCatalog(r.exp, r.ws)
 
     const groups: Record<
       string,
@@ -191,7 +220,7 @@ export function registerCliRoutes(app: Hono, deps: CliGatewayDeps): void {
       },
       getWorkspaceService,
     )
-    const tool = exportCatalog(r.exp, r.ws, origin).resolve(toolName)
+    const tool = (await exportCatalog(r.exp, r.ws, origin)).resolve(toolName)
     if (!tool) return c.json({ error: `Tool not available: ${toolName}` }, 404)
 
     const rawArgs =

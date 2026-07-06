@@ -10,10 +10,11 @@
  * without ever asking the AI agent to traffic its own workspaceId.
  *
  * The MCP server's `/mcp/:wsId` route invokes every factory with the URL's
- * wsId at request time. From the agent's POV, `inbox_push({ docs, comments })`
- * has no identity parameter — workspaceId is invisible, baked into the
- * tool by the server. Forgery surface is zero because the URL is the
- * only identity carrier and `.mcp.json` is per-workspace.
+ * wsId at request time, then merges the resulting scoped tools with the
+ * filtered global ToolCenter catalog. From the agent's POV,
+ * `inbox_push({ docs, comments })` has no identity parameter — workspaceId is
+ * invisible, baked into the tool by the server. Forgery surface is zero because
+ * the URL is the only identity carrier.
  *
  * Why a separate registry instead of marking ToolCenter tools as
  * "workspace-scoped": the surface areas are genuinely different. ToolCenter
@@ -25,12 +26,139 @@
  */
 
 import type { Tool } from 'ai'
+import {
+  AUTHZ_LEVEL_RANK,
+  maxAuthzLevel,
+  resolveEffectiveAuthzLevel,
+  type AuthzLevel,
+} from '@traderalice/uta-protocol'
 import type { IInboxStore, InboxOrigin } from './inbox-store.js'
 import type { IEntityStore } from './entity-store.js'
 // TYPE-ONLY: the global-issue-board shapes. Importing them as types keeps
 // core/ free of any runtime dependency on the workspaces/ module (no
 // core→workspaces coupling), while letting the board reader below be typed.
 import type { IssuesSnapshot, IssueDetail, WikilinkIssueRef } from '../workspaces/issues/board.js'
+
+// ==================== Steward authz tool map ====================
+
+export const READ_ONLY_TRADING_TOOL_NAMES = [
+  'listUTAs',
+  'searchContracts',
+  'getContractDetails',
+  'getAccount',
+  'getPortfolio',
+  'getOrders',
+  'getQuote',
+  'expandContract',
+  'getMarketClock',
+  'riskStatus',
+  'tradingLog',
+  'tradingShow',
+  'tradingStatus',
+  'orderHistory',
+  'tradeHistory',
+  'simulatePriceChange',
+  'tradingSync',
+] as const
+
+export const PROPOSAL_TRADING_TOOL_NAMES = [
+  'placeOrder',
+  'modifyOrder',
+  'closePosition',
+  'cancelOrder',
+  'tradingCommit',
+  'tradingReject',
+] as const
+
+export const REMOVED_TRADING_TOOL_NAMES = ['tradingPush'] as const
+
+export const TRADING_TOOL_MIN_AUTHZ_LEVEL: Readonly<Record<
+  (typeof READ_ONLY_TRADING_TOOL_NAMES[number]) | (typeof PROPOSAL_TRADING_TOOL_NAMES[number]),
+  AuthzLevel
+>> = {
+  listUTAs: 'read_only',
+  searchContracts: 'read_only',
+  getContractDetails: 'read_only',
+  getAccount: 'read_only',
+  getPortfolio: 'read_only',
+  getOrders: 'read_only',
+  getQuote: 'read_only',
+  expandContract: 'read_only',
+  getMarketClock: 'read_only',
+  riskStatus: 'read_only',
+  tradingLog: 'read_only',
+  tradingShow: 'read_only',
+  tradingStatus: 'read_only',
+  orderHistory: 'read_only',
+  tradeHistory: 'read_only',
+  simulatePriceChange: 'read_only',
+  tradingSync: 'read_only',
+  placeOrder: 'paper',
+  modifyOrder: 'paper',
+  closePosition: 'paper',
+  cancelOrder: 'paper',
+  tradingCommit: 'paper',
+  tradingReject: 'paper',
+}
+
+const REMOVED_TRADING_TOOL_SET = new Set<string>(REMOVED_TRADING_TOOL_NAMES)
+
+function hasTradingAuthzRule(name: string): name is keyof typeof TRADING_TOOL_MIN_AUTHZ_LEVEL {
+  return Object.prototype.hasOwnProperty.call(TRADING_TOOL_MIN_AUTHZ_LEVEL, name)
+}
+
+export function resolveWorkspaceToolAuthzLevel(input: {
+  readonly workspaceAuthzLevel?: AuthzLevel | null
+  readonly accountMaxAuthzLevels?: readonly (AuthzLevel | null | undefined)[]
+}): AuthzLevel {
+  return resolveEffectiveAuthzLevel({
+    accountMaxAuthzLevel: maxAuthzLevel(input.accountMaxAuthzLevels ?? []),
+    workspaceAuthzLevel: input.workspaceAuthzLevel,
+  })
+}
+
+export function isTradingToolVisibleAtAuthzLevel(name: string, authzLevel: AuthzLevel): boolean {
+  if (!hasTradingAuthzRule(name)) return false
+  return AUTHZ_LEVEL_RANK[authzLevel] >= AUTHZ_LEVEL_RANK[TRADING_TOOL_MIN_AUTHZ_LEVEL[name]]
+}
+
+export function filterWorkspaceToolCatalog(
+  tools: Record<string, Tool>,
+  opts: {
+    readonly authzLevel: AuthzLevel
+    readonly groupForTool?: (name: string) => string | null
+  },
+): Record<string, Tool> {
+  const out: Record<string, Tool> = {}
+  for (const [name, tool] of Object.entries(tools)) {
+    const group = opts.groupForTool?.(name) ?? null
+    const knownTradingName = hasTradingAuthzRule(name) || REMOVED_TRADING_TOOL_SET.has(name)
+    if (group !== 'trading' && !knownTradingName) {
+      out[name] = tool
+      continue
+    }
+    // Trading tools are deny-by-default: a new broker mutation cannot appear
+    // in a workspace until it is explicitly placed in the approved authz map.
+    if (isTradingToolVisibleAtAuthzLevel(name, opts.authzLevel)) {
+      out[name] = tool
+    }
+  }
+  return out
+}
+
+export function buildWorkspaceToolCatalog(
+  globalTools: Record<string, Tool>,
+  scopedTools: Record<string, Tool>,
+  opts: {
+    readonly authzLevel: AuthzLevel
+    readonly groupForTool?: (name: string) => string | null
+  },
+): Record<string, Tool> {
+  return {
+    ...filterWorkspaceToolCatalog(globalTools, opts),
+    ...scopedTools,
+  }
+}
 
 // ==================== Context handed to factories ====================
 

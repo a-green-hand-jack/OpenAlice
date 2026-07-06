@@ -67,8 +67,9 @@ state, or ownership.
   `services/uta/src/domain/trading/git-persistence.ts:14-16`.
 
 - Workspace launcher state is sibling user state under the launcher root:
-  registry, session records, scrollback, headless tasks, and workspace repos.
-  The default root is `src/workspaces/config.ts:107-109`.
+  registry (including launcher-owned workspace `authzLevel`), session records,
+  scrollback, headless tasks, and workspace repos. The default root is
+  `src/workspaces/config.ts:107-109`.
 
 - Secrets are not stored in plaintext data files after sealing. The machine key
   is outside portable `data/`, at `src/core/sealing.ts:49-50`.

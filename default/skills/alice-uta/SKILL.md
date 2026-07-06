@@ -2,22 +2,24 @@
 name: alice-uta
 description: >
   Trading on your shell PATH via the `alice-uta` CLI — OpenAlice's trading
-  surface. These commands MUTATE real broker state, so resolve the
+  read/proposal surface. Proposal commands mutate OpenAlice's staged trading
+  state, not the broker; final execution happens through human approval or
+  deterministic UTA-side auto-push outside this agent CLI. Resolve the
   broker-native contract first and report every result. Use whenever you need
   to place / modify / cancel an order; close a position; check an account,
   portfolio, or order/trade history; resolve a contract or quote; or drive the
   trading-as-git approval flow: "place a buy order for AAPL", "what's my
   position in ETH", "close half my TSLA", "find the contract for this option",
-  "show pending trades", "approve my orders". Discover every group, verb, and
-  flag with `alice-uta --help` and `alice-uta <group> <verb> --help` — do NOT
+  "show pending trades". Discover every group, verb, and flag with
+  `alice-uta --help` and `alice-uta <group> <verb> --help` — do NOT
   guess flags.
 ---
 
 # Trading — `alice-uta`
 
-Accounts, portfolio, orders, and the trading-as-git approval flow. **These
-mutate real broker state** — discover before you act, and act only on what
-the user's instructions actually cover.
+Accounts, portfolio, orders, and the trading-as-git proposal flow. Proposal
+verbs mutate staged OpenAlice state, not the broker. Discover before you act,
+and act only on what the user's instructions actually cover.
 
 ## Discover, don't guess
 
@@ -77,8 +79,7 @@ purpose. Run `--help` per verb:
 alice-uta git status                   # pending / staged trading state
 alice-uta git log                      # history
 alice-uta git show --help              # inspect one entry
-alice-uta git commit --help            # approve
-alice-uta git push --help              # send approved orders to the venue
+alice-uta git commit --help            # package staged proposals for approval/auto-push
 alice-uta git reject --help            # reject a staged change
 alice-uta git sync --help              # reconcile against the venue
 ```
