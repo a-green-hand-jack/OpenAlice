@@ -55,17 +55,6 @@ export const zh: Resources = {
       marketData: '市场数据',
       newsSources: '新闻源',
     },
-    agent: {
-      title: '智能体',
-      description: '控制 AI 可以代你做什么。更改在下一次请求时生效。',
-      allowAiTrading: '允许 AI 自动下单',
-      allowAiTradingOn: '开启——AI 可自行向券商发送订单，无需每次征求你的同意。',
-      allowAiTradingOff: '关闭——AI 可以暂存并提议交易，但每次 push 都需要你在 Web UI 中批准。',
-      allowAiTradingWarning: 'AI 自动交易已开启。AI 可自行下单、改单、撤单。每账户的只读设置仍然生效。',
-      allowAiTradingConfirmTitle: '开启 AI 自动交易？',
-      allowAiTradingConfirmBody: '开启后，AI 可在不征求你同意的情况下向券商发送真实订单。UTA 交易接口目前仍不稳定，可能存在精度或参数问题。强烈不建议在实盘账户上使用——请使用模拟 / demo 账户。',
-      allowAiTradingConfirmCta: '开启自动交易',
-    },
     persona: {
       title: '人设',
       description: '定义 Alice 个性与行为的系统提示词。更改在下次服务器重启后生效。',

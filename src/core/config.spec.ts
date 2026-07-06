@@ -133,13 +133,21 @@ describe('readAgentConfig', () => {
     fileNotFound()
     const cfg = await readAgentConfig()
     expect(cfg.maxSteps).toBe(20)
-    expect(cfg.allowAiTrading).toBe(false)
+    expect('allowAiTrading' in cfg).toBe(false)
   })
 
   it('parses maxSteps from file', async () => {
     fileReturns({ maxSteps: 50 })
     const cfg = await readAgentConfig()
     expect(cfg.maxSteps).toBe(50)
+  })
+
+  it('loads legacy agent config with allowAiTrading and strips the dead field', async () => {
+    fileReturns({ maxSteps: 30, allowAiTrading: true, claudeCode: { maxTurns: 4 } })
+    const cfg = await readAgentConfig()
+    expect(cfg.maxSteps).toBe(30)
+    expect(cfg.claudeCode.maxTurns).toBe(4)
+    expect('allowAiTrading' in cfg).toBe(false)
   })
 })
 

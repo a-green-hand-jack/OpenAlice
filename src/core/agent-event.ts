@@ -16,6 +16,7 @@
 
 import { Type, type TSchema } from '@sinclair/typebox'
 import AjvPkg from 'ajv'
+import type { AuthzLevel } from '@traderalice/uta-protocol'
 
 // The cron engine was retired (workspace self-scheduling replaced it). The
 // `cron.fire` event type stays defined here as the event bus's canonical sample
@@ -193,6 +194,14 @@ export interface RiskFlattenPayload {
   }>
 }
 
+export interface AuthzLevelChangedPayload {
+  scope: 'workspace' | 'account'
+  id: string
+  from: AuthzLevel
+  to: AuthzLevel
+  approver: TradeEventApproverIdentity
+}
+
 // ==================== Canonical AgentWork events ====================
 //
 // DORMANT since World B was deleted: the in-process consumer
@@ -250,6 +259,7 @@ export interface AgentEventMap {
   'risk.state-changed': RiskStateChangedPayload
   'risk.emergency-stop': RiskEmergencyStopPayload
   'risk.flatten': RiskFlattenPayload
+  'authz.level-changed': AuthzLevelChangedPayload
   'agent.work.requested': AgentWorkRequestedPayload
   'agent.work.done':      AgentWorkDonePayload
   'agent.work.skip':      AgentWorkSkipPayload
@@ -434,6 +444,21 @@ const RiskFlattenSchema = Type.Object({
   })),
 })
 
+const AuthzLevelUnion = Type.Union([
+  Type.Literal('read_only'),
+  Type.Literal('paper'),
+  Type.Literal('small_live'),
+  Type.Literal('limited_autonomy'),
+])
+
+const AuthzLevelChangedSchema = Type.Object({
+  scope: Type.Union([Type.Literal('workspace'), Type.Literal('account')]),
+  id: Type.String(),
+  from: AuthzLevelUnion,
+  to: AuthzLevelUnion,
+  approver: ApproverIdentitySchema,
+})
+
 // ---- Canonical agent-work event schemas ----
 //
 // `source` is constrained to the AgentWorkSource union literal set.
@@ -528,6 +553,10 @@ export const AgentEvents: { [K in keyof AgentEventMap]: AgentEventMeta } = {
   'risk.flatten': {
     schema: RiskFlattenSchema,
     description: 'A human-triggered flatten action ran, including trigger identity and per-position close outcomes.',
+  },
+  'authz.level-changed': {
+    schema: AuthzLevelChangedSchema,
+    description: 'A human changed a workspace authzLevel or account maxAuthzLevel; includes approver identity.',
   },
   'agent.work.requested': {
     schema: AgentWorkRequestedSchema,

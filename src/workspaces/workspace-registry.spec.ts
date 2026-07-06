@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { WorkspaceRegistry } from './workspace-registry.js'
 import type { Logger } from './logger.js'
@@ -62,7 +62,24 @@ describe('WorkspaceRegistry authzLevel persistence', () => {
     })
   })
 
-  it('rejects invalid persisted authzLevel values', async () => {
+  it('updates launcher-owned authzLevel in place', async () => {
+    await withRegistry(async (path) => {
+      const reg = await WorkspaceRegistry.load(path, noopLogger)
+      await reg.add({
+        id: 'ws-change',
+        tag: 'change',
+        dir: '/tmp/ws-change',
+        createdAt: '2026-07-06T00:00:00.000Z',
+        agents: ['codex'],
+      })
+
+      const changed = await reg.setAuthzLevel('ws-change', 'paper')
+      expect(changed).toMatchObject({ from: 'read_only', to: 'paper', changed: true })
+      expect((await WorkspaceRegistry.load(path, noopLogger)).get('ws-change')?.authzLevel).toBe('paper')
+    })
+  })
+
+  it('degrades invalid persisted authzLevel values to read_only without aborting load', async () => {
     await withRegistry(async (path) => {
       await writeFile(path, JSON.stringify({
         version: 1,
@@ -73,10 +90,25 @@ describe('WorkspaceRegistry authzLevel persistence', () => {
           createdAt: '2026-07-06T00:00:00.000Z',
           agents: ['claude'],
           authzLevel: 'tier_one',
+        }, {
+          id: 'ws-good',
+          tag: 'good',
+          dir: '/tmp/ws-good',
+          createdAt: '2026-07-06T00:00:01.000Z',
+          agents: ['claude'],
+          authzLevel: 'paper',
         }],
       }), 'utf8')
 
-      await expect(WorkspaceRegistry.load(path, noopLogger)).rejects.toThrow(/invalid authzLevel/)
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const reg = await WorkspaceRegistry.load(path, noopLogger)
+        expect(reg.get('ws-bad')?.authzLevel).toBe('read_only')
+        expect(reg.get('ws-good')?.authzLevel).toBe('paper')
+        expect(warn).toHaveBeenCalledWith(expect.stringMatching(/invalid authzLevel.*degrading/))
+      } finally {
+        warn.mockRestore()
+      }
     })
   })
 })

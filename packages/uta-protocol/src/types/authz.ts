@@ -1,3 +1,5 @@
+import { getBrokerPreset, isPaperPreset } from '../brokers/preset-catalog.js'
+
 /**
  * Steward authorization levels.
  *
@@ -64,4 +66,18 @@ export function isAuthzLevelAllowedForAccountType(
   accountType: AuthzAccountType,
 ): boolean {
   return level !== 'paper' || isPaperLikeAccountType(accountType)
+}
+
+export function resolveAuthzAccountType(input: {
+  readonly presetId?: string
+  readonly presetConfig?: Record<string, unknown> | null
+}): AuthzAccountType {
+  if (!input.presetId) return 'unknown'
+  try {
+    const preset = getBrokerPreset(input.presetId)
+    if (preset.engine === 'mock') return 'mock'
+    return isPaperPreset(input.presetId, input.presetConfig ?? {}) ? 'paper' : 'live'
+  } catch {
+    return 'unknown'
+  }
 }

@@ -10,6 +10,7 @@ describe('AgentEventSchemas', () => {
     'message.received', 'message.sent',
     'trade.committed', 'trade.pushed', 'trade.executed', 'trade.rejected',
     'risk.state-changed', 'risk.emergency-stop', 'risk.flatten',
+    'authz.level-changed',
     'agent.work.requested', 'agent.work.done', 'agent.work.skip', 'agent.work.error',
   ]
 
@@ -149,6 +150,16 @@ describe('validateEventPayload', () => {
       hash: 'abc12345',
       triggerIdentity: { via: 'loopback', at: '2026-07-05T00:00:00.000Z' },
       outcomes: [{ symbol: 'AAPL', side: 'long', quantity: '1', success: true, orderId: 'mock-ord-2', status: 'Filled' }],
+    })).not.toThrow()
+  })
+
+  it('should accept valid authz.level-changed payload', () => {
+    expect(() => validateEventPayload('authz.level-changed', {
+      scope: 'workspace',
+      id: 'ws-1',
+      from: 'read_only',
+      to: 'paper',
+      approver: { via: 'alice-bff', fingerprint: 'abcdef1234567890', at: '2026-07-06T00:00:00.000Z' },
     })).not.toThrow()
   })
 

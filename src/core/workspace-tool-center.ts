@@ -28,8 +28,11 @@
 import type { Tool } from 'ai'
 import {
   AUTHZ_LEVEL_RANK,
+  isAuthzLevelAllowedForAccountType,
   maxAuthzLevel,
+  resolveAuthzAccountType,
   resolveEffectiveAuthzLevel,
+  type AuthzAccountType,
   type AuthzLevel,
 } from '@traderalice/uta-protocol'
 import type { IInboxStore, InboxOrigin } from './inbox-store.js'
@@ -102,6 +105,7 @@ export const TRADING_TOOL_MIN_AUTHZ_LEVEL: Readonly<Record<
 }
 
 const REMOVED_TRADING_TOOL_SET = new Set<string>(REMOVED_TRADING_TOOL_NAMES)
+const PROPOSAL_TRADING_TOOL_SET = new Set<string>(PROPOSAL_TRADING_TOOL_NAMES)
 
 function hasTradingAuthzRule(name: string): name is keyof typeof TRADING_TOOL_MIN_AUTHZ_LEVEL {
   return Object.prototype.hasOwnProperty.call(TRADING_TOOL_MIN_AUTHZ_LEVEL, name)
@@ -158,6 +162,111 @@ export function buildWorkspaceToolCatalog(
     ...filterWorkspaceToolCatalog(globalTools, opts),
     ...scopedTools,
   }
+}
+
+export interface AccountAuthzSnapshot {
+  readonly id: string
+  readonly maxAuthzLevel?: AuthzLevel | null
+  readonly authzAccountType: AuthzAccountType
+}
+
+export function accountAuthzSnapshotFromConfig(input: {
+  readonly id: string
+  readonly presetId?: string
+  readonly presetConfig?: Record<string, unknown> | null
+  readonly maxAuthzLevel?: AuthzLevel | null
+}): AccountAuthzSnapshot {
+  return {
+    id: input.id,
+    ...(input.maxAuthzLevel ? { maxAuthzLevel: input.maxAuthzLevel } : {}),
+    authzAccountType: resolveAuthzAccountType({
+      presetId: input.presetId,
+      presetConfig: input.presetConfig ?? {},
+    }),
+  }
+}
+
+export function checkTradingProposalAuthz(
+  name: string,
+  args: unknown,
+  opts: {
+    readonly workspaceAuthzLevel: AuthzLevel
+    readonly accounts: readonly AccountAuthzSnapshot[]
+  },
+): { ok: true } | { ok: false; message: string } {
+  if (!PROPOSAL_TRADING_TOOL_SET.has(name)) return { ok: true }
+  const targets = resolveProposalTargetAccounts(name, args, opts.accounts)
+  for (const account of targets) {
+    const effective = resolveEffectiveAuthzLevel({
+      workspaceAuthzLevel: opts.workspaceAuthzLevel,
+      accountMaxAuthzLevel: account.maxAuthzLevel,
+    })
+    if (AUTHZ_LEVEL_RANK[effective] < AUTHZ_LEVEL_RANK.paper) {
+      return {
+        ok: false,
+        message:
+          `Trading proposal refused for account "${account.id}": effective authzLevel is ${effective}; ` +
+          'stage/commit tools require at least paper after applying the workspace level and the account maxAuthzLevel.',
+      }
+    }
+    if (!isAuthzLevelAllowedForAccountType(effective, account.authzAccountType)) {
+      return {
+        ok: false,
+        message:
+          `Trading proposal refused for account "${account.id}": paper-level access only applies to paper/mock accounts, ` +
+          `but this account is ${account.authzAccountType}. Use a paper/mock account or ask a human to grant a live authorization level.`,
+      }
+    }
+  }
+  return { ok: true }
+}
+
+export function wrapTradingProposalToolsWithAuthz(
+  tools: Record<string, Tool>,
+  opts: {
+    readonly workspaceAuthzLevel: AuthzLevel
+    readonly accounts: readonly AccountAuthzSnapshot[]
+  },
+): Record<string, Tool> {
+  const out: Record<string, Tool> = { ...tools }
+  for (const name of PROPOSAL_TRADING_TOOL_NAMES) {
+    const tool = out[name] as (Tool & { execute?: (args: unknown, options: unknown) => unknown }) | undefined
+    if (!tool?.execute) continue
+    const execute = tool.execute
+    out[name] = {
+      ...tool,
+      execute: async (args: unknown, options: unknown) => {
+        const gate = checkTradingProposalAuthz(name, args, opts)
+        if (!gate.ok) return { error: gate.message, code: 'AUTHZ_DENIED' }
+        return await execute(args, options)
+      },
+    } as Tool
+  }
+  return out
+}
+
+function resolveProposalTargetAccounts(
+  name: string,
+  args: unknown,
+  accounts: readonly AccountAuthzSnapshot[],
+): AccountAuthzSnapshot[] {
+  const fields = args && typeof args === 'object' ? args as Record<string, unknown> : {}
+  const source = typeof fields['source'] === 'string' && fields['source'].trim()
+    ? fields['source'].trim()
+    : undefined
+  const aliceId = typeof fields['aliceId'] === 'string' ? fields['aliceId'] : undefined
+  const sourceOrAliceId = source ?? (aliceId ? accountIdFromAliceId(aliceId) : undefined)
+
+  if (name === 'tradingCommit' && !sourceOrAliceId) return [...accounts]
+  if (!sourceOrAliceId) return []
+
+  return accounts.filter((a) => a.id === sourceOrAliceId || a.id.startsWith(`${sourceOrAliceId}-`))
+}
+
+function accountIdFromAliceId(aliceId: string): string | undefined {
+  const idx = aliceId.indexOf('|')
+  if (idx <= 0) return undefined
+  return aliceId.slice(0, idx)
 }
 
 // ==================== Context handed to factories ====================

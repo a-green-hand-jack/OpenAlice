@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { isAuthzLevel, type AuthzLevel } from '@traderalice/uta-protocol';
+import { DEFAULT_AUTHZ_LEVEL, isAuthzLevel, normalizeAuthzLevel, type AuthzLevel } from '@traderalice/uta-protocol';
 
 import type { Logger } from './logger.js';
 
@@ -113,6 +113,21 @@ export class WorkspaceRegistry {
     await this.flush();
   }
 
+  async setAuthzLevel(id: string, authzLevel: AuthzLevel): Promise<{
+    workspace: WorkspaceMeta;
+    from: AuthzLevel;
+    to: AuthzLevel;
+    changed: boolean;
+  } | undefined> {
+    const current = this.byId.get(id);
+    if (!current) return undefined;
+    const from = normalizeAuthzLevel(current.authzLevel);
+    const next: WorkspaceMeta = { ...current, authzLevel };
+    this.byId.set(id, next);
+    await this.flush();
+    return { workspace: next, from, to: authzLevel, changed: from !== authzLevel };
+  }
+
   async remove(id: string): Promise<WorkspaceMeta | undefined> {
     const ws = this.byId.get(id);
     if (!ws) return undefined;
@@ -175,9 +190,14 @@ function validateFile(value: unknown): WorkspaceMeta[] {
     }
     if (e['authzLevel'] !== undefined) {
       if (!isAuthzLevel(e['authzLevel'])) {
-        throw new Error(`workspaces.json: entry ${i} has invalid authzLevel`);
+        console.warn(
+          `workspaces.json: entry ${i} (${e['id']}) has invalid authzLevel ` +
+          `${JSON.stringify(e['authzLevel'])}; degrading that row to ${DEFAULT_AUTHZ_LEVEL}.`,
+        );
+        withTemplate = { ...withTemplate, authzLevel: DEFAULT_AUTHZ_LEVEL };
+      } else {
+        withTemplate = { ...withTemplate, authzLevel: e['authzLevel'] };
       }
-      withTemplate = { ...withTemplate, authzLevel: e['authzLevel'] };
     }
     return withTemplate;
   });

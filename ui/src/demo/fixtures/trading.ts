@@ -42,18 +42,24 @@ export const demoUTASummaries: UTASummary[] = [
     label: 'Alpaca Paper',
     capabilities: { supportedSecTypes: ['STK'], supportedOrderTypes: ['MKT', 'LMT'] },
     health: healthOk,
+    maxAuthzLevel: 'paper',
+    authzAccountType: 'paper',
   },
   {
     id: DEMO_UTA_IBKR,
     label: 'IBKR Demo',
     capabilities: { supportedSecTypes: ['STK', 'OPT'], supportedOrderTypes: ['MKT', 'LMT', 'STP'] },
     health: healthOk,
+    maxAuthzLevel: 'paper',
+    authzAccountType: 'paper',
   },
   {
     id: DEMO_UTA_CRYPTO,
     label: 'Binance',
     capabilities: { supportedSecTypes: ['CRYPTO'], supportedOrderTypes: ['MKT', 'LMT'] },
     health: healthOk,
+    maxAuthzLevel: 'small_live',
+    authzAccountType: 'live',
   },
 ]
 

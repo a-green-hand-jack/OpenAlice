@@ -35,6 +35,16 @@ export const workspacesHandlers = [
     }
     return HttpResponse.json({ workspace })
   }),
+  http.patch('/api/workspaces/:id/authz-level', async ({ params, request }) => {
+    const workspace = demoWorkspaces.find((w) => w.id === String(params.id))
+    if (!workspace) return HttpResponse.json({ error: 'not_found' }, { status: 404 })
+    const body = (await request.json().catch(() => ({}))) as { authzLevel?: unknown }
+    if (!['read_only', 'paper', 'small_live', 'limited_autonomy'].includes(String(body.authzLevel))) {
+      return HttpResponse.json({ error: 'invalid_authz_level' }, { status: 400 })
+    }
+    ;(workspace as { authzLevel?: unknown }).authzLevel = body.authzLevel
+    return HttpResponse.json({ workspace })
+  }),
 
   http.get('/api/workspaces/templates', () => HttpResponse.json({ templates: demoTemplates })),
   http.get('/api/workspaces/templates/:name/readme', () =>
