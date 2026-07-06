@@ -16,7 +16,7 @@ import './contract-ext.js'
 export type CommitHash = string
 
 export interface ApproverIdentity {
-  via: 'alice-bff' | 'loopback'
+  via: 'alice-bff' | 'loopback' | 'auto-push-paper'
   fingerprint?: string
   at: string
 }

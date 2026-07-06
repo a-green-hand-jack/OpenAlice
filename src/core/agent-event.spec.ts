@@ -92,6 +92,19 @@ describe('validateEventPayload', () => {
     })).not.toThrow()
   })
 
+  it('should accept auto-push-paper as an explicitly non-human approver identity', () => {
+    expect(() => validateEventPayload('trade.pushed', {
+      id: 'abc12345',
+      accountId: 'mock-paper',
+      operationCount: 1,
+      operations: [{ action: 'placeOrder', symbol: 'AAPL', status: 'filled' }],
+      approver: { via: 'auto-push-paper', at: '2026-07-06T00:00:00.000Z' },
+      guards: [],
+      guardSummary: { configured: [], evaluated: 0, passed: 0, rejected: 0, skipped: 0 },
+      risk: { state: 'NORMAL' },
+    })).not.toThrow()
+  })
+
   it('should accept valid trade.executed payload', () => {
     expect(() => validateEventPayload('trade.executed', {
       id: 'abc12345:mock-ord-1',

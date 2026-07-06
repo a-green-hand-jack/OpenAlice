@@ -10,8 +10,9 @@ import { tool, type Tool } from 'ai'
 import { z } from 'zod'
 import Decimal from 'decimal.js'
 import { Contract, coerceSecType } from '@traderalice/ibkr'
-import { BrokerError, type OpenOrder } from '@traderalice/uta-protocol'
+import { BrokerError, type AuthzLevel, type OpenOrder } from '@traderalice/uta-protocol'
 import type { UTAManagerSDK } from '@/services/uta-client/index.js'
+import { OPENALICE_EFFECTIVE_AUTHZ_BY_ACCOUNT_ARG } from '@/core/workspace-tool-center.js'
 import { normalizeBrokerSearchPattern } from '@traderalice/uta-protocol'
 import {
   compactAccountInfo, compactCommit, compactContract, compactContractDetails,
@@ -46,6 +47,16 @@ function handleBrokerError(err: unknown): { error: string; code: string; transie
 
 /** A per-account degradation marker: which account failed, and why. */
 type AccountFailure = { source: string } & ReturnType<typeof handleBrokerError>
+
+type CommitAuthzOptions = { effectiveAuthzLevel?: AuthzLevel }
+
+function effectiveAuthzLevelForAccount(args: unknown, accountId: string): AuthzLevel | undefined {
+  if (!args || typeof args !== 'object') return undefined
+  const raw = (args as Record<string, unknown>)[OPENALICE_EFFECTIVE_AUTHZ_BY_ACCOUNT_ARG]
+  if (!raw || typeof raw !== 'object') return undefined
+  const level = (raw as Record<string, unknown>)[accountId]
+  return typeof level === 'string' ? level as AuthzLevel : undefined
+}
 
 /**
  * Run `fn` against every target account, tolerating per-account failure.
@@ -170,12 +181,19 @@ async function noAccountsError(manager: UTAManagerSDK, source?: string): Promise
  *  ceremony when one decision = one operation — which is the dominant agent
  *  flow. The approval wall (push) is untouched. */
 async function stageAndMaybeCommit(
-  uta: { stage: () => Promise<unknown> | unknown; commit: (msg: string) => Promise<unknown> | unknown },
+  uta: {
+    stage: () => Promise<unknown> | unknown
+    commit: (msg: string, opts?: CommitAuthzOptions) => Promise<unknown> | unknown
+  },
   commitMessage?: string,
+  effectiveAuthzLevel?: AuthzLevel,
 ): Promise<Record<string, unknown>> {
   const staged = compactStageResult(await uta.stage())
   if (!commitMessage) return staged
-  const committed = await uta.commit(commitMessage) as Record<string, unknown>
+  const committed = await uta.commit(
+    commitMessage,
+    effectiveAuthzLevel ? { effectiveAuthzLevel } : undefined,
+  ) as Record<string, unknown>
   return {
     ...staged,
     committed: { hash: committed['hash'], message: committed['message'] },
@@ -649,9 +667,14 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
         subAccountId: z.string().optional().describe('Target wallet on multi-wallet venues (e.g. Binance: "spot" / "derivatives"). REQUIRED when the account spans multiple wallets — staging loud-refuses without it and lists the valid ids. Single-wallet brokers ignore it.'),
         commitMessage: z.string().optional().describe('Stage AND commit in one step with this message (your trading thesis). Approval/execution still happens outside the agent tool surface.'),
       }).meta({ examples: [{ aliceId: 'alpaca-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: '1', commitMessage: 'Entry: momentum breakout' }] }),
-      execute: async ({ source, commitMessage, ...params }) => {
+      execute: async (args) => {
+        const { source, commitMessage, ...params } = args
         const uta = await manager.resolveOne(source ?? parseAliceId(params.aliceId)?.utaId ?? '')
-        return stageAndMaybeCommit({ stage: () => uta.stagePlaceOrder(params), commit: (m) => uta.commit(m) }, commitMessage)
+        return stageAndMaybeCommit(
+          { stage: () => uta.stagePlaceOrder(params), commit: (m, opts) => uta.commit(m, opts) },
+          commitMessage,
+          effectiveAuthzLevelForAccount(args, uta.id),
+        )
       },
     }),
 
@@ -670,9 +693,14 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
         goodTillDate: z.string().optional().describe('New expiration date'),
         commitMessage: z.string().optional().describe('Stage AND commit in one step with this message. Approval/execution still happens outside the agent tool surface.'),
       }).meta({ examples: [{ source: 'alpaca-paper', orderId: '1', lmtPrice: '150' }] }),
-      execute: async ({ source, commitMessage, ...params }) => {
+      execute: async (args) => {
+        const { source, commitMessage, ...params } = args
         const uta = await manager.resolveOne(source)
-        return stageAndMaybeCommit({ stage: () => uta.stageModifyOrder(params), commit: (m) => uta.commit(m) }, commitMessage)
+        return stageAndMaybeCommit(
+          { stage: () => uta.stageModifyOrder(params), commit: (m, opts) => uta.commit(m, opts) },
+          commitMessage,
+          effectiveAuthzLevelForAccount(args, uta.id),
+        )
       },
     }),
 
@@ -686,9 +714,14 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
         subAccountId: z.string().optional().describe('Target wallet on multi-wallet venues (e.g. Binance: "spot" / "derivatives"). REQUIRED when the account spans multiple wallets. Single-wallet brokers ignore it.'),
         commitMessage: z.string().optional().describe('Stage AND commit in one step with this message. Approval/execution still happens outside the agent tool surface.'),
       }).meta({ examples: [{ aliceId: 'alpaca-paper|AAPL', commitMessage: 'Exit: thesis invalidated' }] }),
-      execute: async ({ source, commitMessage, ...params }) => {
+      execute: async (args) => {
+        const { source, commitMessage, ...params } = args
         const uta = await manager.resolveOne(source ?? parseAliceId(params.aliceId)?.utaId ?? '')
-        return stageAndMaybeCommit({ stage: () => uta.stageClosePosition(params), commit: (m) => uta.commit(m) }, commitMessage)
+        return stageAndMaybeCommit(
+          { stage: () => uta.stageClosePosition(params), commit: (m, opts) => uta.commit(m, opts) },
+          commitMessage,
+          effectiveAuthzLevelForAccount(args, uta.id),
+        )
       },
     }),
 
@@ -699,9 +732,14 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
         orderId: z.string().describe('Order ID to cancel'),
         commitMessage: z.string().optional().describe('Stage AND commit in one step with this message. Approval/execution still happens outside the agent tool surface.'),
       }).meta({ examples: [{ source: 'alpaca-paper', orderId: '1', commitMessage: 'Cancel: stale level' }] }),
-      execute: async ({ source, orderId, commitMessage }) => {
+      execute: async (args) => {
+        const { source, orderId, commitMessage } = args
         const uta = await manager.resolveOne(source)
-        return stageAndMaybeCommit({ stage: () => uta.stageCancelOrder({ orderId }), commit: (m) => uta.commit(m) }, commitMessage)
+        return stageAndMaybeCommit(
+          { stage: () => uta.stageCancelOrder({ orderId }), commit: (m, opts) => uta.commit(m, opts) },
+          commitMessage,
+          effectiveAuthzLevelForAccount(args, uta.id),
+        )
       },
     }),
 
@@ -711,13 +749,18 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
         source: z.string().optional().describe(sourceDesc(false, 'If omitted, commits all accounts with staged operations.')),
         message: z.string().describe('Commit message explaining your trading decision'),
       }).meta({ examples: [{ message: 'Entry: long AAPL on momentum' }] }),
-      execute: async ({ source, message }) => {
+      execute: async (args) => {
+        const { source, message } = args
         const targets = await manager.resolve(source)
         const results: Array<Record<string, unknown>> = []
         for (const uta of targets) {
           const status = await uta.status()
           if (status.staged.length === 0) continue
-          results.push({ source: uta.id, ...await uta.commit(message) })
+          const effectiveAuthzLevel = effectiveAuthzLevelForAccount(args, uta.id)
+          results.push({
+            source: uta.id,
+            ...await uta.commit(message, effectiveAuthzLevel ? { effectiveAuthzLevel } : undefined),
+          })
         }
         if (results.length === 0) return { message: 'No staged operations to commit.' }
         return results.length === 1 ? results[0] : results

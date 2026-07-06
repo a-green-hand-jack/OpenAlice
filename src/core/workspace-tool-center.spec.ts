@@ -5,6 +5,7 @@ import {
   PROPOSAL_TRADING_TOOL_NAMES,
   READ_ONLY_TRADING_TOOL_NAMES,
   REMOVED_TRADING_TOOL_NAMES,
+  OPENALICE_EFFECTIVE_AUTHZ_BY_ACCOUNT_ARG,
   buildWorkspaceToolCatalog,
   checkTradingProposalAuthz,
   makeWorkspaceResolver,
@@ -152,6 +153,33 @@ describe('trading proposal per-account authz binding', () => {
       {},
     )
     expect(result).toEqual({ ok: true })
+  })
+
+  it('injects the resolved per-account authz level into proposal tool execution', async () => {
+    let seenArgs: unknown
+    const wrapped = wrapTradingProposalToolsWithAuthz({
+      tradingCommit: {
+        description: 'commit',
+        execute: async (args: unknown) => {
+          seenArgs = args
+          return { ok: true }
+        },
+      } as unknown as Tool,
+    }, {
+      workspaceAuthzLevel: 'limited_autonomy',
+      accounts,
+    })
+
+    await (wrapped.tradingCommit.execute as (args: unknown, opts: unknown) => Promise<unknown>)(
+      { source: 'mock-paper', message: 'commit paper proposal' },
+      {},
+    )
+
+    expect(seenArgs).toMatchObject({
+      [OPENALICE_EFFECTIVE_AUTHZ_BY_ACCOUNT_ARG]: {
+        'mock-paper': 'paper',
+      },
+    })
   })
 })
 

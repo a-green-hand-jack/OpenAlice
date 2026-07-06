@@ -59,7 +59,7 @@ export type TradeEventRiskState = 'NORMAL' | 'CAUTIOUS' | 'READ_ONLY' | 'HALT'
 export type TradeEventRiskTransitionBy = 'auto' | 'human'
 
 export interface TradeEventApproverIdentity {
-  via: 'alice-bff' | 'loopback'
+  via: 'alice-bff' | 'loopback' | 'auto-push-paper'
   fingerprint?: string
   at: string
 }
@@ -301,7 +301,11 @@ const TradeMetricValueSchema = Type.Union([
 const TradeMetricsSchema = Type.Record(Type.String(), TradeMetricValueSchema)
 
 const ApproverIdentitySchema = Type.Object({
-  via: Type.Union([Type.Literal('alice-bff'), Type.Literal('loopback')]),
+  via: Type.Union([
+    Type.Literal('alice-bff'),
+    Type.Literal('loopback'),
+    Type.Literal('auto-push-paper'),
+  ]),
   fingerprint: Type.Optional(Type.String()),
   at: Type.String(),
 })
