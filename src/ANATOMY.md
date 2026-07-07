@@ -23,7 +23,8 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   starts at `src/tool/inbox-push.ts:22-24`; registration is in
   `src/main.ts:217-253`.
 - `workspaces/` - PTY-backed workspace launcher, templates, adapters, persistent
-  session identity, scrollback, headless runs, schedules, and issue files.
+  session identity, manual wake input for live sessions, scrollback, headless
+  runs, schedules, and issue files.
   The behavior/support map is
   [../docs/openalice-agent-support.zh.md](../docs/openalice-agent-support.zh.md).
   Open `src/workspaces/service.ts:94-104`, `src/workspaces/session-pool.ts:72-84`,
@@ -74,9 +75,12 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   `src/core/workspace-tool-center.ts:155-188`,
   `src/core/workspace-tool-center.ts:290-455`,
   `src/server/mcp.ts:172-181`, and `src/server/cli.ts:192-201`.
-- `workspaces/` computes adapter commands, then `SessionPool` owns live PTYs:
-  `src/workspaces/service.ts:94-104` -> `src/workspaces/session-pool.ts:72-84`
-  -> `src/workspaces/persistent-session.ts:128-150`.
+- `workspaces/` computes adapter commands, then `SessionPool` owns live PTYs
+  and the manual wake seam that writes to an already-running PTY without
+  spawning a new headless process:
+  `src/workspaces/service.ts:165-174` -> `src/workspaces/service.ts:923-967`
+  -> `src/workspaces/session-pool.ts:155-191` ->
+  `src/workspaces/persistent-session.ts:312-334`.
 - Alice talks to UTA through `@traderalice/uta-protocol`: `src/main.ts:15-16`,
   `src/services/uta-client/UTAManagerSDK.ts:21-30`, and
   `packages/uta-protocol/src/client/UTAClient.ts:48`.
@@ -106,8 +110,10 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   `src/workspaces/config.ts:107-109`; launcher-owned workspace `authzLevel`
   lives in `workspaces.json` via `src/workspaces/workspace-registry.ts:116-127`,
   with corrupt row values degraded at `src/workspaces/workspace-registry.ts:191-200`;
-  session records and scrollback are `src/workspaces/session-registry.ts:81-87`
-  and `src/workspaces/scrollback-store.ts:23-35`.
+  session records, live-session activity timestamps, and scrollback are
+  `src/workspaces/session-registry.ts:81-87`,
+  `src/workspaces/persistent-session.ts:262-334`, and
+  `src/workspaces/scrollback-store.ts:23-35`.
 - `sealing.key` lives beside the portable data root, not inside it:
   `src/core/sealing.ts:1-8` and `src/core/sealing.ts:49-50`.
 

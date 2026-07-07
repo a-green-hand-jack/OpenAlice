@@ -63,7 +63,7 @@ export class HeadlessCapacityError extends Error {
   }
 }
 import { ScrollbackStore } from './scrollback-store.js';
-import { SessionPool, type SessionFactoryContext } from './session-pool.js';
+import { SessionPool, type SessionFactoryContext, type SessionInputResult } from './session-pool.js';
 import { SessionRegistry, type SessionRecord } from './session-registry.js';
 import { buildCliPath, buildSpawnEnv } from './spawn-env.js';
 import { terminalThemeEnv } from './terminal-theme.js';
@@ -165,6 +165,16 @@ export interface WorkspaceService {
      *  Manual/external runs omit it. */
     issueId?: string,
   ): Promise<{ taskId: string }>;
+  /**
+   * Wake an already-live interactive PTY by writing stdin to it. This never
+   * spawns or resumes a session; callers get `not-running` when the record is
+   * known but absent from the live pool.
+   */
+  wakeSession(
+    wsId: string,
+    recordId: string,
+    input: string | Buffer,
+  ): Promise<WakeSessionResult>;
   /** Read-only scheduling projection of every workspace's `.alice/issues/`
    *  directory (scheduled issues only) + each task's last-fired marker and
    *  computed next-due. Powers GET /api/schedule. */
@@ -189,6 +199,10 @@ export interface WorkspaceService {
   isShuttingDown(): boolean;
   dispose(reason: string): Promise<void>;
 }
+
+export type WakeSessionResult =
+  | ({ readonly ok: true } & SessionInputResult)
+  | { readonly ok: false; readonly reason: 'workspace-not-found' | 'session-not-found' | 'not-running' | 'write-failed'; readonly message?: string };
 
 export interface CreateWorkspaceServiceOptions {
   /** Backend's bound web port — used to derive the CORS allowlist. */
@@ -906,6 +920,52 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     transcriptWatcher,
   );
 
+  const wakeSession = async (
+    wsId: string,
+    recordId: string,
+    input: string | Buffer,
+  ): Promise<WakeSessionResult> => {
+    if (!registry.get(wsId)) return { ok: false, reason: 'workspace-not-found' };
+    await sessionRegistry.ensureLoaded(wsId);
+    const record = sessionRegistry.get(wsId, recordId);
+    if (!record) return { ok: false, reason: 'session-not-found' };
+
+    let activity: SessionInputResult | undefined;
+    try {
+      activity = pool.sendInput(recordId, input);
+    } catch (err) {
+      launcherLogger.warn('workspace.session_wake_failed', {
+        wsId,
+        sessionId: recordId,
+        err,
+      });
+      return {
+        ok: false,
+        reason: 'write-failed',
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (!activity || activity.wsId !== wsId) {
+      return { ok: false, reason: 'not-running' };
+    }
+
+    const nowIso = new Date().toISOString();
+    await sessionRegistry
+      .update(wsId, recordId, { state: 'running', lastActiveAt: nowIso })
+      .catch((err) =>
+        launcherLogger.warn('session_registry.wake_update_failed', { wsId, sessionId: recordId, err }),
+      );
+    launcherLogger.info('workspace.session_wake', {
+      wsId,
+      sessionId: recordId,
+      bytes: Buffer.isBuffer(input) ? input.length : Buffer.byteLength(input),
+      lastInputAt: activity.lastInputAt,
+      lastOutputAt: activity.lastOutputAt,
+      lastActivityAt: activity.lastActivityAt,
+    });
+    return { ok: true, ...activity };
+  };
+
   const detectAgents = (): Record<string, AgentAvailability> => {
     const out: Record<string, AgentAvailability> = {};
     const env = { ...process.env, PATH: buildCliPath(process.env) };
@@ -941,6 +1001,9 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
         agentSessionId: liveEntry?.agentSessionId ?? r.resumeHint?.value ?? null,
         pid: liveEntry?.pid ?? null,
         startedAt: liveEntry?.startedAt ?? null,
+        lastInputAt: liveEntry?.lastInputAt ?? null,
+        lastOutputAt: liveEntry?.lastOutputAt ?? null,
+        lastActivityAt: liveEntry?.lastActivityAt ?? null,
         title: r.title ?? null,
       };
     });
@@ -1017,6 +1080,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     runHeadlessProbe: runHeadlessProbeMethod,
     runHeadlessTask: runHeadlessTaskMethod,
     dispatchHeadlessTask: dispatchHeadlessTaskMethod,
+    wakeSession,
     scheduleSnapshot,
     issuesSnapshot,
     issueDetail,

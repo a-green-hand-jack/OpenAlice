@@ -19,8 +19,9 @@ state, or ownership.
 - Alice is the agent runtime under `src/`. Its composition root is
   `src/main.ts:76`, and its assembled `EngineContext` is `src/main.ts:364-376`.
   Start with [src/ANATOMY.md](src/ANATOMY.md) before changing Alice internals.
-  For the full workspace-agent support map (interactive PTY, headless runs,
-  CLI/MCP tools, schedule, Inbox, and UTA trading surface), start with
+  For the full workspace-agent support map (interactive PTY, manual wake for
+  live sessions, headless runs, CLI/MCP tools, schedule, Inbox, and UTA trading
+  surface), start with
   [docs/openalice-agent-support.zh.md](docs/openalice-agent-support.zh.md).
 
 - UTA is the co-located broker carrier under `services/uta/`. Its process entry
@@ -72,8 +73,9 @@ state, or ownership.
 
 - Workspace launcher state is sibling user state under the launcher root:
   registry (including launcher-owned workspace `authzLevel` changed through
-  Alice's audited workspace route), session records, scrollback, headless tasks,
-  and workspace repos. The default root is `src/workspaces/config.ts:107-109`.
+  Alice's audited workspace route), session records, live PTY activity
+  timestamps, scrollback, headless tasks, and workspace repos. The default root
+  is `src/workspaces/config.ts:107-109`.
 
 - Secrets are not stored in plaintext data files after sealing. The machine key
   is outside portable `data/`, at `src/core/sealing.ts:49-50`.

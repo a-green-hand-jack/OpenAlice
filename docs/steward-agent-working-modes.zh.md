@@ -36,6 +36,23 @@
 
 **「可接受」的实证**：v2 prompt 下，牛市 H1≈50%（NVDA 42% / TSLA 65% / AMD 43%），熊市全程持币、回撤 0%（见 [prompt-anatomy §1](steward-prompt-anatomy.zh.md)）。故 maintainer 判定 Mode 1「当前可接受」。已知弱点：震荡市可能因参与指令而被来回打损（stress 批次首个 chop cell −7.6% FAIL），详见 campaign 结果。
 
+### 2.1 Mode 1b：persistent steward wake loop（基础 seam 已实现）
+
+Mode 1b 的目标是保留 Mode 1 的逐周期审慎决策，但把「每周期 fresh headless
+process」替换成「同一个 live steward PTY session 被窄 wake envelope 唤醒」：
+
+1. 人类或未来 scheduler 先确保 workspace 里有一个 live Codex/agent steward session。
+2. 事件到来时调用 `POST /api/workspaces/:id/sessions/:sid/wake`，只注入本轮
+   `message`（默认追加换行），不启动新 `codex exec`。
+3. steward 在同一 transcript 中读取固定 context/event，跑固定 UTA checklist，
+   输出 `no_trade | propose_trade | blocked` 之一，并通过文件/Inbox/UTA git
+   留痕。
+
+当前状态：**基础 wake seam 已实现；生产 scheduler 接入、目标 session 选择、
+heartbeat/idle watchdog、per-account lock、decision ledger schema 仍 TODO。**
+这不是新 prompt 版本，也不改变 v2 prompt 真源；它只是改变同一段行为文本/事件如何
+进入 agent。
+
 ## 3. 调节旋钮（改变交易行为的杠杆）
 
 分**软旋钮**（引导 agent 的意图/风格）与**硬旋钮**（UTA 层强制上限）。今天真正在拧的几乎只有 prompt。

@@ -100,6 +100,8 @@ export class PersistentSession {
   private _agentSessionId: string | null = null;
   /** Wall-clock spawn time; surfaced via the GET /sessions endpoint for tab ordering. */
   private readonly _startedAt = Date.now();
+  private _lastInputAt: number | null = null;
+  private _lastOutputAt: number | null = null;
   /**
    * Latched on the FIRST child exit; lets the resume/spawn route find out the
    * child died (instead of returning 200 OK while the PTY respawn-loops itself
@@ -257,6 +259,22 @@ export class PersistentSession {
     return this._startedAt;
   }
 
+  get lastInputAt(): number | null {
+    return this._lastInputAt;
+  }
+
+  get lastOutputAt(): number | null {
+    return this._lastOutputAt;
+  }
+
+  get lastActivityAt(): number {
+    return Math.max(
+      this._startedAt,
+      this._lastInputAt ?? 0,
+      this._lastOutputAt ?? 0,
+    );
+  }
+
   /**
    * Resolve when the FIRST PTY child exits, or null when `timeoutMs` elapses
    * with the child still alive. Lets the REST spawn/resume handlers report
@@ -289,6 +307,30 @@ export class PersistentSession {
    */
   dumpReplayBuffer(): Buffer {
     return this.buffer.since(this.buffer.headSeq).bytes;
+  }
+
+  /**
+   * Programmatic stdin seam for a live PTY. This is intentionally the same
+   * byte-faithful edge as browser binary input: Buffer payloads are handed to
+   * node-pty without a UTF-8 string round-trip.
+   */
+  writeInput(input: string | Buffer): void {
+    this.writePtyInput(input, 'programmatic');
+  }
+
+  private writePtyInput(input: string | Buffer, source: 'browser' | 'programmatic'): void {
+    if (this.disposed) throw new Error('session disposed');
+    try {
+      this.term.write(input as unknown as string);
+      this._lastInputAt = Date.now();
+      this.log.event('session.input', {
+        bytes: Buffer.isBuffer(input) ? input.length : Buffer.byteLength(input),
+        source,
+      });
+    } catch (err) {
+      this.log.warn('session.write_error', { err });
+      throw err;
+    }
   }
 
   /** Called by the transcript watcher once it identifies which file this PTY is writing. */
@@ -447,6 +489,7 @@ export class PersistentSession {
   private onPtyData(data: Buffer | string): void {
     if (this.disposed) return;
     const buf = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
+    this._lastOutputAt = Date.now();
     this.buffer.append(buf);
 
     const ws = this.ws;
@@ -505,9 +548,9 @@ export class PersistentSession {
         // Browser stdin arrives as UTF-8 bytes. Keep this edge byte-faithful:
         // converting through string corrupts arbitrary terminal sequences and
         // makes CJK/IME behavior depend on JS decoding instead of the PTY.
-        this.term.write(buf as unknown as string);
-      } catch (err) {
-        this.log.warn('session.write_error', { err });
+        this.writePtyInput(buf, 'browser');
+      } catch {
+        // writeInput already logged the write failure.
       }
       return;
     }

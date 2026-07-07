@@ -56,6 +56,11 @@
 > 状态：本节为**起始清单**，逐面 file:line 全量核对 pending。任何 PR 若新增/改动
 > agent-facing 提示文本，须在此登记并跑 `check-anatomy-drift`。
 
+> Wake seam note（2026-07-07）：manual/API wake 不引入新的仓库内 prompt 真源。
+> `POST /api/workspaces/:id/sessions/:sid/wake` 只把调用方提供的 `message` 写入
+> 已 live 的 PTY stdin；具体 wake envelope 文本属于调度/实验层，若未来固化进仓库，
+> 必须在本文件登记并升/标版本。
+
 ## 4. Prompt 漂移规则（Drift Rule for Prompts）
 
 对齐 [ANATOMY.md](../ANATOMY.md) 的 Drift Rule：

@@ -428,3 +428,74 @@ describe('POST /:id/sessions/:sid/resume — concurrent coalescing (ANG-120)', (
     expect([a.body, b.body].filter((x) => x.alreadyRunning)).toHaveLength(1);
   });
 });
+
+describe('POST /:id/sessions/:sid/wake', () => {
+  const TOKEN = 'codex-calm-amber-river';
+
+  function buildWake(result: any = {
+    ok: true,
+    id: TOKEN,
+    wsId: 'ws-1',
+    lastInputAt: 101,
+    lastOutputAt: 99,
+    lastActivityAt: 101,
+  }) {
+    const wakeSession = vi.fn(async () => result);
+    const svc = { wakeSession } as unknown as WorkspaceService;
+    return { app: createWorkspaceRoutes(svc), wakeSession };
+  }
+
+  it('writes a wake message with a default trailing newline', async () => {
+    const { app, wakeSession } = buildWake();
+    const r = await post(app, `/ws-1/sessions/${TOKEN}/wake`, { message: 'check ASSET-A' });
+
+    expect(r.status).toBe(200);
+    expect(wakeSession).toHaveBeenCalledWith('ws-1', TOKEN, 'check ASSET-A\n');
+    expect(r.body).toMatchObject({
+      ok: true,
+      wsId: 'ws-1',
+      sessionId: TOKEN,
+      lastInputAt: 101,
+      lastOutputAt: 99,
+      lastActivityAt: 101,
+    });
+  });
+
+  it('can preserve the exact message when appendNewline is false', async () => {
+    const { app, wakeSession } = buildWake();
+    const r = await post(app, `/ws-1/sessions/${TOKEN}/wake`, {
+      message: 'raw bytes stay caller-controlled',
+      appendNewline: false,
+    });
+
+    expect(r.status).toBe(200);
+    expect(wakeSession).toHaveBeenCalledWith('ws-1', TOKEN, 'raw bytes stay caller-controlled');
+  });
+
+  it('404s missing sessions', async () => {
+    const { app } = buildWake({ ok: false, reason: 'session-not-found' });
+    const r = await post(app, `/ws-1/sessions/${TOKEN}/wake`, { message: 'wake' });
+
+    expect(r.status).toBe(404);
+    expect(r.body.error).toBe('not_found');
+  });
+
+  it('409s known but not-live sessions without spawning a replacement', async () => {
+    const { app } = buildWake({ ok: false, reason: 'not-running' });
+    const r = await post(app, `/ws-1/sessions/${TOKEN}/wake`, { message: 'wake' });
+
+    expect(r.status).toBe(409);
+    expect(r.body.error).toBe('session_not_running');
+  });
+
+  it('rejects over-cap wake messages before touching the service', async () => {
+    const { app, wakeSession } = buildWake();
+    const r = await post(app, `/ws-1/sessions/${TOKEN}/wake`, {
+      message: 'x'.repeat(16001),
+    });
+
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('message_too_long');
+    expect(wakeSession).not.toHaveBeenCalled();
+  });
+});

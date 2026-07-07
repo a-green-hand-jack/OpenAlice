@@ -51,6 +51,8 @@ const AGENT_SESSION_ID_RE = /^[A-Za-z0-9_.-]{8,128}$/;
 
 /** Upper bound on a quick-chat seed prompt — matches the headless-dispatch cap. */
 const MAX_SEED_PROMPT = 16000;
+/** Upper bound on a manual wake message. The route may append one newline. */
+const MAX_WAKE_MESSAGE = 16000;
 
 // In-flight resume coalescing, keyed `${wsId}::${recordId}`. A frontend
 // double-fire (two POST /resume within ms — ANG-120) would otherwise both pass
@@ -104,6 +106,27 @@ function parseTerminalThemeField(raw: unknown): TerminalThemeVariant | { error: 
   if (raw === undefined) return undefined;
   if (isTerminalThemeVariant(raw)) return raw;
   return { error: 'bad_request', message: 'terminalTheme must be "light" or "dark"' };
+}
+
+function parseWakeInput(
+  raw: unknown,
+): { input: string } | { error: string; message: string } {
+  if (typeof raw !== 'object' || raw === null) {
+    return { error: 'bad_request', message: 'body must be an object' };
+  }
+  const fields = raw as Record<string, unknown>;
+  const message = fields['message'];
+  if (typeof message !== 'string') {
+    return { error: 'bad_request', message: 'message must be a string' };
+  }
+  if (message.length > MAX_WAKE_MESSAGE) {
+    return { error: 'message_too_long', message: `max ${MAX_WAKE_MESSAGE} chars` };
+  }
+  const appendRaw = fields['appendNewline'];
+  if (appendRaw !== undefined && typeof appendRaw !== 'boolean') {
+    return { error: 'bad_request', message: 'appendNewline must be a boolean' };
+  }
+  return { input: appendRaw === false ? message : `${message}\n` };
 }
 
 /** Max stored length of a session title (the seed message); the row truncates further. */
@@ -758,6 +781,43 @@ export function createWorkspaceRoutes(
     });
     if (!spawn.ok) return c.json(spawn.body, spawn.status as 400 | 500);
     return c.json({ workspace: await svc.publicMeta(meta), session: spawn.session }, 201);
+  });
+
+  app.post('/:id/sessions/:sid/wake', async (c) => {
+    const id = c.req.param('id');
+    const token = c.req.param('sid');
+    if (!validId(id) || !validId(token)) {
+      return c.json({ error: 'not_found' }, 404);
+    }
+
+    let input: string;
+    try {
+      const parsed = parseWakeInput(await safeJson(c));
+      if ('error' in parsed) return c.json(parsed, 400);
+      input = parsed.input;
+    } catch (err) {
+      return c.json({ error: 'bad_request', message: (err as Error).message }, 400);
+    }
+
+    const result = await svc.wakeSession(id, token, input);
+    if (!result.ok) {
+      if (result.reason === 'workspace-not-found' || result.reason === 'session-not-found') {
+        return c.json({ error: 'not_found' }, 404);
+      }
+      if (result.reason === 'not-running') {
+        return c.json({ error: 'session_not_running', message: 'session is not live' }, 409);
+      }
+      return c.json({ error: 'wake_failed', message: result.message ?? 'write failed' }, 500);
+    }
+
+    return c.json({
+      ok: true,
+      wsId: result.wsId,
+      sessionId: result.id,
+      lastInputAt: result.lastInputAt,
+      lastOutputAt: result.lastOutputAt,
+      lastActivityAt: result.lastActivityAt,
+    });
   });
 
   // pause / stop (alias)

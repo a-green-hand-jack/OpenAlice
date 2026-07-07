@@ -24,13 +24,15 @@ OpenAlice 本身不是一个「每次任务都只会开 `codex exec`」的简陋
 4. **交易面**：UTA 是单独 broker carrier。Agent 通过 `alice-uta` 看到账户、订单、
    risk、trading-as-git staging/commit；可见性再由 workspace `authzLevel` 与账户
    `maxAuthzLevel` 裁剪。Live 自动成交不是现有行为。
-5. **缺口**：jieke/dev 现状没有「唤醒同一个常驻 steward session 并注入 wake
-   envelope」的生产循环；schedule scanner 只能发新的 headless run。要做预期中的
-   常驻 steward，需要在现有交互会话/PTY 基座上补 wake/input/heartbeat/policy 层。
+5. **已补的 seam / 仍缺的层**：交互 PTY 基座现在有手动/API wake seam：可以向
+   一个已存在、仍 live 的 session 注入窄 wake message，而不会偷偷 spawn 新
+   headless run。schedule scanner 仍只会发新的 headless run；要做生产级常驻
+   steward，还要把 event selector / scheduler policy / heartbeat / watchdog 接到
+   这个 input seam 上。
 
 所以问题不在于 OpenAlice 完全不支持 agent 在 workspace 里用工具做事；问题在于
-**现有自动化触发面默认是 fresh headless run，而我们想要的交易 steward 是窄循环、
-常驻、可唤醒、可观测的工作方式**。
+**现有自动化触发面默认仍是 fresh headless run；新增 wake seam 只解决「已有 live
+session 可被窄消息唤醒」这一刀。交易 steward 的生产循环还需要策略层与观测层。**
 
 ## 1. 两条执行平面
 
@@ -48,7 +50,10 @@ OpenAlice 本身不是一个「每次任务都只会开 `codex exec`」的简陋
    repo。
 4. Launcher 注入 `AQ_WS_ID`、`OPENALICE_TOOL_URL`、`AQ_SESSION_ID` 等环境变量。
    Agent 只看到普通 shell 命令；identity 由 shim header 传回服务端。
-5. 暂停/恢复走 session registry。Agent 自己的 transcript id 若可发现，会作为
+5. 手动/API wake 走 `POST /api/workspaces/:id/sessions/:sid/wake`，body 为
+   `{ message, appendNewline? }`。它只向**已 live** 的 PTY stdin 写入消息，默认补
+   一个换行；session 不存在返回 404，不 live 返回 409，不隐式启动 Codex。
+6. 暂停/恢复走 session registry。Agent 自己的 transcript id 若可发现，会作为
    `resumeHint` 保存；恢复时 adapter 转成 `--resume` / `resume <id>` / `--session`。
 
 代码锚点：
@@ -56,7 +61,13 @@ OpenAlice 本身不是一个「每次任务都只会开 `codex exec`」的简陋
 - `src/webui/routes/workspaces.ts:163-230`：交互 spawn 的共享入口。
 - `src/webui/routes/workspaces.ts:652-693`：workspace session spawn route。
 - `src/webui/routes/workspaces.ts:696-760`：quick-chat route。
+- `src/webui/routes/workspaces.ts:786-821`：manual/API wake route。
 - `src/workspaces/service.ts:820-903`：真正组成 PTY spawn command/env。
+- `src/workspaces/service.ts:923-967`：wake service seam、registry `lastActiveAt`
+  更新与 `workspace.session_wake` 日志。
+- `src/workspaces/session-pool.ts:155-191`：live session 投影与 programmatic input。
+- `src/workspaces/persistent-session.ts:262-334`：PTY stdin write seam 与 activity
+  timestamps。
 - `src/workspaces/session-registry.ts:7-64`：持久 session record。
 - `src/workspaces/scrollback-store.ts:9-22`：shell scrollback；agent transcript
   由 agent CLI 自己保存。
@@ -273,9 +284,9 @@ OpenAlice 已有 agent 到用户、agent 到未来自己的协作通道：
 - `src/workspaces/headless-task-registry.ts:24-54`
 
 重要边界：schedule 是「fire prompt」，不是「维护一个永远在线 agent」。它会把 issue
-的 `what` 交给 headless adapter。要做 wake envelope，应把 schedule/event selector
-接到一个可恢复/常驻 session 的 input seam，而不是继续把每次交易点都变成新
-headless task。
+的 `what` 交给 headless adapter。现在 input seam 已存在，但 schedule/event
+selector 尚未接入；生产路径应把 due event 路由到一个已恢复/常驻 session 的 wake
+API，而不是继续把每次交易点都变成新 headless task。
 
 ## 7. Agent 实际行为模型
 
@@ -299,8 +310,9 @@ headless task。
 
 这解释了为什么之前行为实验看起来「每次醒来先大搜索」：从 headless Codex 的视角，
 它就是一个 fresh coding-agent turn。除非 prompt/skills 明确规定窄循环，并且系统
-有常驻 session wake seam，否则它会自然执行 coding-agent 的默认取向：读上下文、
-确认工具、探索环境、再行动。
+有常驻 session wake seam 并且 scheduler 真正使用它，否则它会自然执行
+coding-agent 的默认取向：读上下文、确认工具、探索环境、再行动。当前代码层 seam
+已存在，默认 schedule 策略尚未切换。
 
 ## 8. UI / API 管理面
 
@@ -308,6 +320,8 @@ headless task。
 
 - 创建 workspace、选择模板与默认 agents。
 - spawn / quick-chat / pause / resume / delete interactive sessions。
+- wake 一个已 live 的 interactive session；返回 activity timestamps，便于诊断
+  idle/watchdog 后续接入。
 - 列出 agent availability、读写每个 workspace 的 agent provider config、检查
   credential readiness。
 - 调度 headless run、查看跨 workspace 的 headless run 列表与 stdout/stderr tail。
@@ -334,11 +348,11 @@ jieke/dev 的已有支撑与缺口：
 | 环节 | 当前支撑 | 缺口 |
 |---|---|---|
 | market/event selector | issue schedule、headless API、market data tools | 没有专门的 trading event selector / wake queue |
-| 常驻 steward session | interactive PTY + resume + SessionRegistry | 没有对现有 session 注入 wake envelope 的 API |
+| 常驻 steward session | interactive PTY + resume + SessionRegistry + manual/API wake seam | scheduler/steward policy 尚未自动选择并唤醒目标 session |
 | 固定 checklist | prompt/skills/doc 可规定；UTA CLI 可查 | 没有系统级强制 checklist runner |
 | 决策输出 | Inbox、files、git commit、tool logs | 没有结构化 decision ledger schema |
 | 交易执行 | `alice-uta` + UTA authz + trading-as-git | paper 可自动 commit；live 人批。缺 steward-specific policy guard |
-| 卡死唤醒 | headless watchdog、session resume diagnostics | 没有 interactive session heartbeat/idle wake watchdog；headless task 重启后只会标 interrupted |
+| 卡死唤醒 | headless watchdog、session resume diagnostics、input/output activity timestamps | 没有 interactive session heartbeat/idle wake watchdog；headless task 重启后只会标 interrupted |
 | 并发约束 | 全局 headless capacity cap | 没有 per-workspace / per-account lock，交易型 schedule 可能重叠 |
 | 成本控制 | 无专门 token budget 面 | 需要按 run/session 记录 model/token/cost |
 

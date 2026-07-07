@@ -65,8 +65,19 @@ export interface LiveSessionInfo {
   readonly name: string;
   readonly pid: number;
   readonly startedAt: number;
+  readonly lastInputAt: number | null;
+  readonly lastOutputAt: number | null;
+  readonly lastActivityAt: number;
   readonly agent: string;
   readonly agentSessionId: string | null;
+}
+
+export interface SessionInputResult {
+  readonly id: string;
+  readonly wsId: string;
+  readonly lastInputAt: number | null;
+  readonly lastOutputAt: number | null;
+  readonly lastActivityAt: number;
 }
 
 /**
@@ -141,6 +152,20 @@ export class SessionPool {
     return this.sessions.get(recordId);
   }
 
+  /** Write stdin to an already-live PTY. Returns undefined when not running. */
+  sendInput(recordId: string, input: string | Buffer): SessionInputResult | undefined {
+    const session = this.sessions.get(recordId);
+    if (!session) return undefined;
+    session.writeInput(input);
+    return {
+      id: recordId,
+      wsId: session.wsId,
+      lastInputAt: session.lastInputAt,
+      lastOutputAt: session.lastOutputAt,
+      lastActivityAt: session.lastActivityAt,
+    };
+  }
+
   /** All live sessions belonging to a workspace, oldest-spawned first. */
   liveSessionsFor(wsId: string): LiveSessionInfo[] {
     const ids = this.byWs.get(wsId);
@@ -156,6 +181,9 @@ export class SessionPool {
         name: s.name,
         pid: s.pid,
         startedAt: s.startedAt,
+        lastInputAt: s.lastInputAt,
+        lastOutputAt: s.lastOutputAt,
+        lastActivityAt: s.lastActivityAt,
         agent: adapter?.id ?? 'unknown',
         agentSessionId: s.agentSessionId,
       });

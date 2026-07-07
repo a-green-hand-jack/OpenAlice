@@ -165,8 +165,52 @@ describe('PersistentSession backpressure / socket-drop deadlock', () => {
     const written = term.write.mock.calls[0]?.[0];
     expect(Buffer.isBuffer(written)).toBe(true);
     expect(Buffer.compare(written as Buffer, input)).toBe(0);
+    expect(session.lastInputAt).toEqual(expect.any(Number));
 
     session.dispose('test');
+  });
+
+  it('writes programmatic input to the PTY byte-for-byte and updates input activity', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-07-07T00:00:00.000Z'));
+      const session = new PersistentSession(makeOptions());
+
+      vi.setSystemTime(new Date('2026-07-07T00:00:01.234Z'));
+      const input = Buffer.from([0x00, 0xff, 0x1b, 0x5b, 0x41, 0x0a]);
+      session.writeInput(input);
+
+      expect(term.write).toHaveBeenCalledTimes(1);
+      const written = term.write.mock.calls[0]?.[0];
+      expect(Buffer.isBuffer(written)).toBe(true);
+      expect(Buffer.compare(written as Buffer, input)).toBe(0);
+      expect(session.lastInputAt).toBe(Date.parse('2026-07-07T00:00:01.234Z'));
+      expect(session.lastOutputAt).toBeNull();
+      expect(session.lastActivityAt).toBe(Date.parse('2026-07-07T00:00:01.234Z'));
+
+      session.dispose('test');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('updates output activity when PTY data arrives', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-07-07T00:00:00.000Z'));
+      const session = new PersistentSession(makeOptions());
+
+      vi.setSystemTime(new Date('2026-07-07T00:00:02.000Z'));
+      term.emitData(Buffer.from('agent output'));
+
+      expect(session.lastInputAt).toBeNull();
+      expect(session.lastOutputAt).toBe(Date.parse('2026-07-07T00:00:02.000Z'));
+      expect(session.lastActivityAt).toBe(Date.parse('2026-07-07T00:00:02.000Z'));
+
+      session.dispose('test');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
