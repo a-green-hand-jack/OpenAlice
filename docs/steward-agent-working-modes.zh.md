@@ -46,12 +46,14 @@
 | 软 | **观察模式 + 盲化程度** | paste（OHLCV 内联）；盲但富（给全 OHLCV+量、可自算指标，抹标的/日期/新闻） | agent 拿到多少信息、怎么拿 | tool-native 底座已铺（#64）；盲化的结构性强制靠 #66 seal |
 | 软 | **CLI + 模型** | `agents:['codex']` | 换「大脑」——不同推理质量 → 不同判断 | 未系统对比（claude/opencode/pi 可换） |
 | 软 | **决策节奏** | 周线（6 周 × 5 日线，6 决策点） | 多久醒来决策一次 | 小时/日内 deferred（#65） |
-| 硬 | **`guards[]`** | **空** | 账户级硬风险闸——无论 agent 想干什么都不许越线 | **未启用**（与 prompt 软引导互补，尚未测） |
+| 硬 | **`guards[]`** | **空 → 拟启用** | 账户级硬风险闸——无论 agent 想干什么都不许越线 | **决定启用**（2026-07-07，配 prompt v3 一起兜 over-participation）。**地面真相**：`max-drawdown` 触发→**READ_ONLY 挡新单/加仓，但不强平已有仓**（`risk-state.ts` 无清算路径），故 config 闸=限敞口·非强平；真 hard cap 需改代码。拟 `max-drawdown 10%`+`max-position-size 60%` |
 | 硬 | **`maxAuthzLevel` / 授权档** | `paper` | 渐进授权：read-only → paper → small live | 钉死 paper（I9） |
 | 硬 | **起始资金** | `START=100000` | 规模基准 | — |
 | 硬 | **决策超时** | 260s/次（harness 侧） | agent 能思考多深 | 观察到部分决策卡在 260s 被截断——待调 |
 
 > **要点**：当前唯一在认真调的是 **prompt（软）**；硬风控闸 `guards` 还是空的。这也是 chop cell 会 FAIL 的结构原因——没有硬闸兜底时，全靠 prompt 里「别在震荡市乱交易」这句软约束，而它没兜住。**引入硬闸是一个尚未动用的独立杠杆。**
+>
+> **更新（2026-07-07）**：压测确认 v2 有 **over-participation** 尾部风险（`sp-bear-smci` 两批皆 FAIL，深熊做多被止损 −17~24%，详见 [campaign §4.7](steward-p3-campaign.zh.md)）。对策拍板「**两者都上**」= 启用硬 `guards` + prompt v3。硬闸的机制边界已探明（见上表 `guards[]` 行）：config 级 `max-drawdown` 只降 READ_ONLY、不强平，因此它的作用是**限制敞口 + 阻止给亏损仓加仓**（正是 smci 两次的败因——它一路加仓），而非「严格 X% 强平」。要真·hard cap 得加一条 force-close 风险动作（属代码改动，走 codex）。
 
 ## 4. 工作方式路线图（未来更丰富的方式）
 

@@ -100,6 +100,26 @@ maintainer 要求下一轮测试用 paper 模式跑多市场回测战役。**战
 
 > 已知覆盖缺口（写入未来工作）：窗口短且猛，**未测**慢牛长磨、多月横盘、真·长期托管周期——后者才是 steward 终极目标，属 [working-modes §4](steward-agent-working-modes.zh.md) 的「时间粒度」轴。
 
+### 4.7 压测结果 + over-participation 发现（2026-07-07）
+
+两批已完成、互为复现：串行 `stress-2b4be4c`（10 格）+ 并行隔离栈 `par-K4`（K=4，10 格，~54min vs 串行 3hr = ~3.3×）。
+
+| regime | 结果（两批） | 关键 |
+|---|---|---|
+| bull | **2/2 PASS** | H1 均 ~50–57%、DD 0%——**v2 的 H1 修复稳固、可复现** |
+| bear | **3/4 PASS** | tsla/pltr/meta 全程持币过 −40/−52/−40% = 0 损；**`sp-bear-smci` 两批皆 FAIL**（串行 −16.7% / 并行 −24.1%） |
+| chop | 串行 2/3、并行 4/4 | `chop-nvda` 串行 FAIL(−7.6%) 并行未复现（5 次空决策，判定不能）；chop 噪声大 |
+
+**核心发现——over-participation（过度参与）**：v2 修好了 H1，但带来一个**有界但真实的 H2 代价**。两个 FAIL 同一签名——agent 把 bear/chop **误读**成可参与 → 建仓 → 反转/往复时挨打。smci 是最硬的证据：**−48% 深熊里做多、两批都被止损为大亏，尽管 v2 已有「protect first」+ always-on stop（自设 stop 太松）**。**这不是暴发**（亏损 8–24%、多数 bear 仍正确持币），而是 H1 修复的尾部风险本身；软 prompt 偏置没兜住。
+
+**对策 = 两者都上**（maintainer 拍板 2026-07-07）：
+
+1. **硬 `guards[]`**（当前为空，见 [working-modes §3](steward-agent-working-modes.zh.md)）。地面真相：`max-drawdown` 触发只把账户降到 **READ_ONLY（挡新单/挡加仓），并不强平已有持仓**（`services/uta/src/domain/trading/risk-state.ts` 无清算路径）。故纯 config 的 guard「限制敞口 + 阻止给亏损仓加仓」有效，但**不是「严格 X% 强平」**；若要真·hard cap 需小改代码（issue→codex）。拟先配 `max-drawdown 10% + max-position-size 60%`，验证够不够。
+2. **prompt v3**——强化「证据模糊/走弱/下行时**不参与**」偏置 + 收紧 loss-cap（单仓 stop 亏损 ≤8%、绝不给亏损仓加仓），但**保留 H1 的「清晰上涨才是必须参与」**以防重新胆怯。属工作风格变更，须 maintainer 批准文本 + 登记 [prompt-anatomy](steward-prompt-anatomy.zh.md) §1/§2/§5。
+3. **验证**：K=3 并行（避开 K=4 的空决策 artifact），bear/chop-heavy，确认 smci 被兜住 **且** bull H1 不回落。
+
+> **判据语义重定义**：§3 原把 H2 定为「账户永不触发 READ_ONLY，触发=止损纪律失败、靠笼子兜底不算数」。启用硬闸后此语义翻转——**触发 READ_ONLY 从「失败」变为「闸按预期兜住了 = 期望的安全行为」**。压测的 PASS/FAIL 判据（回撤/收益阈值）不变，但「触发闸」不再自动记 FAIL。
+
 ## 5. 确认点
 
 ```
