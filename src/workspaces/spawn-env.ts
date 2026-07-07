@@ -16,7 +16,9 @@
 
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
+
+import { runtimeProfileFromEnv } from '@/core/runtime-profile.js';
 
 const STRIP_EXACT = new Set<string>([
   'TERM_PROGRAM',
@@ -30,7 +32,10 @@ const STRIP_EXACT = new Set<string>([
   'OPENALICE_INTERNAL_EVENT_TOKEN',
   'OPENALICE_EVENT_INGEST_TOKEN',
   'OPENALICE_EVENT_INGEST_URL',
+  'OPENALICE_TERMINAL_THEME',
+  'OPENALICE_WORKSPACE_CLI_BIN_PATH',
   'OPENCODE_CONFIG_CONTENT',
+  'COLORFGBG',
 ]);
 
 const STRIP_PREFIXES = [
@@ -104,6 +109,7 @@ export function buildSpawnEnv(
     out[k] = v;
   }
   out['PATH'] = buildCliPath(out);
+  delete out['OPENALICE_WORKSPACE_CLI_BIN_PATH'];
   return out;
 }
 
@@ -117,16 +123,26 @@ export function buildSpawnEnv(
  */
 export function buildCliPath(env: NodeJS.ProcessEnv = process.env): string {
   const path = env['PATH'] ?? env['Path'] ?? '';
-  if (process.platform === 'win32') return path;
+  const profile = runtimeProfileFromEnv(env);
+  const managedPiDir = profile.managedPiPath && !profile.managedPiNodePath && existsSync(profile.managedPiPath)
+    ? dirname(profile.managedPiPath)
+    : null;
 
   const home = env['HOME'] ?? homedir();
   const pathEntries = path.split(delimiter);
   const candidates = [
+    env['OPENALICE_WORKSPACE_CLI_BIN_PATH'],
+    managedPiDir,
+    ...profile.managedToolchainPath,
     ...(env['OPENALICE_EXTRA_AGENT_PATH'] ?? '').split(delimiter),
     ...pathEntries,
-    env['PNPM_HOME'],
-    ...POSIX_USER_BIN_DIRS.map((p) => join(home, p)),
-    ...POSIX_SYSTEM_BIN_DIRS,
+    ...(process.platform === 'win32'
+      ? []
+      : [
+          env['PNPM_HOME'],
+          ...POSIX_USER_BIN_DIRS.map((p) => join(home, p)),
+          ...POSIX_SYSTEM_BIN_DIRS,
+        ]),
   ];
 
   const seen = new Set<string>();

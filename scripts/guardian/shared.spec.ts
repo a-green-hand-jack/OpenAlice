@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { readPortsFile, resolvePortConfig, resolveWindowsBin } from './shared.js'
+import { isLiteModeEnv, readPortsFile, resolveGuardianTradingMode, resolvePortConfig, resolveWindowsBin } from './shared.js'
 
 let home: string
 
@@ -18,6 +18,11 @@ afterEach(async () => {
 async function writePortsFile(content: string): Promise<void> {
   await mkdir(join(home, 'data', 'config'), { recursive: true })
   await writeFile(join(home, 'data', 'config', 'ports.json'), content)
+}
+
+async function writeConfigFile(name: string, content: string): Promise<void> {
+  await mkdir(join(home, 'data', 'config'), { recursive: true })
+  await writeFile(join(home, 'data', 'config', name), content)
 }
 
 describe('readPortsFile', () => {
@@ -88,6 +93,57 @@ describe('resolvePortConfig', () => {
 
   it('fails loud on a malformed env value', () => {
     expect(() => resolvePortConfig({ OPENALICE_MCP_PORT: 'banana' }, {})).toThrow(/invalid port/)
+  })
+})
+
+describe('isLiteModeEnv', () => {
+  it('accepts explicit truthy lite-mode values', () => {
+    expect(isLiteModeEnv({ OPENALICE_LITE_MODE: '1' })).toBe(true)
+    expect(isLiteModeEnv({ OPENALICE_LITE_MODE: 'true' })).toBe(true)
+    expect(isLiteModeEnv({ OPENALICE_LITE_MODE: 'yes' })).toBe(true)
+    expect(isLiteModeEnv({ OPENALICE_LITE_MODE: 'on' })).toBe(true)
+  })
+
+  it('accepts OPENALICE_UTA_DISABLED as a direct alias', () => {
+    expect(isLiteModeEnv({ OPENALICE_UTA_DISABLED: '1' })).toBe(true)
+  })
+
+  it('treats unset and falsey values as normal mode', () => {
+    expect(isLiteModeEnv({})).toBe(false)
+    expect(isLiteModeEnv({ OPENALICE_LITE_MODE: '' })).toBe(false)
+    expect(isLiteModeEnv({ OPENALICE_LITE_MODE: '0', OPENALICE_UTA_DISABLED: 'false' })).toBe(false)
+  })
+})
+
+describe('resolveGuardianTradingMode', () => {
+  it('env OPENALICE_TRADING_MODE wins and locks the mode', async () => {
+    await writeConfigFile('trading.json', '{ "mode": "pro" }')
+    await writeConfigFile('accounts.json', '[{ "id": "alpaca" }]')
+    await expect(resolveGuardianTradingMode({ OPENALICE_TRADING_MODE: 'readonly' }, home)).resolves.toMatchObject({
+      mode: 'readonly',
+      source: 'env',
+      envLocked: true,
+      hasUTAConfig: true,
+    })
+  })
+
+  it('uses persisted mode before auto inference', async () => {
+    await writeConfigFile('trading.json', '{ "mode": "lite" }')
+    await writeConfigFile('accounts.json', '[{ "id": "alpaca" }]')
+    await expect(resolveGuardianTradingMode({}, home)).resolves.toMatchObject({
+      mode: 'lite',
+      source: 'config',
+      hasUTAConfig: true,
+    })
+  })
+
+  it('auto defaults to pro only when accounts exist', async () => {
+    await writeConfigFile('accounts.json', '[{ "id": "alpaca" }]')
+    await expect(resolveGuardianTradingMode({}, home)).resolves.toMatchObject({ mode: 'pro', source: 'auto', hasUTAConfig: true })
+
+    await rm(home, { recursive: true, force: true })
+    home = await mkdtemp(join(tmpdir(), 'guardian-ports-'))
+    await expect(resolveGuardianTradingMode({}, home)).resolves.toMatchObject({ mode: 'lite', source: 'auto', hasUTAConfig: false })
   })
 })
 

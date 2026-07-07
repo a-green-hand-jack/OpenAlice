@@ -21,7 +21,14 @@ interface PtyListeners {
   readonly close: Set<(msg: { code: number; reason: string }) => void>
 }
 
+type UpdaterStatus =
+  | { phase: 'available'; version?: string; releaseUrl?: string }
+  | { phase: 'downloading'; version?: string; percent?: number }
+  | { phase: 'downloaded'; version: string; releaseUrl: string }
+  | { phase: 'error'; message: string }
+
 const ptyListeners = new Map<string, PtyListeners>()
+const updaterListeners = new Set<(status: UpdaterStatus) => void>()
 
 function randomId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -63,9 +70,55 @@ ipcRenderer.on('openalice:pty:server-event', (_event, raw: unknown) => {
   }
 })
 
+ipcRenderer.on('openalice:updater:status', (_event, raw: unknown) => {
+  if (!raw || typeof raw !== 'object') return
+  const rec = raw as Record<string, unknown>
+  const phase = rec['phase']
+  if (phase === 'downloaded') {
+    const version = typeof rec['version'] === 'string' ? rec['version'] : ''
+    const releaseUrl = typeof rec['releaseUrl'] === 'string' ? rec['releaseUrl'] : ''
+    if (!version || !releaseUrl) return
+    for (const cb of updaterListeners) cb({ phase, version, releaseUrl })
+    return
+  }
+  if (phase === 'error') {
+    const message = typeof rec['message'] === 'string' ? rec['message'] : 'Update check failed.'
+    for (const cb of updaterListeners) cb({ phase, message })
+    return
+  }
+  if (phase === 'available') {
+    for (const cb of updaterListeners) {
+      cb({
+        phase,
+        ...(typeof rec['version'] === 'string' ? { version: rec['version'] } : {}),
+        ...(typeof rec['releaseUrl'] === 'string' ? { releaseUrl: rec['releaseUrl'] } : {}),
+      })
+    }
+    return
+  }
+  if (phase === 'downloading') {
+    for (const cb of updaterListeners) {
+      cb({
+        phase,
+        ...(typeof rec['version'] === 'string' ? { version: rec['version'] } : {}),
+        ...(typeof rec['percent'] === 'number' ? { percent: rec['percent'] } : {}),
+      })
+    }
+  }
+})
+
 const api = {
   runtime: {
     info: () => ipcRenderer.invoke('openalice:runtime:info'),
+  },
+  updater: {
+    getStatus: () => ipcRenderer.invoke('openalice:updater:get-status'),
+    onStatus: (cb: (status: UpdaterStatus) => void) => {
+      updaterListeners.add(cb)
+      return () => updaterListeners.delete(cb)
+    },
+    installAndRestart: () => ipcRenderer.invoke('openalice:updater:install-and-restart'),
+    openRelease: (version?: string) => ipcRenderer.invoke('openalice:updater:open-release', version),
   },
   workspace: {
     listFiles: (input: { id: string; path: string }) =>

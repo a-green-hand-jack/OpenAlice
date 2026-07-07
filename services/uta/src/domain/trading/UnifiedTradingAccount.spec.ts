@@ -25,11 +25,12 @@ function getStagedPlaceOrder(uta: UnifiedTradingAccount) {
   return { contract: op.contract, order: op.order }
 }
 
-// ==================== Read-only / keyless write guard ====================
+// ==================== Read-only / keyless account-mutation guard ====================
 
-describe('UTA — read-only / keyless write guard', () => {
-  const readOnlyError = /Account "Mock Paper Account" is read-only.*trading operations are not allowed/s
-  const keylessError = /Account "Mock Paper Account" is read-only \(keyless public-data account\).*trading operations are not allowed/s
+describe('UTA — read-only / keyless account-mutation guard', () => {
+  const readOnlyMutationError = /read-only.*mutate the external account/
+  const keylessProposalError = /keyless public-data account/
+  const keylessMutationError = /read-only \(keyless public-data account\).*mutate the external account/
   const placeAapl = () =>
     ({ aliceId: 'mock-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: '1' } as never)
 
@@ -43,19 +44,54 @@ describe('UTA — read-only / keyless write guard', () => {
     if (keyless) flags.keyless = true
   }
 
-  it('refuses stage operations on a read-only account', () => {
+  it('defaults data-source participation on and allows disabling it per account', () => {
+    expect(createUTA().uta.asVendor).toBe(true)
+    expect(createUTA(undefined, { asVendor: false }).uta.asVendor).toBe(false)
+  })
+
+  it('allows a funded read-only account to stage and commit a local proposal', () => {
     const { uta } = createUTA(undefined, { readOnly: true })
     expect(uta.readOnly).toBe(true)
     expect(uta.keyless).toBe(false)
-    expect(() => uta.stageCancelOrder({ orderId: 'x' })).toThrow(/read-only/)
-    expect(() => uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 1 } as never)).toThrow(/read-only/)
+
+    expect(() => uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: '1' })).not.toThrow()
+    const commit = uta.commit('proposal: buy AAPL')
+
+    expect(commit.operationCount).toBe(1)
+    expect(uta.status().pendingMessage).toBe('proposal: buy AAPL')
   })
 
-  it('keyless implies read-only and names keyless in the error', () => {
+  it('blocks push on a read-only account before any broker-side mutation', async () => {
+    const { uta, broker } = createUTA(undefined, { readOnly: true })
+    const placeSpy = vi.spyOn(broker, 'placeOrder')
+
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: '1' })
+    uta.commit('proposal: buy AAPL')
+
+    await expect(uta.push()).rejects.toThrow(/read-only.*mutate the external account/)
+    expect(placeSpy).not.toHaveBeenCalled()
+    expect(uta.status().pendingMessage).toBe('proposal: buy AAPL')
+    expect(uta.status().staged).toHaveLength(1)
+  })
+
+  it('blocks broker dispatch even if internal TradingGit push is reached directly', async () => {
+    const { uta, broker } = createUTA(undefined, { readOnly: true })
+    const cancelSpy = vi.spyOn(broker, 'cancelOrder')
+
+    uta.git.add({ action: 'cancelOrder', orderId: 'ord-1' })
+    uta.git.commit('proposal: cancel stale order')
+    const result = await uta.git.push()
+
+    expect(cancelSpy).not.toHaveBeenCalled()
+    expect(result.submitted).toHaveLength(0)
+    expect(result.rejected[0].error).toMatch(/read-only.*mutate the external account/)
+  })
+
+  it('keyless implies read-only and refuses local trading proposals', () => {
     const { uta } = createUTA(undefined, { keyless: true })
     expect(uta.keyless).toBe(true)
     expect(uta.readOnly).toBe(true)
-    expect(() => uta.stageCancelOrder({ orderId: 'x' })).toThrow(/keyless/)
+    expect(() => uta.stageCancelOrder({ orderId: 'x' })).toThrow(/keyless public-data account/)
   })
 
   it('a normal account stages without complaint', () => {
@@ -64,14 +100,14 @@ describe('UTA — read-only / keyless write guard', () => {
     expect(() => uta.stageCancelOrder({ orderId: 'x' })).not.toThrow()
   })
 
-  it('refuses commit after a staged operation predates a read-only flip', () => {
+  it('allows commit after a staged operation predates a read-only flip', () => {
     const { uta } = createUTA()
     uta.stagePlaceOrder(placeAapl())
     markReadOnly(uta)
 
-    expect(() => uta.commit('buy AAPL')).toThrow(readOnlyError)
+    expect(() => uta.commit('buy AAPL')).not.toThrow()
     expect(uta.status().staged).toHaveLength(1)
-    expect(uta.status().pendingMessage).toBeNull()
+    expect(uta.status().pendingMessage).toBe('buy AAPL')
   })
 
   it('refuses push after a pending commit predates a read-only flip', async () => {
@@ -81,7 +117,7 @@ describe('UTA — read-only / keyless write guard', () => {
     uta.commit('buy AAPL')
     markReadOnly(uta)
 
-    await expect(uta.push()).rejects.toThrow(readOnlyError)
+    await expect(uta.push()).rejects.toThrow(readOnlyMutationError)
     expect(spy).not.toHaveBeenCalled()
     expect(uta.status().pendingMessage).toBe('buy AAPL')
   })
@@ -91,7 +127,7 @@ describe('UTA — read-only / keyless write guard', () => {
     uta.stagePlaceOrder(placeAapl())
     markReadOnly(uta, true)
 
-    expect(() => uta.commit('buy AAPL')).toThrow(keylessError)
+    expect(() => uta.commit('buy AAPL')).toThrow(keylessProposalError)
     expect(uta.status().staged).toHaveLength(1)
     expect(uta.status().pendingMessage).toBeNull()
   })
@@ -103,7 +139,7 @@ describe('UTA — read-only / keyless write guard', () => {
     uta.commit('buy AAPL')
     markReadOnly(uta, true)
 
-    await expect(uta.push()).rejects.toThrow(keylessError)
+    await expect(uta.push()).rejects.toThrow(keylessMutationError)
     expect(spy).not.toHaveBeenCalled()
     expect(uta.status().pendingMessage).toBe('buy AAPL')
   })
@@ -139,7 +175,7 @@ describe('UTA — read-only / keyless write guard', () => {
     expect(restored.status().pendingMessage).toBe('buy AAPL')
     expect(restored.status().pendingHash).toBe(prepared.hash)
 
-    await expect(restored.push()).rejects.toThrow(readOnlyError)
+    await expect(restored.push()).rejects.toThrow(readOnlyMutationError)
     expect(spy).not.toHaveBeenCalled()
     expect(restored.status().pendingMessage).toBe('buy AAPL')
 

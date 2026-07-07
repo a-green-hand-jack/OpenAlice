@@ -19,6 +19,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'node:child_process'
+import { createDecipheriv } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { watch, mkdir, readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
@@ -31,6 +32,90 @@ export interface GuardianPorts {
   utaPort: number
   /** Vite dev-server port — resolved by Guardian (dev only; prod has no Vite). */
   uiPort: number
+}
+
+export function isLiteModeEnv(env: NodeJS.ProcessEnv): boolean {
+  return truthyEnv(env['OPENALICE_LITE_MODE']) || truthyEnv(env['OPENALICE_UTA_DISABLED'])
+}
+
+export type GuardianTradingMode = 'lite' | 'readonly' | 'pro'
+
+export interface GuardianTradingModePlan {
+  mode: GuardianTradingMode
+  source: 'env' | 'config' | 'auto'
+  envLocked: boolean
+  hasUTAConfig: boolean
+}
+
+export function parseGuardianTradingModeEnv(env: NodeJS.ProcessEnv): GuardianTradingMode | null {
+  const raw = env['OPENALICE_TRADING_MODE']?.trim().toLowerCase()
+  if (raw === 'lite' || raw === 'readonly' || raw === 'pro') return raw
+  return isLiteModeEnv(env) ? 'lite' : null
+}
+
+export async function resolveGuardianTradingMode(
+  env: NodeJS.ProcessEnv,
+  userDataHome: string,
+): Promise<GuardianTradingModePlan> {
+  const envMode = parseGuardianTradingModeEnv(env)
+  const configuredMode = await readPersistedTradingMode(userDataHome)
+  const hasUTAConfig = await hasPersistedUTAs(userDataHome)
+  if (envMode) return { mode: envMode, source: 'env', envLocked: true, hasUTAConfig }
+  if (configuredMode) return { mode: configuredMode, source: 'config', envLocked: false, hasUTAConfig }
+  return { mode: hasUTAConfig ? 'pro' : 'lite', source: 'auto', envLocked: false, hasUTAConfig }
+}
+
+async function readPersistedTradingMode(userDataHome: string): Promise<GuardianTradingMode | null> {
+  try {
+    const raw = JSON.parse(await readFile(resolve(userDataHome, 'data', 'config', 'trading.json'), 'utf8')) as { mode?: unknown }
+    return raw.mode === 'lite' || raw.mode === 'readonly' || raw.mode === 'pro' ? raw.mode : null
+  } catch {
+    return null
+  }
+}
+
+async function hasPersistedUTAs(userDataHome: string): Promise<boolean> {
+  try {
+    const raw = JSON.parse(await readFile(resolve(userDataHome, 'data', 'config', 'accounts.json'), 'utf8'))
+    const accounts = isSealedEnvelope(raw)
+      ? await unsealGuardianAccounts(userDataHome, raw)
+      : raw
+    return Array.isArray(accounts) && accounts.length > 0
+  } catch {
+    return false
+  }
+}
+
+function isSealedEnvelope(value: unknown): value is { alg: string; iv: string; tag: string; data: string } {
+  return (
+    typeof value === 'object' && value !== null &&
+    (value as Record<string, unknown>)['$sealed'] === 1 &&
+    typeof (value as Record<string, unknown>)['iv'] === 'string' &&
+    typeof (value as Record<string, unknown>)['tag'] === 'string' &&
+    typeof (value as Record<string, unknown>)['data'] === 'string'
+  )
+}
+
+async function unsealGuardianAccounts(
+  userDataHome: string,
+  envelope: { alg: string; iv: string; tag: string; data: string },
+): Promise<unknown> {
+  if (envelope.alg !== 'aes-256-gcm') return []
+  const keyRaw = (await readFile(resolve(userDataHome, 'sealing.key'), 'utf8')).trim()
+  const key = Buffer.from(keyRaw, 'base64')
+  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(envelope.iv, 'base64'))
+  decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'))
+  const plaintext = Buffer.concat([
+    decipher.update(Buffer.from(envelope.data, 'base64')),
+    decipher.final(),
+  ])
+  return JSON.parse(plaintext.toString('utf8')) as unknown
+}
+
+function truthyEnv(raw: string | undefined): boolean {
+  if (raw === undefined || raw === '') return false
+  const normalized = raw.toLowerCase()
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
 }
 
 // ── Port configuration (L1 → L2) ────────────────────────────
@@ -133,7 +218,7 @@ export function resolvePortConfig(
  * (not left to Vite's own auto-increment) so Guardian can print the real
  * URL and inject the value into Alice for the WS-origin allowlist.
  */
-export async function planPorts(cfg: PortConfig): Promise<GuardianPorts> {
+export async function planPorts(cfg: PortConfig, opts?: { skipUta?: boolean }): Promise<GuardianPorts> {
   const claim = async (name: PortName, choice: PortChoice, probeStart: number): Promise<number> => {
     if (choice.source === 'default') return probeFreePort(probeStart)
     try {
@@ -146,7 +231,9 @@ export async function planPorts(cfg: PortConfig): Promise<GuardianPorts> {
   }
   const webPort = await claim('web', cfg.web, PORT_DEFAULTS.web)
   const mcpPort = await claim('mcp', cfg.mcp, webPort + 1)
-  const utaPort = await claim('uta', cfg.uta, Math.max(PORT_DEFAULTS.uta, mcpPort + 1))
+  const utaPort = opts?.skipUta === true
+    ? cfg.uta.value
+    : await claim('uta', cfg.uta, Math.max(PORT_DEFAULTS.uta, mcpPort + 1))
   const uiPort = await claim('ui', cfg.ui, PORT_DEFAULTS.ui)
   return { webPort, mcpPort, utaPort, uiPort }
 }
@@ -287,6 +374,9 @@ export interface CascadeOpts {
   children: ChildProcess[]
   /** Grace period before SIGKILL fallback. */
   graceMs?: number
+  /** Children whose crash should not bring the whole app down. They are still
+   *  killed during Guardian shutdown. UTA uses this path in lite/offline mode. */
+  nonCriticalChildren?: Set<ChildProcess>
   /** Set true on children whose exit should NOT cascade — UTA during a
    *  Guardian-initiated restart. */
   expectedExits?: Set<ChildProcess>
@@ -297,6 +387,8 @@ export interface CascadeControl {
   /** Mark this child's upcoming exit as expected — Guardian is intentionally
    *  killing it (UTA restart). Call before sending SIGTERM. */
   expectExit: (child: ChildProcess) => void
+  /** Track a child that did not exist when cascade was installed. */
+  trackChild: (child: ChildProcess, opts?: { nonCritical?: boolean }) => void
   /** Track a freshly-spawned replacement so its unexpected exit cascades. */
   trackReplacement: (old: ChildProcess, next: ChildProcess) => void
 }
@@ -305,6 +397,7 @@ export function installCascadeShutdown(opts: CascadeOpts): CascadeControl {
   let stopping = false
   const graceMs = opts.graceMs ?? 5_000
   const expected = opts.expectedExits ?? new Set<ChildProcess>()
+  const nonCritical = opts.nonCriticalChildren ?? new Set<ChildProcess>()
   const children = [...opts.children]
 
   const shutdown = (): void => {
@@ -332,6 +425,10 @@ export function installCascadeShutdown(opts: CascadeOpts): CascadeControl {
         expected.delete(child)
         return
       }
+      if (nonCritical.has(child)) {
+        console.warn(`[guardian] ${childTag(child, children)} exited (code=${code}, signal=${signal}) — optional service offline, continuing`)
+        return
+      }
       console.log(`[guardian] ${childTag(child, children)} exited (code=${code}, signal=${signal}) — cascading shutdown`)
       shutdown()
     })
@@ -345,10 +442,19 @@ export function installCascadeShutdown(opts: CascadeOpts): CascadeControl {
   return {
     shutdown,
     expectExit: (child) => { expected.add(child) },
+    trackChild: (child, childOpts) => {
+      if (!children.includes(child)) children.push(child)
+      if (childOpts?.nonCritical) nonCritical.add(child)
+      attachExitListener(child)
+    },
     trackReplacement: (old, next) => {
       const idx = children.indexOf(old)
       if (idx >= 0) children[idx] = next
       else children.push(next)
+      if (nonCritical.has(old)) {
+        nonCritical.delete(old)
+        nonCritical.add(next)
+      }
       attachExitListener(next)
     },
   }

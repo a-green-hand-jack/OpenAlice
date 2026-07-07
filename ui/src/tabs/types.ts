@@ -31,9 +31,11 @@ export type ViewSpec =
   | { kind: 'market-rotation'; params: Record<string, never> }
   | { kind: 'market-board';   params: { board: 'movers' | 'calendar' | 'macro' | 'term-structure' | 'global-macro' | 'shipping' | 'fed' } }
   | { kind: 'market-detail';  params: { assetClass: 'equity' | 'crypto' | 'currency' | 'commodity'; symbol: string; source?: string } }
-  | { kind: 'settings';       params: { category: 'general' | 'ai-provider' | 'trading' | 'issues' | 'mcp' | 'market-data' | 'news-collector' } }
+  | { kind: 'settings';       params: { category: 'general' | 'ai-provider' | 'agent-permissions' | 'trading' | 'issues' | 'mcp' | 'market-data' | 'news-collector' } }
   | { kind: 'uta-detail';     params: { id: string } }
-  | { kind: 'dev';            params: { tab: 'tools' | 'snapshots' | 'logs' | 'simulator' } }
+  | { kind: 'onboarding';     params: Record<string, never> }
+  | { kind: 'design-project'; params: { project: string } }
+  | { kind: 'dev';            params: { tab: 'tools' | 'onboarding' | 'snapshots' | 'logs' | 'simulator' } }
   | { kind: 'inbox';               params: Record<string, never> }
   | { kind: 'tracked';             params: Record<string, never> }
   | { kind: 'chat-landing';        params: { targetWsId?: string } }

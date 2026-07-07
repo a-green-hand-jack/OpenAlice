@@ -6,6 +6,7 @@ import type { EquityClientLike } from '../domain/market-data/client/types.js'
 import type { BarService } from '../domain/market-data/bars/index.js'
 import type { ReferenceDataService } from '../domain/market-data/reference/types.js'
 import type { Config, WebChannel } from './config.js'
+import type { TradingModePolicy } from '../services/trading-mode.js'
 import type { EventLog } from './event-log.js'
 import type { ToolCallLog } from './tool-call-log.js'
 import type { ToolCenter } from './tool-center.js'
@@ -75,6 +76,7 @@ export interface EngineContext {
   // now goes through the SDK (e.g. `await utaManager.getAggregatedEquity()`
   // for FX-converted totals).
   utaManager: UTAManagerSDK
+  tradingModePolicy: () => TradingModePolicy
   newsProvider?: INewsProvider
 }
 

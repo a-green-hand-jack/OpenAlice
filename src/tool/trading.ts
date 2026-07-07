@@ -16,7 +16,7 @@ import { OPENALICE_EFFECTIVE_AUTHZ_BY_ACCOUNT_ARG } from '@/core/workspace-tool-
 import { normalizeBrokerSearchPattern } from '@traderalice/uta-protocol'
 import {
   compactAccountInfo, compactCommit, compactContract, compactContractDetails,
-  compactOrderFields, compactStageResult, compactStatus,
+  compactOperation, compactOrderFields, compactPushResult, compactStageResult, compactStatus,
   money, price,
 } from './trading-compact.js'
 // `Contract.aliceId` declaration merge is registered as a side-effect
@@ -176,6 +176,21 @@ async function noAccountsError(manager: UTAManagerSDK, source?: string): Promise
   }
 }
 
+async function filterVendorSearchTargets<T extends { id: string }>(
+  manager: UTAManagerSDK,
+  targets: T[],
+): Promise<T[]> {
+  try {
+    const vendorIds = new Set(
+      (await manager.listUTAs())
+        .filter((u) => u.asVendor !== false)
+        .map((u) => u.id),
+    )
+    return targets.filter((t) => vendorIds.has(t.id))
+  } catch {
+    return targets
+  }
+}
 
 /** Stage + (optionally) commit in one call. The stage→commit split is pure
  *  ceremony when one decision = one operation — which is the dominant agent
@@ -202,7 +217,10 @@ async function stageAndMaybeCommit(
 }
 
 /** Build the agent-facing trading proposal and read surface. */
-export function createTradingTools(manager: UTAManagerSDK): Record<string, Tool> {
+export function createTradingTools(
+  manager: UTAManagerSDK,
+  allowAiTrading: () => boolean = () => false,
+): Record<string, Tool> {
   return {
     listUTAs: tool({
       description: 'List all registered trading accounts with their id, provider, label, and capabilities.',
@@ -213,6 +231,8 @@ export function createTradingTools(manager: UTAManagerSDK): Record<string, Tool>
     searchContracts: tool({
       description: `Search broker accounts for tradeable contracts matching a pattern.
 This is a BROKER-LEVEL search — it queries your connected trading accounts.
+By default it uses accounts with data-source participation enabled; pass
+\`source\` to query a specific account explicitly.
 
 Results are either LEAVES (tradeable, use aliceId with getQuote/placeOrder) or
 DIRECTORIES (expandable: true — e.g. a bond issuer): call expandContract on
@@ -237,8 +257,17 @@ hitting the broker, which otherwise expects the bare base ticker.`,
         if (!brokerPattern) return { results: [], message: 'Empty pattern.' }
         // Source-scoped: when the caller pinned an account, only that one is
         // hit; otherwise fan out to all configured accounts.
-        const targets = await manager.resolve(source)
-        if (targets.length === 0) return await noAccountsError(manager, source)
+        const resolvedTargets = await manager.resolve(source)
+        const targets = source ? resolvedTargets : await filterVendorSearchTargets(manager, resolvedTargets)
+        if (targets.length === 0) {
+          if (!source && resolvedTargets.length > 0) {
+            return {
+              results: [],
+              message: 'No UTA data sources are enabled. Pass source to search a specific account, or enable data-source participation on a UTA.',
+            }
+          }
+          return await noAccountsError(manager, source)
+        }
         const all: Array<Record<string, unknown>> = []
         const settled = await Promise.allSettled(
           targets.map(async (uta) => ({ id: uta.id, results: await uta.searchContracts(brokerPattern) })),
@@ -764,6 +793,54 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
         }
         if (results.length === 0) return { message: 'No staged operations to commit.' }
         return results.length === 1 ? results[0] : results
+      },
+    }),
+
+    tradingPush: tool({
+      description: `Push committed operations to the broker — the final, real execution step.
+
+By DEFAULT this does NOT execute: it returns the pending operations and you must ask the user to approve them in the Web UI (Trading as Git page, or the account detail page).
+
+ONLY if the operator has enabled "Allow AI to push trades" in Settings → Agent Permissions does this execute directly — committed operations are sent to the broker as live orders. Use deliberately.`,
+      inputSchema: z.object({
+        source: z.string().optional().describe(sourceDesc(false, 'If omitted, checks all accounts.')),
+      }).meta({ examples: [{ source: 'alpaca-paper' }] }),
+      execute: async ({ source }) => {
+        const targets = await manager.resolve(source)
+        const statuses = await Promise.all(targets.map(async (uta) => ({ uta, status: await uta.status() })))
+        const pending = statuses.filter(({ status }) => status.pendingMessage)
+        if (pending.length === 0) {
+          const uncommitted = statuses.filter(({ status }) => status.staged.length > 0)
+          if (uncommitted.length > 0) {
+            return {
+              error: 'You have staged operations that are NOT committed yet. Call tradingCommit first, then tradingPush.',
+              uncommitted: uncommitted.map(({ uta, status }) => ({ source: uta.id, staged: status.staged.map(compactOperation) })),
+            }
+          }
+          return { message: 'No committed operations to push.' }
+        }
+        // Gate: AI-initiated execution is OFF by default. Without the operator's
+        // explicit opt-in, surface the pending ops for manual Web-UI approval
+        // rather than sending live orders to the broker.
+        if (!allowAiTrading()) {
+          return {
+            message: 'Push requires manual approval (AI trading is disabled). Tell the user to review and approve the pending operations in the Web UI (Trading as Git page, or the account detail page).',
+            pending: pending.map(({ uta, status }) => ({
+              source: uta.id,
+              ...compactStatus(status),
+            })),
+          }
+        }
+        // AI trading enabled — execute for real. Each push() sends the committed
+        // operations to the broker. Per-account failures degrade individually.
+        const results = await Promise.all(pending.map(async ({ uta }) => {
+          try {
+            return { source: uta.id, ...compactPushResult(await uta.push()) }
+          } catch (err) {
+            return { source: uta.id, ...handleBrokerError(err) }
+          }
+        }))
+        return { message: 'AI trading is enabled — pushed committed operations to the broker.', results }
       },
     }),
 

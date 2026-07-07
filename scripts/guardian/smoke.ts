@@ -108,9 +108,20 @@ async function main(): Promise<void> {
   // Windows: shell so the `pnpm` .cmd shim resolves (this outer spawn is the
   // harness, not the code under test — the code under test is what Guardian
   // does internally).
+  const childEnv = { ...process.env, OPENALICE_HOME: root }
+  // The product auto-defaults a fresh data home to Lite mode, but this smoke
+  // harness is intentionally the full-stack Guardian spawn test. Keep UTA in
+  // the hard path unless a caller explicitly asks to exercise Lite.
+  if (
+    !childEnv['OPENALICE_TRADING_MODE'] &&
+    !childEnv['OPENALICE_LITE_MODE'] &&
+    !childEnv['OPENALICE_UTA_DISABLED']
+  ) {
+    childEnv['OPENALICE_TRADING_MODE'] = 'pro'
+  }
   const child: ChildProcess = spawn('pnpm', ['dev'], {
     cwd: root,
-    env: { ...process.env, OPENALICE_HOME: root },
+    env: childEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: !IS_WIN,
     shell: IS_WIN,

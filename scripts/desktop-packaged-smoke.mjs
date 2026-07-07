@@ -76,6 +76,7 @@ if (process.platform !== 'darwin') {
 
 if (!skipBuild) run('build desktop bundle', 'pnpm', ['electron:build'])
 if (!skipPack) {
+  run('vendor managed runtime', 'pnpm', ['vendor:runtime'])
   run(
     signed ? 'pack signed app directory' : 'pack unsigned app directory',
     'pnpm',
