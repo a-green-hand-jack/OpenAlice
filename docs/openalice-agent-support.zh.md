@@ -55,8 +55,9 @@ session 可被窄消息唤醒」这一刀。交易 steward 的生产循环还需
    Agent 只看到普通 shell 命令；identity 由 shim header 传回服务端。
 5. 手动/API wake 走 `POST /api/workspaces/:id/sessions/:sid/wake`，body 为
    `{ message, appendNewline? }`。它只向**已 live** 的 PTY stdin 写入消息，默认把
-   message 与 terminal Enter（CR）分成两次 PTY write，适配 Codex 这类 TUI；
-   session 不存在返回 404，不 live 返回 409，不隐式启动 Codex。
+   message 与 terminal Enter（CR）分成两次 PTY write，中间留一个很短的 paste/submit
+   gap，适配 Codex 这类 TUI；session 不存在返回 404，不 live 返回 409，不隐式启动
+   Codex。
    多周期验收见
    [persistent wake-loop appendix](appendix/persistent-wake-loop-backtest.zh.md)。
 6. 暂停/恢复走 session registry。Agent 自己的 transcript id 若可发现，会作为

@@ -29,7 +29,7 @@ import { logger as launcherLogger } from '../../workspaces/logger.js';
 import { readWorkspaceMetadata, workspaceMetadataSchema, writeWorkspaceMetadata } from '../../workspaces/workspace-metadata.js';
 import type { SessionRecord } from '../../workspaces/session-registry.js';
 import type { WorkspaceMeta } from '../../workspaces/workspace-registry.js';
-import { HeadlessCapacityError, resumeFromRecord, type SessionFactoryContext, type WorkspaceService } from '../../workspaces/service.js';
+import { HeadlessCapacityError, resumeFromRecord, type SessionFactoryContext, type WakeSessionResult, type WorkspaceService } from '../../workspaces/service.js';
 import { isAgentRuntime, type WorkspaceAiCred } from '../../workspaces/cli-adapter.js';
 import { generatePetnameId } from '../../workspaces/petname-id.js';
 import { addCredential, readCredentials, readWorkspaceDefaultAgent, setCredentialLastModel, credentialWires, credentialWireShapeEnum, type Credential } from '../../core/config.js';
@@ -53,6 +53,8 @@ const AGENT_SESSION_ID_RE = /^[A-Za-z0-9_.-]{8,128}$/;
 const MAX_SEED_PROMPT = 16000;
 /** Upper bound on a manual wake message. The route may append one terminal Enter. */
 const MAX_WAKE_MESSAGE = 16000;
+/** Small paste/submit gap for terminal TUIs; Codex does not submit one "text\r" chunk reliably. */
+const WAKE_ENTER_DELAY_MS = 25;
 
 // In-flight resume coalescing, keyed `${wsId}::${recordId}`. A frontend
 // double-fire (two POST /resume within ms — ANG-120) would otherwise both pass
@@ -110,7 +112,7 @@ function parseTerminalThemeField(raw: unknown): TerminalThemeVariant | { error: 
 
 function parseWakeInput(
   raw: unknown,
-): { input: string | readonly string[] } | { error: string; message: string } {
+): { input: string; appendEnter: boolean } | { error: string; message: string } {
   if (typeof raw !== 'object' || raw === null) {
     return { error: 'bad_request', message: 'body must be an object' };
   }
@@ -127,10 +129,9 @@ function parseWakeInput(
     return { error: 'bad_request', message: 'appendNewline must be a boolean' };
   }
   // Terminal UIs (including Codex) submit on carriage return as a key event.
-  // Send the text and the Enter separately; one pasted "text\r" chunk can stay
-  // in Codex's prompt box without submitting.
-  if (appendRaw === false) return { input: message };
-  return { input: message.length === 0 ? '\r' : [message, '\r'] };
+  // Route handling sends the text and Enter separately; one pasted "text\r"
+  // chunk can stay in Codex's prompt box without submitting.
+  return { input: message, appendEnter: appendRaw !== false };
 }
 
 /** Max stored length of a session title (the seed message); the row truncates further. */
@@ -794,17 +795,18 @@ export function createWorkspaceRoutes(
       return c.json({ error: 'not_found' }, 404);
     }
 
-    let input: string | readonly string[];
+    let input = '';
+    let appendEnter = false;
     try {
       const parsed = parseWakeInput(await safeJson(c));
       if ('error' in parsed) return c.json(parsed, 400);
       input = parsed.input;
+      appendEnter = parsed.appendEnter;
     } catch (err) {
       return c.json({ error: 'bad_request', message: (err as Error).message }, 400);
     }
 
-    const result = await svc.wakeSession(id, token, input);
-    if (!result.ok) {
+    const wakeFailure = (result: Extract<WakeSessionResult, { ok: false }>) => {
       if (result.reason === 'workspace-not-found' || result.reason === 'session-not-found') {
         return c.json({ error: 'not_found' }, 404);
       }
@@ -812,7 +814,20 @@ export function createWorkspaceRoutes(
         return c.json({ error: 'session_not_running', message: 'session is not live' }, 409);
       }
       return c.json({ error: 'wake_failed', message: result.message ?? 'write failed' }, 500);
+    };
+
+    let result: WakeSessionResult;
+    if (!appendEnter) {
+      result = await svc.wakeSession(id, token, input);
+    } else if (input.length === 0) {
+      result = await svc.wakeSession(id, token, '\r');
+    } else {
+      const textResult = await svc.wakeSession(id, token, input);
+      if (!textResult.ok) return wakeFailure(textResult);
+      await new Promise((resolve) => setTimeout(resolve, WAKE_ENTER_DELAY_MS));
+      result = await svc.wakeSession(id, token, '\r');
     }
+    if (!result.ok) return wakeFailure(result);
 
     return c.json({
       ok: true,

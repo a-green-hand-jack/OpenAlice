@@ -92,35 +92,41 @@ pnpm dev
 
 ## 4. 本 PR 验证记录
 
-运行环境：隔离 dev stack，`OPENALICE_HOME=/tmp/openalice-pwake-home2`，
-`AQ_LAUNCHER_ROOT=/tmp/openalice-pwake-workspaces2`，UTA/mock-simulator paper，
-backend hot reload 关闭以免源码保存触发 Alice restart 杀掉 live PTY。
+运行环境：隔离 dev stack，`OPENALICE_HOME=/tmp/openalice-codex-wake-1783459861/home`，
+`AQ_LAUNCHER_ROOT=/tmp/openalice-codex-wake-1783459861/workspaces`，
+UTA/mock-simulator paper，backend 指向本 PR worktree。
+
+额外 Codex smoke：真实 Codex interactive session 的第二轮 `/wake` 已验证可提交。
+关键发现是 Codex TUI 不可靠接受单个 `message + "\r"` PTY chunk；默认 wake route
+因此改为先写 message，短暂停顿，再写 terminal Enter（CR）。验证 marker：
+`CODEX_READY_SPLIT_1783461618087` -> `CODEX_WAKE_SPLIT_1783461618087`，
+同一 session `codex-simple-canvas-cloud`，PTY pid `2904068`。
 
 Smoke：
 
 ```bash
 node tools/persistent-wake-loop-backtest.mjs \
-  --base http://127.0.0.1:48731 \
+  --base http://127.0.0.1:49231 \
   --campaign-dir /tmp/claude-1000/-home-user-Projects-OpenAlice/75e8bbb3-d2d1-43a5-8f22-da152c2c22ac/scratchpad/campaign \
   --token <admin-token> \
   --limit 1
 ```
 
-结果：`pwake-20260707213613`，1/1 cell 完成，6/6 wake 均保持同一
+结果：`pwake-20260707220135`，1/1 cell 完成，6/6 wake 均保持同一
 `sessionId` / PTY `pid` / runner `pid` / transcript marker，chop/NVDA PASS。
 
 Full persistent wake-loop campaign：
 
 ```bash
 node tools/persistent-wake-loop-backtest.mjs \
-  --base http://127.0.0.1:48731 \
+  --base http://127.0.0.1:49231 \
   --campaign-dir /tmp/claude-1000/-home-user-Projects-OpenAlice/75e8bbb3-d2d1-43a5-8f22-da152c2c22ac/scratchpad/campaign \
   --token <admin-token> \
   --want 2,4,4
 ```
 
 结果文件：
-`/tmp/claude-1000/-home-user-Projects-OpenAlice/75e8bbb3-d2d1-43a5-8f22-da152c2c22ac/scratchpad/campaign/persistent-wake-results/pwake-20260707214050.json`
+`/tmp/claude-1000/-home-user-Projects-OpenAlice/75e8bbb3-d2d1-43a5-8f22-da152c2c22ac/scratchpad/campaign/persistent-wake-results/pwake-20260707220217.json`
 
 汇总：
 
@@ -131,6 +137,7 @@ node tools/persistent-wake-loop-backtest.mjs \
 | chop | 4/4 | 3 | 0 | 1 | 所有 cell 均稳定同 session/pid/transcript |
 
 逐 cell 的 `session.stableSession`、`session.stableRunner`、
-`session.transcriptHasDoneMarkers` 全为 `true`，每个 cell 都是 6 次 `/wake`。
+`session.transcriptHasDoneMarkers` 全为 `true`，每个 cell 都是 6 次 `/wake`，
+全量 10 cells 共 60 次 wake。
 性能层面 `pw-bull-nvda` 为 WEAK、`pw-chop-tsla` 为 FAIL；这反映 shell proving
 runner 的简单确定性 tape policy，不是 PR #72 wake seam 的 runtime 失败。
