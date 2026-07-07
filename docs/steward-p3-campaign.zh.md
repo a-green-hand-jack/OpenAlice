@@ -1,5 +1,6 @@
 # Steward P3 后半排期 + Paper 多市场行为评估战役
 
+> 版本：v0.3（2026-07-07）——回填 stress harness 与原计划的实况偏差（新增 §4.6；§4.1/§4.4 就地校正：6 周非 12 周、串行非并行、确定性缩放非随机）。工作方式与旋钮的方法论分立到 [steward-agent-working-modes.zh.md](steward-agent-working-modes.zh.md)。
 > 版本：v0.2（2026-07-06）——**确认点 A 已过**：maintainer 批准排期顺序（P3-2 → P3-4a → 战役 → P3-3+P3-4b）、战役设计与 §4.3 匿名化对策。P3-2 开工。
 > 地位：**阶段执行文档**，从属于 [steward-plan.zh.md](steward-plan.zh.md)（v1.0 冻结）与 [steward-p3-design.zh.md](steward-p3-design.zh.md)（v0.3 已批准）。战役是 I8/I9（验证门 + paper 优先）范围内的**行为评估强化**，同时为 P4 模板设计和 P6 晋升标准收集实证——不构成计划变更。
 > 用法：maintainer 直接批注，orchestrator 内联答复升版本。**§4 战役设计（尤其 §4.3 方法论坑）与 §2 排期顺序是需要你确认的核心。**
@@ -43,7 +44,7 @@ maintainer 要求下一轮测试用 paper 模式跑多市场回测战役。**战
 
 1. orchestrator 取一段**真实历史日线**（美股/港股/新加坡经 typebb/OpenBB 历史接口；加密经 ccxt 公开数据），做 §4.3 的匿名化处理后，作为该格子的"剧本"。
 2. 时间推进 = orchestrator 按剧本顺序把价格灌进 mock-simulator 的 mark-price 路由。TP/SL 保护腿在两次决策点之间由 simulator 按价格自动触发——这正是"agent 不在场时退出规则仍在场内生效"的真实模拟。
-3. **决策点**：每个模拟周（5 根日线）触发一次 headless run——agent 醒来，看到"当前"账户与该格子的行情序列（到当前为止），做决策（加仓/减仓/挂腿/不动），auto-push 自动执行,然后 orchestrator 继续推进剧本。每格子 12 周 ≈ 12 次决策点。
+3. **决策点**：每个模拟周（5 根日线）触发一次 headless run——agent 醒来，看到"当前"账户与该格子的行情序列（到当前为止），做决策（加仓/减仓/挂腿/不动），auto-push 自动执行,然后 orchestrator 继续推进剧本。（**实况**：pilot 与 stress 批次均用 **6 周 × 5 日线 = 30 根日线，6 次决策点**，≈30 交易日≈1.5 个月；见 §4.6。原计划的 12 周留作放量时的选项。）
 4. 期末 orchestrator 强制推进到剧本尾,记录期末净值、全程审计链、每次决策的 thesis。
 
 ### 4.2 市场 × 行情矩阵
@@ -71,7 +72,7 @@ maintainer 要求下一轮测试用 paper 模式跑多市场回测战役。**战
 
 ### 4.4 并行执行与资源
 
-- 每格子一个 workspace + 一串 headless codex run。**并行度 3-4 格子一批**（machine 负载 + codex 并发限制;昨晚僵尸进程吃 inotify 的教训——每批结束清理进程再开下一批）。
+- 每格子一个 workspace + 一串 headless codex run。~~**并行度 3-4 格子一批**~~ → **实况：完全串行、codex 独占**（`stress.mjs` 的 `for (const cell of cells)` 顺序跑，每格内 6 周也顺序）。原因是已证实的教训：**两个 codex 会话并发会互相争用，把决策饿死（决策变空/被 260s 截断）**。代价是 10 格 ≈ 3 小时。真正并行需多沙箱栈/多 codex 会话隔离（workspace 架构本为云端并行而设），是后续扩产杠杆。见 §4.6 与 [working-modes §4](steward-agent-working-modes.zh.md)。
 - 每次 headless run 挂看门狗（10 分钟心跳 + 消失检测,已固化)。
 - 成本量级：12 格 × ~12 决策点 ≈ 150 次 codex run（每次几分钟)。试点 4 格 × 6 决策点（6 周剧本）≈ 24 次先验证。
 - harness 脚本（数据抓取/匿名化/推进/采集）是 orchestrator 侧工件,放 `scripts/` 还是独立目录待实现时定;**不进 `src/`**（I6——这是评估工具不是产品能力)。
@@ -80,6 +81,22 @@ maintainer 要求下一轮测试用 paper 模式跑多市场回测战役。**战
 
 - `docs/appendix/steward-paper-campaign-results.md`：矩阵总表（每格子 H1/H2 判定 + 指标）+ 逐格子行为叙述 + 方法论声明（含 §4.3 残余风险）+ 给 P4 模板的硬约束清单 + 给 P3-3/4b 默认值的建议。
 - 原始工件（剧本、审计链、headless 日志)存 scratchpad + 关键部分入 appendix。
+
+### 4.6 实况回填（2026-07-07，stress harness 与计划的偏差）
+
+`campaign/stress.mjs` 是本战役的实际实现，与 §4.1–4.4 的原始计划有若干经验性偏差，如实登记：
+
+| 维度 | 原计划（§4.1–4.4） | 实况（stress.mjs / data.mjs） | 为什么 |
+|---|---|---|---|
+| 窗口时长 | 12 周 | **6 周 × 5 日 = 30 根日线**（≈30 交易日≈1.5 月），周决策 6 次 | pilot 起就用 6 周；短而**猛**——regime 门槛要求 30 日内 ±30% 的移动，测的是对急行情的纪律，非慢磨 |
+| regime 定义 | 定性（"某轮牛市/深熊/横盘"） | **量化**（`data.mjs classify`）：牛=净涨≥30%&maxDD<35%；熊=净跌≥30%；震荡=\|净\|≤15%&maxDD<30%。`selectWindows` 取最典型的非重叠窗口 | 可复现、可自动选窗 |
+| 矩阵 | 4 市场 × 3 行情 = 12 格 | **regime-heavy 批**（默认 2 牛+4 熊+4 震荡=10 格），混合市场 | 牛市 H1~50% 已验证；本批专攻「v2 是否破坏 H2」的开放问题 |
+| 数据源 | typebb/OpenBB + ccxt | **股票经 stack yfinance**（美/港/新，缓存）+ **加密经 Binance 直取** | yfinance 已证实可取美/港/新股史；实现更简 |
+| 匿名化缩放 | **随机**缩放因子 | **确定性**（首日收盘=100）+ day 序号 | 可复现优先（随机会破坏跑批可比性） |
+| 执行 | 并行 3–4 格/批 | **完全串行、codex 独占** | codex 并发争用会饿死决策（见 §4.4） |
+| 判据 | H1≥50%基准 / H2 回撤≤基准60% | regime-aware：牛 H1≥25%&DD≤10%；熊 ret≥−8%&DD≤max(12%,½·BHdd)；震荡 \|ret\|≤6%&DD≤8% | 逐 regime 更可判定 |
+
+> 已知覆盖缺口（写入未来工作）：窗口短且猛，**未测**慢牛长磨、多月横盘、真·长期托管周期——后者才是 steward 终极目标，属 [working-modes §4](steward-agent-working-modes.zh.md) 的「时间粒度」轴。
 
 ## 5. 确认点
 
