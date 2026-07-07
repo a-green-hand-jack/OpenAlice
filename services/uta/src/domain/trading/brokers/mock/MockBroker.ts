@@ -31,6 +31,7 @@ import type {
   TpSlParams,
   Bar,
   BarParams,
+  BarInterval,
 } from '../types.js'
 import '../../contract-ext.js'
 import { derivePositionMath, aggregateAccountFromPositions } from '../../position-math.js'
@@ -73,6 +74,21 @@ interface InternalOrder {
   filledQuantity?: Decimal
   /** Quantity-weighted average fill price (Decimal — no float noise). */
   avgFillPrice?: Decimal
+}
+
+interface InjectedHistoricalBar {
+  timestampMs: number
+  open: string
+  high: string
+  low: string
+  close: string
+  volume: string
+}
+
+interface InjectedBarHistory {
+  interval: BarInterval
+  bars: InjectedHistoricalBar[]
+  visibleThroughMs: number | null
 }
 
 // ==================== Options ====================
@@ -185,6 +201,7 @@ export class MockBroker implements IBroker {
   private _orders = new Map<string, InternalOrder>()
   /** Per-nativeKey markPrice. Replaces the legacy `_quotes` map. */
   private _markPrices = new Map<string, Decimal>()
+  private _barHistory = new Map<string, InjectedBarHistory>()
   /**
    * Contracts seen via deposit / placeOrder / externalTrade, keyed by
    * `getNativeKey(contract)`. `resolveNativeKey` looks up here first so
@@ -493,6 +510,12 @@ export class MockBroker implements IBroker {
 
   async getHistorical(contract: Contract, params: BarParams): Promise<Bar[]> {
     this._record('getHistorical', [contract, params])
+    const injected = this._getInjectedHistorical(contract, params)
+    if (injected) return injected
+    return this._buildSyntheticHistorical(contract, params)
+  }
+
+  private _buildSyntheticHistorical(contract: Contract, params: BarParams): Bar[] {
     const base = (this._markPriceFor(contract) ?? new Decimal(100)).toNumber()
     const n = params.limit ?? 30
     const end = params.end ?? new Date()
@@ -511,6 +534,32 @@ export class MockBroker implements IBroker {
       })
     }
     return bars
+  }
+
+  private _getInjectedHistorical(contract: Contract, params: BarParams): Bar[] | null {
+    const nativeKey = this.getNativeKey(contract)
+    const history = this._barHistory.get(nativeKey)
+    if (!history) return null
+    if (history.interval !== params.interval) return null
+    if (history.visibleThroughMs == null) return []
+
+    const startMs = params.start?.getTime() ?? Number.NEGATIVE_INFINITY
+    const endMs = params.end
+      ? Math.min(params.end.getTime(), history.visibleThroughMs)
+      : history.visibleThroughMs
+
+    const truncated = history.bars
+      .filter((bar) => bar.timestampMs >= startMs && bar.timestampMs <= endMs)
+      .map((bar) => ({
+        timestamp: new Date(bar.timestampMs),
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+        volume: bar.volume,
+      }))
+
+    return params.limit != null ? truncated.slice(-params.limit) : truncated
   }
 
   async getMarketClock(): Promise<MarketClock> {
@@ -562,6 +611,42 @@ export class MockBroker implements IBroker {
     const decimalPrice = price instanceof Decimal ? price : new Decimal(price)
     this._markPrices.set(nativeKey, decimalPrice)
     return this._matchPendingOrders(nativeKey, decimalPrice)
+  }
+
+  parseSimulatorTimestamp(value: number | string): number {
+    return this._parseInjectedBarTime(value)
+  }
+
+  advanceSimClock(nativeKey: string, asOfMs: number): void {
+    if (!Number.isFinite(asOfMs)) {
+      throw new Error(`MockBroker[${this.id}]: advanceSimClock — invalid timestamp ${String(asOfMs)}`)
+    }
+    const history = this._barHistory.get(nativeKey)
+    if (!history) return
+    history.visibleThroughMs = Math.max(history.visibleThroughMs ?? Number.NEGATIVE_INFINITY, asOfMs)
+  }
+
+  injectBars(params: {
+    nativeKey: string
+    interval: BarInterval
+    bars: Array<{ t: number | string; o: number; h: number; l: number; c: number; v: number }>
+  }): void {
+    const normalized = [...params.bars]
+      .map((bar) => ({
+        timestampMs: this._parseInjectedBarTime(bar.t),
+        open: String(bar.o),
+        high: String(bar.h),
+        low: String(bar.l),
+        close: String(bar.c),
+        volume: String(bar.v),
+      }))
+      .sort((a, b) => a.timestampMs - b.timestampMs)
+
+    this._barHistory.set(params.nativeKey, {
+      interval: params.interval,
+      bars: normalized,
+      visibleThroughMs: null,
+    })
   }
 
   /** Move a markPrice by a relative percent (e.g. +5 = up 5%). */
@@ -843,6 +928,17 @@ export class MockBroker implements IBroker {
   /** Resolve markPrice for a contract via its nativeKey. */
   private _markPriceFor(contract: Contract): Decimal | null {
     return this._markPrices.get(this.getNativeKey(contract)) ?? null
+  }
+
+  private _parseInjectedBarTime(value: number | string): number {
+    // Accept epoch-ms as a number OR a pure-digit string; otherwise parse as a
+    // date string. (Used for both injectBars timestamps and mark-price asOf.)
+    const timestampMs =
+      typeof value === 'number' ? value : /^\d+$/.test(value.trim()) ? Number(value) : Date.parse(value)
+    if (!Number.isFinite(timestampMs)) {
+      throw new Error(`MockBroker[${this.id}]: invalid simulator timestamp ${String(value)}`)
+    }
+    return timestampMs
   }
 
   // ==================== Legacy test helpers ====================
