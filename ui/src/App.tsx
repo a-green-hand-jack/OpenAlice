@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { ActivityBar } from './components/ActivityBar'
 import { TabHost } from './components/TabHost'
+import { DesktopUpdatePrompt } from './components/DesktopUpdatePrompt'
 import { UpdateBanner } from './components/UpdateBanner'
 import { DemoBanner } from './demo/DemoBanner'
 import { DemoAnalytics } from './demo/DemoAnalytics'
@@ -36,13 +38,20 @@ function useMediaQuery(query: string): boolean {
 /**
  * Three breakpoints drive the responsive shell:
  *  - <768  (phone):  rail = drawer (hamburger), sidebar = drawer (drill-in)
- *  - 768–1179 (narrow desktop): rail = compact static icon column.
+ *  - 768–959 (small desktop): rail = compact static icon column.
  *    Page-owned sidebars stay static here, so the business navigator does not
  *    disappear just because the app is in a partial-width browser window.
- *  - ≥1180 (roomy desktop): rail can expand to text labels.
+ *  - 960–1279 (narrow desktop): rail keeps text labels in a slimmer column.
+ *  - ≥1280 (roomy desktop): rail gets its full text width.
  */
 const useIsDesktop = () => useMediaQuery('(min-width: 768px)') // rail static
-const useIsRoomy = () => useMediaQuery('(min-width: 1180px)') // text rail allowed
+const useHasRailText = () => useMediaQuery('(min-width: 960px)') // text rail allowed
+const useHasFullRail = () => useMediaQuery('(min-width: 1280px)') // full rail width
+const firstRunGuideEnabled = import.meta.env.VITE_OPENALICE_FIRST_RUN_GUIDE === '1'
+const FirstRunGuide = lazy(async () => {
+  const module = await import('./components/FirstRunGuide')
+  return { default: module.FirstRunGuide }
+})
 
 export function App() {
   return (
@@ -58,7 +67,11 @@ function AppShell() {
   useLocale()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const isDesktop = useIsDesktop() // ≥768 — rail is a static column
-  const isRoomy = useIsRoomy() // ≥1180 — full text rail is allowed
+  const hasRailText = useHasRailText() // ≥960 — text rail is allowed
+  const hasFullRail = useHasFullRail() // ≥1280 — full rail width
+  const railMode = !isDesktop ? 'full' : hasFullRail ? 'full' : hasRailText ? 'narrow' : 'compact'
+  const location = useLocation()
+  const showFirstRunGuide = firstRunGuideEnabled && !location.pathname.startsWith('/design/')
 
   // When the rail becomes a static column, drop its mobile drawer state.
   useEffect(() => {
@@ -101,17 +114,23 @@ function AppShell() {
       {import.meta.env.VITE_DEMO_MODE && <DemoBanner />}
       {import.meta.env.VITE_DEMO_MODE && <DemoAnalytics />}
       <UpdateBanner />
+      <DesktopUpdatePrompt />
       <div className="flex flex-1 min-h-0">
         <ActivityBar
           open={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
           desktopStatic={isDesktop}
-          compactRailForced={isDesktop && !isRoomy}
+          railMode={railMode}
         />
         <div className="flex-1 min-h-0">
           {mainContent}
         </div>
         <UrlAdopter />
+        {showFirstRunGuide && (
+          <Suspense fallback={null}>
+            <FirstRunGuide />
+          </Suspense>
+        )}
       </div>
     </div>
   )

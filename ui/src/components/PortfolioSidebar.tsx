@@ -5,6 +5,8 @@ import { getFocusedTab } from '../tabs/types'
 import { SidebarRow } from './SidebarRow'
 import { SidebarSectionHeader } from './SidebarSectionHeader'
 import { SidebarRowsSkeleton } from './StateViews'
+import { ensureTradingModePolling, useTradingMode } from '../live/trading-mode'
+import { useEffect } from 'react'
 
 /**
  * Portfolio sidebar — Overview + per-UTA accounts.
@@ -18,12 +20,17 @@ import { SidebarRowsSkeleton } from './StateViews'
 export function PortfolioSidebar() {
   const { t } = useTranslation()
   const { utas, loading } = useTradingConfig()
+  const tradingMode = useTradingMode((s) => s.status.mode)
+  const tradingModeLoading = useTradingMode((s) => s.loading)
   const focused = useWorkspace((state) => getFocusedTab(state)?.spec)
   const openOrFocus = useWorkspace((state) => state.openOrFocus)
+
+  useEffect(() => { ensureTradingModePolling() }, [])
 
   const overviewActive = focused?.kind === 'portfolio'
   const focusedUtaId =
     focused?.kind === 'uta-detail' ? focused.params.id : null
+  const lite = !tradingModeLoading && tradingMode === 'lite'
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -36,10 +43,14 @@ export function PortfolioSidebar() {
         />
 
         <SidebarSectionHeader>
-          {t('portfolio.accounts')}{!loading && utas.length > 0 ? ` (${utas.length})` : ''}
+          {t('portfolio.accounts')}{!lite && !loading && utas.length > 0 ? ` (${utas.length})` : ''}
         </SidebarSectionHeader>
 
-        {loading ? (
+        {lite ? (
+          <p className="px-3 py-2 text-[12px] text-text-muted/70 leading-relaxed">
+            Account drill-down is unavailable in Lite mode.
+          </p>
+        ) : loading ? (
           <SidebarRowsSkeleton rows={3} />
         ) : utas.length === 0 ? (
           <p className="px-3 py-2 text-[12px] text-text-muted/70 leading-relaxed">

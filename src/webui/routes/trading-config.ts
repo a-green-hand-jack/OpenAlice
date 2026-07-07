@@ -15,6 +15,8 @@ import {
 } from '@traderalice/uta-protocol'
 import { triggerUTARestart } from '../../services/uta-supervisor/restart-trigger.js'
 import { approverFromAliceRequest } from './approver-identity.js'
+import { resolveUTAUrl } from '../../services/uta-supervisor/url.js'
+import { describeTradingMode } from '../../services/trading-mode.js'
 
 /** Fire-and-forget UTA restart after a config mutation. Logs but doesn't
  *  block the HTTP response — UI returns immediately and Guardian flips
@@ -147,6 +149,8 @@ export function createTradingConfigRoutes(
         enabled: body.enabled !== false,
         guards: Array.isArray(body.guards) ? body.guards : [],
         presetConfig,
+        readOnly: body.readOnly === true,
+        asVendor: body.asVendor !== false,
         ...(body.ephemeral === true ? { ephemeral: true as const } : {}),
       }
       const validated = utaConfigSchema.parse(candidate)
@@ -267,10 +271,11 @@ export function createTradingConfigRoutes(
   // (it owns broker code). Alice forwards the wizard's payload over.
 
   app.post('/test-connection', async (c) => {
-    const utaUrl = process.env['OPENALICE_UTA_URL']
-    if (!utaUrl) {
-      return c.json({ success: false, error: 'UTA URL not set' }, 500)
+    const policy = ctx.tradingModePolicy()
+    if (policy.mode === 'lite') {
+      return c.json({ success: false, error: describeTradingMode('lite') }, 503)
     }
+    const utaUrl = resolveUTAUrl()
     try {
       const body = await c.req.json()
       const headers: Record<string, string> = { 'content-type': 'application/json' }
@@ -284,7 +289,7 @@ export function createTradingConfigRoutes(
       const data = await res.json()
       return c.json(data, res.status as 200 | 400 | 500)
     } catch (err) {
-      return c.json({ success: false, error: err instanceof Error ? err.message : String(err) }, 500)
+      return c.json({ success: false, error: err instanceof Error ? err.message : String(err) }, 503)
     }
   })
 

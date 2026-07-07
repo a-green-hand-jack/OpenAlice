@@ -40,6 +40,7 @@ function makeRoutes(authzProducer?: ProducerHandle<readonly ['authz.level-change
       reconnectUTA: vi.fn(async () => ({ success: true })),
       removeUTA: vi.fn(async () => {}),
     },
+    tradingModePolicy: () => ({ mode: 'pro', source: 'auto', envLocked: false, hasUTAConfig: true }),
   } as unknown as EngineContext
   return createTradingConfigRoutes(ctx, { authzProducer })
 }
@@ -98,6 +99,20 @@ describe('POST /uta — derived id creation', () => {
     expect((body as { id: string }).id).toBe(expectedId)
     expect((body as { label: string }).label).toBe('My OKX')
     expect(utaStore).toHaveLength(1)
+  })
+
+  it('persists account-level capability switches from the create form', async () => {
+    const routes = makeRoutes()
+    const { status, body } = await req(routes, 'POST', '/uta', {
+      presetId: 'okx',
+      presetConfig: { mode: 'live', apiKey: 'k', secret: 's', password: 'p' },
+      readOnly: true,
+      asVendor: false,
+    })
+
+    expect(status).toBe(201)
+    expect(body).toMatchObject({ readOnly: true, asVendor: false })
+    expect(utaStore[0]).toMatchObject({ readOnly: true, asVendor: false })
   })
 
   it('400 when presetId is missing', async () => {

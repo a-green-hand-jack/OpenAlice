@@ -22,7 +22,7 @@ export interface OpenAliceIpcOptions {
   readonly appHome: string
   readonly webPort: number | null
   readonly mcpPort: number | null
-  readonly utaPort: number
+  readonly utaPort: number | null
   readonly getAliceProcess: () => ChildProcess | null
 }
 

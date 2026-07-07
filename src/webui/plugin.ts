@@ -32,6 +32,7 @@ import { createAuthRoutes } from './routes/auth.js'
 import { createAuthMiddleware } from './middleware/auth.js'
 import { mountOpenTypeBB } from '../server/opentypebb.js'
 import { buildSDKCredentials } from '../domain/market-data/credential-map.js'
+import { resolveUTAUrl } from '../services/uta-supervisor/url.js'
 import { createWorkspaceService, type WorkspaceService } from '../workspaces/service.js'
 
 /** Cross-plugin hand-off for WorkspaceService. WebPlugin creates it
@@ -240,16 +241,21 @@ export class WebPlugin implements Plugin {
     app.route('/api/events', createEventsRoutes({ ctx, ingestProducer: this.ingestProducer }))
     app.route('/api/topology', createTopologyRoutes(ctx))
     app.route('/api/trading/config', createTradingConfigRoutes(ctx, { authzProducer: this.authzProducer }))
-    // `/api/trading/*` and `/api/simulator/*` are proxied to the co-located
-    // UTA service (decision #2 of UTA-split v1 — UI stays single-origin).
-    // Trading domain + the MockBroker god-view live on UTA's side.
-    const utaUrl = process.env['OPENALICE_UTA_URL']
-    if (!utaUrl) {
-      throw new Error('OPENALICE_UTA_URL not set — UTA service should be spawned by Guardian before Alice boots')
-    }
+    // `/api/trading/*` and `/api/simulator/*` are proxied to the UTA carrier.
+    // UTA is optional, so the proxy owns the unavailable response instead of
+    // making WebPlugin startup fail.
     const utaInternalToken = process.env['OPENALICE_UTA_INTERNAL_TOKEN']
-    app.route('/api/trading', createTradingProxyRoutes({ utaBaseUrl: utaUrl, internalToken: utaInternalToken }))
-    app.route('/api/simulator', createTradingProxyRoutes({ utaBaseUrl: utaUrl, internalToken: utaInternalToken }))
+    const utaProxy = createTradingProxyRoutes({
+      utaBaseUrl: resolveUTAUrl(),
+      internalToken: utaInternalToken,
+      getPolicy: ctx.tradingModePolicy,
+    })
+    app.route('/api/trading', utaProxy)
+    app.route('/api/simulator', createTradingProxyRoutes({
+      utaBaseUrl: resolveUTAUrl(),
+      internalToken: utaInternalToken,
+      getPolicy: ctx.tradingModePolicy,
+    }))
     app.route('/api/tools', createToolsRoutes(ctx.toolCenter))
     app.route('/api/agent-status', createAgentStatusRoutes(ctx))
     app.route('/api/news', createNewsRoutes(ctx))

@@ -4,17 +4,20 @@ import { EmptyState, Skeleton } from './StateViews'
 import { formatRelativeTime, getIntlLocale } from '../lib/intl'
 import { api } from '../api'
 import { isUnsetDecimal } from '../lib/format'
-import type { TradingAccount, WalletCommitLog, WalletOperation, WalletPushResult, WalletStatus } from '../api/types'
+import { filterAccountTierUTAs } from '../lib/uta-account-filter'
+import type { UTASummary, WalletCommitLog, WalletOperation, WalletPushResult, WalletStatus } from '../api/types'
 
 // ==================== Types ====================
 
+type AccountRef = Pick<UTASummary, 'id' | 'label'>
+
 interface StagedAccount {
-  account: TradingAccount
+  account: AccountRef
   status: WalletStatus
 }
 
 interface PendingAccount {
-  account: TradingAccount
+  account: AccountRef
   status: WalletStatus
 }
 
@@ -31,8 +34,8 @@ interface FlatCommit {
 }
 
 type ReviewItem =
-  | { id: string; kind: 'pending'; account: TradingAccount; status: WalletStatus }
-  | { id: string; kind: 'staged'; account: TradingAccount; status: WalletStatus }
+  | { id: string; kind: 'pending'; account: AccountRef; status: WalletStatus }
+  | { id: string; kind: 'staged'; account: AccountRef; status: WalletStatus }
   | { id: string; kind: 'history'; accountId: string; label: string; commit: WalletCommitLog }
 
 interface OperationDisplay {
@@ -46,7 +49,7 @@ interface OperationDisplay {
 
 // ==================== Helpers ====================
 
-function accountLabel(account: TradingAccount): string {
+function accountLabel(account: AccountRef): string {
   return account.label || account.id
 }
 
@@ -209,7 +212,7 @@ function itemOperations(item: ReviewItem): OperationDisplay[] {
 // ==================== Component ====================
 
 export function PushApprovalPanel() {
-  const [accounts, setAccounts] = useState<TradingAccount[]>([])
+  const [accounts, setAccounts] = useState<AccountRef[]>([])
   const [staged, setStaged] = useState<StagedAccount[]>([])
   const [pending, setPending] = useState<PendingAccount[]>([])
   const [history, setHistory] = useState<AccountHistory[]>([])
@@ -224,7 +227,8 @@ export function PushApprovalPanel() {
 
   const poll = useCallback(async () => {
     try {
-      const { utas: accts } = await api.trading.listUTAs()
+      const { utas } = await api.trading.listUTASummaries()
+      const accts = filterAccountTierUTAs(utas)
       setAccounts(accts)
 
       const stagedResults: StagedAccount[] = []

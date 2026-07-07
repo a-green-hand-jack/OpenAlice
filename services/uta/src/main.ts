@@ -32,6 +32,7 @@ import { buildSDKCredentials } from '@/domain/market-data/credential-map.js'
 import { startOrderSyncPoller } from './domain/trading/order-sync-poller.js'
 import { createUtaEventSinkFromEnv } from './domain/trading/events.js'
 import { createUtaInternalAuth } from './http/internal-auth.js'
+import { buildKeylessDataUTAs } from './domain/trading/keyless-data-sources.js'
 import { createTradingRoutes } from './http/routes-trading.js'
 import { createSimulatorRoutes } from './http/routes-simulator.js'
 import type { UTAEngineContext } from './types.js'
@@ -69,24 +70,11 @@ async function main(): Promise<void> {
   // ==================== Account init (with ephemeral purge) ====================
 
   const survivors = await purgeEphemeralUTAs(await readUTAsConfig())
-  // Built-in keyless read-only data UTAs (binance/okx/bybit) — code-defined, not
-  // persisted to accounts.json, so they can't be edited/clobbered. They serve
-  // public crypto K-lines out-of-box (no API key) and are redundant sources for
-  // the federated bar layer. A user's own exchange UTA uses a different id.
   const userIds = new Set(survivors.map((u) => u.id))
-  const dataUTAs: UTAConfig[] = ['binance', 'okx', 'bybit']
-    .filter((ex) => !userIds.has(`${ex}-readonly`))
-    .map((ex) => ({
-      id: `${ex}-readonly`,
-      label: `${ex[0].toUpperCase()}${ex.slice(1)} (read-only data)`,
-      presetId: 'ccxt-custom',
-      enabled: true,
-      guards: [],
-      presetConfig: { exchange: ex },
-      keyless: true,
-      readOnly: true,
-      editable: false,
-    }))
+  const dataUTAs: UTAConfig[] = buildKeylessDataUTAs(config.trading.keylessDataSources, userIds)
+  if (dataUTAs.length > 0) {
+    console.log(`[uta] keyless data sources enabled: ${dataUTAs.map((u) => u.id).join(', ')}`)
+  }
 
   for (const accCfg of [...dataUTAs, ...survivors]) {
     if (accCfg.enabled === false) continue

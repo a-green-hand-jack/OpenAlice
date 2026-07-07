@@ -17,7 +17,7 @@ export function createQuantTools(deps: CalcDeps) {
     searchBars: tool({
       description: `Find K-line sources for a symbol — returns barIds to paste into calculateQuant's bars(...).
 
-Federates connected brokers (alpaca-paper, binance-readonly, …) AND vendors (fmp, yfinance).
+Federates connected brokers, user-enabled keyless data sources (binance-readonly, …), AND vendors (fmp, yfinance).
 Candidates come back freshest-first. Each carries:
   - barId: use directly, e.g. bars("<barId>", "1d", count=250).
     · broker barIds ("accountId|symbol") need NO asset= in bars().
@@ -49,9 +49,10 @@ A script is one or more \`name = bars(...)\` bindings followed by a final result
   sma(s.close, 50) - sma(s.close, 200)
 
 bars(barId, interval, count=, asOf=, start=, end=, asset=):
-  - barId: "{source}|{symbol}" from searchBars (broker, e.g. "alpaca-paper|AAPL",
-    "binance-readonly|BTC/USDT") or a vendor ("yfinance|AAPL", "fmp|AAPL"). Prefer a broker
-    barId for anything you trade or anything time-sensitive — yfinance is a delayed free
+  - barId: "{source}|{symbol}" from searchBars (broker, e.g. "alpaca-paper|AAPL";
+    opt-in keyless data source, e.g. "binance-readonly|BTC/USDT"; or vendor,
+    e.g. "yfinance|AAPL", "fmp|AAPL"). Prefer a broker/keyless exchange barId
+    for anything time-sensitive when available — yfinance is a delayed free
     fallback (EOD bars can lag a day or two).
   - interval: "1m" "5m" "15m" "30m" "1h" "4h" "1d" "1w".
   - count=N: number of most-recent bars (the natural window for indicators).
@@ -73,11 +74,11 @@ Panels — batch many computations in ONE call (avoids calling this tool N times
 The result can be a labeled dict { "label": expr, ... } or a list [ expr, ... ].
 Each entry must still be a single value (a scalar/record), max 50 entries. Use
 this for multi-timeframe / multi-symbol / multi-indicator at once, e.g.:
-  h1  = bars("binance-readonly|BTC/USDT", "1h",  count=250)
-  h4  = bars("binance-readonly|BTC/USDT", "4h",  count=250)
-  h12 = bars("binance-readonly|BTC/USDT", "12h", count=250)
-  { "1h": rsi(h1.close, 14), "4h": rsi(h4.close, 14), "12h": rsi(h12.close, 14) }
-→ { "1h": 53.2, "4h": 48.9, "12h": 61.4 }
+  h1  = bars("yfinance|BTC-USD", "1h",  count=250, asset="crypto")
+  h4  = bars("yfinance|BTC-USD", "4h",  count=250, asset="crypto")
+  d1  = bars("yfinance|BTC-USD", "1d",  count=250, asset="crypto")
+  { "1h": rsi(h1.close, 14), "4h": rsi(h4.close, 14), "1d": rsi(d1.close, 14) }
+→ { "1h": 53.2, "4h": 48.9, "1d": 61.4 }
 
 Why v2 over calculateIndicator: target a specific source ("chart what I trade"),
 or compare sources in one script, e.g. basis check:

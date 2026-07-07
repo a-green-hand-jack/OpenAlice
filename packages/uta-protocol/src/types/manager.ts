@@ -13,6 +13,8 @@ import type { AuthzAccountType, AuthzLevel } from './authz.js'
 export interface UTASummary {
   id: string
   label: string
+  /** Whether this UTA participates in broker-backed market-data discovery. */
+  asVendor: boolean
   capabilities: AccountCapabilities
   health: BrokerHealthInfo
   maxAuthzLevel?: AuthzLevel

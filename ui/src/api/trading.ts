@@ -1,5 +1,5 @@
 import { fetchJson } from './client'
-import type { TradingAccount, UTASummary, AccountInfo, SubAccountRef, Position, WalletCommitLog, ReconnectResult, UTAConfig, WalletStatus, WalletPushResult, WalletRejectResult, TestConnectionResult, BrokerPreset, UTASnapshotSummary, EquityCurvePoint, PlaceOrderRequest, ClosePositionRequest, CancelOrderRequest, OrderErrorResponse, OrderHistoryEntry, TradeHistoryEntry } from './types'
+import type { UTASummary, AccountInfo, SubAccountRef, Position, WalletCommitLog, ReconnectResult, UTAConfig, WalletStatus, WalletPushResult, WalletRejectResult, TestConnectionResult, BrokerPreset, UTASnapshotSummary, EquityCurvePoint, PlaceOrderRequest, ClosePositionRequest, CancelOrderRequest, OrderErrorResponse, OrderHistoryEntry, TradeHistoryEntry } from './types'
 
 /** Thrown by the one-shot order endpoints when the server returns non-2xx. Carries the phase. */
 export class OrderEntryError extends Error {
@@ -33,12 +33,29 @@ export interface ContractSearchResponse {
   utasConfigured?: number
 }
 
+export interface TradingServiceStatus {
+  available: boolean
+  state: 'available' | 'unavailable'
+  mode: 'lite' | 'readonly' | 'pro'
+  modeSource: 'env' | 'config' | 'auto'
+  envLocked: boolean
+  hasUTAConfig: boolean
+  reason?: string
+  hint?: string
+  startedAt?: string
+  utas?: number
+}
+
 // ==================== Unified Trading API ====================
 
 export const tradingApi = {
+  async status(): Promise<TradingServiceStatus> {
+    return fetchJson('/api/trading/status')
+  },
+
   // ==================== UTAs (listing + per-UTA reads) ====================
 
-  async listUTAs(): Promise<{ utas: TradingAccount[] }> {
+  async listUTAs(): Promise<{ utas: UTASummary[] }> {
     return fetchJson('/api/trading/uta')
   },
 

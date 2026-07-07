@@ -294,6 +294,8 @@ function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }
         <div className={`${hasDocs ? 'mt-6 pt-6 border-t border-border' : ''}`}>
           <MarkdownContent
             text={entry.comments!}
+            strikethrough={false}
+            codeSpanWikilinks
             className="leading-relaxed text-text/90"
           />
         </div>
