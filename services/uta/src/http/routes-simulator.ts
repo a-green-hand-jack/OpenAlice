@@ -19,15 +19,18 @@ import type { Context } from 'hono'
 import { z } from 'zod'
 import type { UTAEngineContext } from '../types.js'
 import { MockBroker } from '../domain/trading/brokers/mock/MockBroker.js'
+import type { BarInterval } from '../domain/trading/brokers/types.js'
 import { SEC_TYPES, type SecType } from '../domain/trading/contract-discipline.js'
 
 // ==================== Schemas ====================
 
 const numericString = z.union([z.string().min(1), z.number()]).transform((v) => String(v))
+const BAR_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'] as const satisfies readonly BarInterval[]
 
 const setMarkPriceSchema = z.object({
   nativeKey: z.string().min(1),
   price: numericString,
+  asOf: z.union([z.number(), z.string().min(1)]).optional(),
 })
 
 const tickPriceSchema = z.object({
@@ -74,6 +77,19 @@ const externalTradeSchema = z.object({
   quantity: numericString,
   price: numericString,
   contract: contractSchema.optional(),
+})
+
+const injectBarsSchema = z.object({
+  nativeKey: z.string().min(1),
+  interval: z.enum(BAR_INTERVALS),
+  bars: z.array(z.object({
+    t: z.union([z.number(), z.string().min(1)]),
+    o: z.number(),
+    h: z.number(),
+    l: z.number(),
+    c: z.number(),
+    v: z.number(),
+  })),
 })
 
 // ==================== Helpers ====================
@@ -127,8 +143,24 @@ export function createSimulatorRoutes(ctx: UTAEngineContext) {
     const body = await parseBody(c, setMarkPriceSchema)
     if (!body.ok) return body.error
     try {
+      const asOfMs = body.data.asOf == null ? null : r.broker.parseSimulatorTimestamp(body.data.asOf)
       const filled = r.broker.setMarkPrice(body.data.nativeKey, body.data.price)
+      if (asOfMs != null) r.broker.advanceSimClock(body.data.nativeKey, asOfMs)
       return c.json({ filled })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
+    }
+  })
+
+  /** Inject anonymized historical OHLCV for simulator-driven getHistorical. */
+  app.post('/uta/:id/inject-bars', async (c) => {
+    const r = resolveMock(ctx, c)
+    if ('error' in r) return r.error
+    const body = await parseBody(c, injectBarsSchema)
+    if (!body.ok) return body.error
+    try {
+      r.broker.injectBars(body.data)
+      return c.json({ ok: true })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
     }

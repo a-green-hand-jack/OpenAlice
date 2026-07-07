@@ -41,6 +41,12 @@ async function req(routes: ReturnType<typeof createSimulatorRoutes>, method: 'GE
   return { status: res.status, body: json }
 }
 
+const AAPL_DAILY_BARS = [
+  { t: '2026-01-01T00:00:00.000Z', o: 100, h: 101, l: 99, c: 100, v: 10 },
+  { t: '2026-01-02T00:00:00.000Z', o: 101, h: 102, l: 100, c: 101, v: 11 },
+  { t: '2026-01-03T00:00:00.000Z', o: 102, h: 103, l: 101, c: 102, v: 12 },
+]
+
 // ==================== Tests ====================
 
 describe('GET /utas', () => {
@@ -123,6 +129,63 @@ describe('POST /uta/:id/mark-price', () => {
     const mock = new MockBroker({ id: 'sim' })
     const routes = createSimulatorRoutes(makeCtx({ sim: mock }))
     const { status } = await req(routes, 'POST', '/uta/sim/mark-price', { wrongField: 'x' })
+    expect(status).toBe(400)
+  })
+
+  it('accepts numeric asOf to advance injected history without matching price to close', async () => {
+    const mock = new MockBroker({ id: 'sim' })
+    const routes = createSimulatorRoutes(makeCtx({ sim: mock }))
+    mock.injectBars({ nativeKey: 'AAPL', interval: '1d', bars: AAPL_DAILY_BARS })
+
+    const { status } = await req(routes, 'POST', '/uta/sim/mark-price', {
+      nativeKey: 'AAPL',
+      price: '999.123456',
+      asOf: Date.parse('2026-01-02T00:00:00.000Z'),
+    })
+
+    expect(status).toBe(200)
+    const bars = await mock.getHistorical(mock.resolveNativeKey('AAPL'), { interval: '1d' })
+    expect(bars.map((bar) => bar.close)).toEqual(['100', '101'])
+  })
+})
+
+describe('POST /uta/:id/inject-bars', () => {
+  it('stores injected bars and getHistorical replays them through explicit mark-price asOf', async () => {
+    const mock = new MockBroker({ id: 'sim' })
+    const routes = createSimulatorRoutes(makeCtx({ sim: mock }))
+
+    const { status } = await req(routes, 'POST', '/uta/sim/inject-bars', {
+      nativeKey: 'AAPL',
+      interval: '1d',
+      bars: AAPL_DAILY_BARS,
+    })
+    expect(status).toBe(200)
+
+    expect(await mock.getHistorical(mock.resolveNativeKey('AAPL'), { interval: '1d' })).toEqual([])
+
+    await req(routes, 'POST', '/uta/sim/mark-price', { nativeKey: 'AAPL', price: '999.123456' })
+    expect(await mock.getHistorical(mock.resolveNativeKey('AAPL'), { interval: '1d' })).toEqual([])
+
+    await req(routes, 'POST', '/uta/sim/mark-price', {
+      nativeKey: 'AAPL',
+      price: '999.123456',
+      asOf: '2026-01-03T00:00:00.000Z',
+    })
+    const bars = await mock.getHistorical(mock.resolveNativeKey('AAPL'), { interval: '1d' })
+
+    expect(bars.map((bar) => bar.close)).toEqual(['100', '101', '102'])
+  })
+
+  it('rejects malformed injected bars with 400', async () => {
+    const mock = new MockBroker({ id: 'sim' })
+    const routes = createSimulatorRoutes(makeCtx({ sim: mock }))
+
+    const { status } = await req(routes, 'POST', '/uta/sim/inject-bars', {
+      nativeKey: 'AAPL',
+      interval: 'bogus',
+      bars: [],
+    })
+
     expect(status).toBe(400)
   })
 })
