@@ -480,8 +480,25 @@ headless workspace dispatch (cron → workspace).
 
 ## Git Workflow
 
-- `origin` = `TraderAlice/OpenAlice` (production)
-- `master` is the only long-living branch. **All PRs target master.**
+- In the maintained fork, `jieke` is `a-green-hand-jack`.
+- `origin` = `a-green-hand-jack/OpenAlice` (jieke's maintained fork).
+- `upstream` = `TraderAlice/OpenAlice` (production upstream).
+- `jieke/dev` is the primary development integration branch. It was
+  originally cut from `upstream/master`; new feature/fix PRs target
+  `jieke/dev` first, not `master`.
+- `master` is the fork's stabilized line. Keep it synced with
+  `upstream/master`, then periodically merge reviewed, mature batches
+  from `jieke/dev` into `master`.
+- Feature/fix work is issue-driven: GitHub issue →
+  `feat/issue-N-<slug>` branch in an isolated worktree → implementation
+  by a sub-agent → PR to `jieke/dev` → independent review by another
+  sub-agent or the main agent → merge → cleanup stale branch/worktree.
+- Upstream/fork sync is deliberate and conflict-aware:
+  `upstream/master` → `origin/master`, then `origin/master` →
+  `jieke/dev`. Do not mix upstream-sync conflicts with feature diffs.
+- Use annotated git tags when a coherent feature set lands or a plan
+  stage is complete. Prefer tagging the `master` merge commit that made
+  the stage stable; dev-only milestones must be clearly named as such.
 - `local` is the local-collaboration branch (see below). It's a regular
   feature branch in shape, but pinned to a fixed name so multiple local
   AI sessions sharing one git worktree don't fight over checkouts.
@@ -512,8 +529,10 @@ evaluate / merge PR #N":
    ```bash
    gh pr view <N> --json headRepositoryOwner,author,headRefName,isCrossRepository
    ```
-2. If `headRepositoryOwner.login` IS `TraderAlice` (the user's own branch —
-   `dev`, `local`, `feat/*`, `claude/*-XXXXX`) → proceed normally.
+2. If `headRepositoryOwner.login` is the trusted owner for this checkout
+   (`a-green-hand-jack` in fork mode, `TraderAlice` in upstream-maintainer
+   mode; branches such as `jieke/dev`, `dev`, `local`, `feat/*`,
+   `claude/*-XXXXX`) → proceed normally.
 3. If it's **external** (any other owner, or `isCrossRepository: true`) →
    the main-worktree session STILL does not pull it. Report it to the user
    (author + one-line title from the metadata) and stop. Clearing it
@@ -606,15 +625,18 @@ it saves. Hand parallel tracks off to cloud Claude sessions.
 - **NEVER delete `master`, `dev`, or `local` branches** — `master` and
   `dev` are GitHub-protected (`allow_deletions: false`,
   `allow_force_pushes: false`). `local` is conventionally permanent too.
-- When merging PRs, **NEVER use `--delete-branch`** — destroys source
-  branch history. The branch can stay; future tooling needs the SHAs.
+- When merging PRs, do not combine the merge with automatic
+  `--delete-branch`. Merge first, then delete stale feature branches
+  deliberately only after the PR merge commit preserves the history.
+  Never delete long-lived branches.
 - **Prefer `--merge` over `--squash`** — squash flattens individual
   commits. Squash only when the history is genuinely messy and even
   then never combined with `--delete-branch`.
 - `archive/dev-pre-beta6` is a historical snapshot — do not modify or
   delete.
-- **After merging a PR**, always `git fetch origin && git pull origin master`
-  on the source branch to sync. Stale local refs cause PRs with wrong diff.
+- **After merging a PR**, always sync the source branch against the PR
+  target (`jieke/dev` for fork feature PRs, `master` for upstream-mode
+  PRs). Stale local refs cause PRs with wrong diff.
 
 ### Open-of-session checklist (every session, first action)
 
@@ -732,13 +754,25 @@ Everything else in this file (branch safety, external-PR quarantine,
 migrations, pre-commit verification) still applies. Full process:
 [docs/fork-workflow.md](docs/fork-workflow.md).
 
-- **Branch model**: fork `master` = integration base. Every change is
+- **Branch model**: `jieke/dev` = primary development integration
+  branch; fork `master` = stabilized line. Every feature/fix is
   issue-driven: GitHub issue → `feat/issue-N-<slug>` branch in a
-  `.worktrees/issue-N/` worktree → PR to fork `master` → CI green +
-  independent audit → merge (`--merge`, never `--delete-branch`) →
-  post-merge `pnpm test:smoke` → remove the worktree. `jieke/dev` is
-  the maintainer's manual scratch branch, outside the pipeline.
-  Upstream sync = a dedicated PR merging `upstream/master`.
+  `.worktrees/issue-N/` worktree created from `jieke/dev` →
+  implementation by a sub-agent → PR to `jieke/dev` → CI green +
+  independent review by a different sub-agent or the main agent → merge
+  (`--merge`, never squash by default) → cleanup stale branch/worktree.
+  Upstream sync is separate: `upstream/master` → `origin/master`, then
+  `origin/master` → `jieke/dev`. Periodically merge reviewed, mature
+  batches from `jieke/dev` into fork `master`.
+- **Conflict discipline**: never hide upstream/fork conflicts inside a
+  feature PR. Fork doctrine files (`AGENTS.md`, `CLAUDE.md`,
+  `docs/fork-workflow.md`) default to the fork policy; conflicts in
+  trading, UTA, auth, config, migrations, credentials, or workflow
+  automation require maintainer direction before resolution.
+- **Milestone tags**: when a feature group lands or a plan stage is
+  reached, create an annotated tag on the stable `master` merge commit
+  when possible. Dev-only tags must be clearly named; never move an
+  existing tag without explicit maintainer approval.
 - **Worktree sandbox is non-negotiable**: every worktree that runs the
   app or tests sets `OPENALICE_HOME=$PWD/.sandbox-home` and
   `AQ_LAUNCHER_ROOT=$PWD/.sandbox-ws`; parallel stacks remap ports via
