@@ -112,6 +112,32 @@ wiring. When working on one of these, read its guide first:
   where they live. Rules that matter: demo accounts only, never trust the
   ledger over the venue, leave accounts flat, one regression spec per fix.
 
+## Knowledge capture is part of done
+
+Do not wait for the maintainer to ask for documentation, memory, or ANATOMY
+updates. Any session that changes behavior, architecture, ownership
+boundaries, safety invariants, operational workflow, prompt doctrine, or
+experimental conclusions must update the durable knowledge surfaces in the
+same change before calling the work complete.
+
+Required sweep:
+
+- **Docs** — update the relevant `docs/` page when the mental model, runbook,
+  campaign result, prompt, or operator workflow changed.
+- **ANATOMY** — update the nearest `ANATOMY.md` when files move, ownership
+  changes, process lifecycle/routing changes, persisted state changes, or a
+  new load-bearing code path appears. Run
+  `pnpm exec tsx tools/check-anatomy-drift.ts --check` after editing it.
+- **Memory** — when the session has an available persistent memory surface,
+  record stable project facts, decisions, and lessons learned there too. Keep
+  it high-signal and non-sensitive; never store credentials, private paths, or
+  temporary command output as memory.
+
+This is a completion gate, not a nice-to-have. If the code is done but the
+knowledge surfaces still describe the old world, the change is not done.
+README remains governed by `## Working with README.md`: scan after large
+changes, but ask the maintainer before changing product positioning.
+
 ## Surfacing future work — Linear, not TODO.md
 
 When a session notices something worth fixing later but **out of scope
@@ -241,7 +267,7 @@ src/                           # Alice process — agent runtime
 │                              # probe, file/git services for in-workspace
 │                              # ops, persistent-session reattach.
 │   ├── adapters/              # claude.ts / codex.ts / opencode.ts / pi.ts / shell.ts
-│   └── templates/             # auto-quant, chat
+│   └── templates/             # auto-quant, chat, steward
 ├── services/                  # Cross-cutting services Alice itself owns.
 │   ├── auth/                  # Admin-token store + session-store
 │   ├── uta-client/            # SDK adapters mirroring UTA's in-process

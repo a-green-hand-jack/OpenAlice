@@ -100,30 +100,30 @@ afterEach(async () => {
 // ==================== MaxPositionSizeGuard ====================
 
 describe('MaxPositionSizeGuard', () => {
-  it('allows order within limit', () => {
+  it('allows order within limit', async () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
     const ctx = makeContext({
       operation: makePlaceOrderOp({ cashQty: 20_000 }),
       account: { netLiquidation: '100000' },
     })
 
-    expect(guard.check(ctx)).toBeNull()
+    await expect(guard.check(ctx)).resolves.toBeNull()
   })
 
-  it('rejects order exceeding limit', () => {
+  it('rejects order exceeding limit', async () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
     const ctx = makeContext({
       operation: makePlaceOrderOp({ cashQty: 30_000 }),
       account: { netLiquidation: '100000' },
     })
 
-    const result = guard.check(ctx)
+    const result = await guard.check(ctx)
     expect(result).not.toBeNull()
     expect(result).toContain('30.0%')
     expect(result).toContain('limit: 25%')
   })
 
-  it('considers existing position value', () => {
+  it('considers existing position value', async () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
     const ctx = makeContext({
       operation: makePlaceOrderOp({ cashQty: 10_000 }),
@@ -131,36 +131,100 @@ describe('MaxPositionSizeGuard', () => {
       account: { netLiquidation: '100000' },
     })
 
-    const result = guard.check(ctx)
+    const result = await guard.check(ctx)
     expect(result).not.toBeNull()
     // 20k existing + 10k new = 30k = 30%
     expect(result).toContain('30.0%')
   })
 
-  it('uses default 25% if no option provided', () => {
+  it('rejects a risk-increasing single order above the configured order cap', async () => {
+    const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 60, maxOrderPercentOfEquity: 20 })
+    const ctx = makeContext({
+      operation: makePlaceOrderOp({ cashQty: 30_000 }),
+      account: { netLiquidation: '100000' },
+    })
+
+    const result = await guard.check(ctx)
+    expect(result).not.toBeNull()
+    expect(result).toContain('30.0%')
+    expect(result).toContain('single-order limit: 20%')
+  })
+
+  it('allows risk-reducing sells even when the starting position is above the cap', async () => {
+    const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 60, maxOrderPercentOfEquity: 20 })
+    const ctx = makeContext({
+      operation: makePlaceOrderOp({ action: 'SELL', cashQty: 5_000 }),
+      positions: [makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: '70000' })],
+      account: { netLiquidation: '100000' },
+    })
+
+    await expect(guard.check(ctx)).resolves.toBeNull()
+  })
+
+  it('uses default 25% if no option provided', async () => {
     const guard = new MaxPositionSizeGuard({})
     const ctx = makeContext({
       operation: makePlaceOrderOp({ cashQty: 26_000 }),
       account: { netLiquidation: '100000' },
     })
-    expect(guard.check(ctx)).not.toBeNull()
+    await expect(guard.check(ctx)).resolves.not.toBeNull()
   })
 
-  it('skips non-placeOrder operations', () => {
+  it('skips non-placeOrder operations', async () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 1 })
     const contract = makeContract({ symbol: 'AAPL' })
     const ctx = makeContext({
       operation: { action: 'closePosition', contract },
     })
-    expect(guard.check(ctx)).toBeNull()
+    await expect(guard.check(ctx)).resolves.toBeNull()
   })
 
-  it('allows when addedValue cannot be estimated (qty-based, no existing position)', () => {
+  it('estimates qty-based new positions from limit price', async () => {
+    const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
+    const ctx = makeContext({
+      operation: makePlaceOrderOp({ symbol: 'NEW_STOCK', totalQuantity: new Decimal(300), lmtPrice: 100 }),
+      account: { netLiquidation: '100000' },
+    })
+
+    const result = await guard.check(ctx)
+
+    expect(result).not.toBeNull()
+    expect(result).toContain('30.0%')
+  })
+
+  it('estimates qty-based new positions from quote when no limit price exists', async () => {
+    const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
+    const contract = makeContract({ symbol: 'NEW_STOCK' })
+    const ctx = makeContext({
+      operation: makePlaceOrderOp({ symbol: 'NEW_STOCK', totalQuantity: new Decimal(300) }),
+      account: { netLiquidation: '100000' },
+    })
+
+    const result = await guard.check({
+      ...ctx,
+      getQuote: async () => ({
+        contract,
+        last: '100',
+        bid: '99.99',
+        ask: '100.01',
+        volume: '0',
+        timestamp: new Date('2026-07-07T00:00:00.000Z'),
+      }),
+    })
+
+    expect(result).not.toBeNull()
+    expect(result).toContain('30.0%')
+  })
+
+  it('allows when addedValue cannot be estimated (qty-based, no existing position, quote unavailable)', async () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 1 })
     const ctx = makeContext({
       operation: makePlaceOrderOp({ symbol: 'NEW_STOCK', totalQuantity: new Decimal(100) }),
     })
-    expect(guard.check(ctx)).toBeNull()
+    await expect(guard.check({
+      ...ctx,
+      getQuote: async () => { throw new Error('quote unavailable') },
+    })).resolves.toBeNull()
   })
 })
 

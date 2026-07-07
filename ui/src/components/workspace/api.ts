@@ -256,6 +256,9 @@ export interface SessionRecord {
   readonly agentSessionId: string | null;
   readonly pid: number | null;
   readonly startedAt: number | null;
+  readonly lastInputAt?: number | null;
+  readonly lastOutputAt?: number | null;
+  readonly lastActivityAt?: number | null;
   /** First message (seeded sessions) — the sidebar title; null → fall back to `name`. */
   readonly title: string | null;
 }

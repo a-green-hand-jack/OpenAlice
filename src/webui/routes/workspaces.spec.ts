@@ -371,6 +371,111 @@ describe('POST /:id/headless', () => {
   });
 });
 
+describe('POST /:id/sessions/:sid/input and /wake', () => {
+  function buildSessionControl(over: {
+    live?: any
+    writeInput?: any
+  } = {}) {
+    const now = Date.now()
+    const live = over.live ?? {
+      wsId: 'ws-1',
+      startedAt: now - 120_000,
+      lastInputAt: null,
+      lastOutputAt: now - 90_000,
+      lastActivityAt: now - 90_000,
+    }
+    const writeInput = over.writeInput ?? vi.fn(() => ({ ok: true, bytes: 6 }))
+    const update = vi.fn(async () => {})
+    const svc = {
+      registry: { get: (id: string) => (id === 'ws-1' ? { id, dir: '/w', agents: ['codex'] } : undefined) },
+      sessionRegistry: { update },
+      pool: {
+        get: (sid: string) => (sid === 'codex-live' ? live : undefined),
+        writeInput,
+      },
+      adapters: { get: () => undefined },
+      templates: { list: () => [], defaultName: () => 'chat', get: () => undefined },
+    } as unknown as WorkspaceService
+    return { app: createWorkspaceRoutes(svc), writeInput, update, live }
+  }
+
+  it('sends text to a live session, appends terminal Enter by default, and touches the record', async () => {
+    const { app, writeInput, update } = buildSessionControl()
+
+    const r = await post(app, '/ws-1/sessions/codex-live/input', { text: 'hello steward' })
+
+    expect(r.status).toBe(200)
+    expect(r.body.ok).toBe(true)
+    expect(writeInput).toHaveBeenCalledWith('codex-live', 'hello steward\r', {
+      controllerId: 'api:session-input',
+      controllerKind: 'api',
+      takeover: false,
+    })
+    expect(update).toHaveBeenCalledWith('ws-1', 'codex-live', { lastActiveAt: expect.any(String) })
+  })
+
+  it('returns 409 instead of typing over another controller', async () => {
+    const writeInput = vi.fn(() => ({
+      ok: false,
+      reason: 'locked',
+      owner: { id: 'web:tab-a', kind: 'web' },
+    }))
+    const { app } = buildSessionControl({ writeInput })
+
+    const r = await post(app, '/ws-1/sessions/codex-live/input', { text: 'wake' })
+
+    expect(r.status).toBe(409)
+    expect(r.body).toEqual({
+      error: 'session_locked',
+      owner: { id: 'web:tab-a', kind: 'web' },
+    })
+  })
+
+  it('skips a watchdog wake when output is still recent', async () => {
+    const now = Date.now()
+    const writeInput = vi.fn()
+    const { app } = buildSessionControl({
+      writeInput,
+      live: {
+        wsId: 'ws-1',
+        startedAt: now - 60_000,
+        lastInputAt: null,
+        lastOutputAt: now - 1_000,
+        lastActivityAt: now - 1_000,
+      },
+    })
+
+    const r = await post(app, '/ws-1/sessions/codex-live/wake', { ifNoOutputForMs: 30_000 })
+
+    expect(r.status).toBe(200)
+    expect(r.body.skipped).toBe('output_recent')
+    expect(writeInput).not.toHaveBeenCalled()
+  })
+
+  it('sends a standard steward wake envelope when the session is output-idle', async () => {
+    const { app, writeInput } = buildSessionControl()
+
+    const r = await post(app, '/ws-1/sessions/codex-live/wake', {
+      reason: 'market event pending',
+      eventPath: '.alice/steward/events/nvda.json',
+      ifNoOutputForMs: 30_000,
+    })
+
+    expect(r.status).toBe(200)
+    expect(r.body.ok).toBe(true)
+    const [, payload, claim] = writeInput.mock.calls[0]
+    expect(payload).toContain('[OpenAlice steward wake]')
+    expect(payload).toContain('Reason: market event pending')
+    expect(payload).toContain('Event: read .alice/steward/events/nvda.json.')
+    expect(payload.endsWith('\n\r')).toBe(true)
+    expect(claim).toEqual({
+      controllerId: 'system:steward-wake',
+      controllerKind: 'steward-wake',
+      takeover: false,
+    })
+  })
+})
+
 describe('POST /:id/sessions/:sid/resume — concurrent coalescing (ANG-120)', () => {
   const TOKEN = 'claude-calm-amber-river';
 

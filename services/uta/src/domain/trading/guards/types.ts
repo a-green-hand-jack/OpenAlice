@@ -1,5 +1,5 @@
 import type { Operation } from '../git/types.js'
-import type { Position, AccountInfo } from '../brokers/types.js'
+import type { Position, AccountInfo, Quote } from '../brokers/types.js'
 import type { GuardMetrics } from '../git/types.js'
 import type { PortfolioGuardStateStore } from './portfolio-state.js'
 
@@ -8,6 +8,11 @@ export interface GuardContext {
   readonly operation: Operation
   readonly positions: readonly Position[]
   readonly account: Readonly<AccountInfo>
+  /**
+   * Optional, lazy quote lookup for guards that need to estimate notional value
+   * for qty-based orders without an existing position.
+   */
+  readonly getQuote?: (contract: Operation['contract']) => Promise<Quote>
 }
 
 export interface GuardEvaluation {

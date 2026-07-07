@@ -6,6 +6,7 @@ import {
   PersistentSession,
   type SessionAttachResult,
   type SessionControllerClaim,
+  type SessionWriteResult,
   type PersistentSessionOptions,
 } from './persistent-session.js';
 import type { TranscriptWatcher } from './transcript-watcher.js';
@@ -60,6 +61,9 @@ export interface LiveSessionInfo {
   readonly startedAt: number;
   readonly agent: string;
   readonly agentSessionId: string | null;
+  readonly lastInputAt: number | null;
+  readonly lastOutputAt: number | null;
+  readonly lastActivityAt: number;
 }
 
 /**
@@ -151,9 +155,22 @@ export class SessionPool {
         startedAt: s.startedAt,
         agent: adapter?.id ?? 'unknown',
         agentSessionId: s.agentSessionId,
+        lastInputAt: s.lastInputAt,
+        lastOutputAt: s.lastOutputAt,
+        lastActivityAt: s.lastActivityAt,
       });
     }
     return out;
+  }
+
+  writeInput(
+    recordId: string,
+    input: Buffer | string,
+    claim?: SessionControllerClaim,
+  ): SessionWriteResult | { readonly ok: false; readonly reason: 'missing' } {
+    const session = this.sessions.get(recordId);
+    if (!session) return { ok: false, reason: 'missing' };
+    return session.writeInput(input, claim);
   }
 
   liveSessionCount(wsId: string): number {

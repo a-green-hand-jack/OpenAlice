@@ -52,6 +52,11 @@ export type SessionAttachResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: 'locked'; readonly owner: SessionControllerOwner };
 
+export type SessionWriteResult =
+  | { readonly ok: true; readonly bytes: number }
+  | { readonly ok: false; readonly reason: 'locked'; readonly owner: SessionControllerOwner }
+  | { readonly ok: false; readonly reason: 'disposed' };
+
 const MAX_DIM = 1000;
 const CURSOR_TICK_MS = 2000;
 const CURSOR_BYTES_INTERVAL = 64 * 1024;
@@ -100,6 +105,8 @@ export class PersistentSession {
   private _agentSessionId: string | null = null;
   /** Wall-clock spawn time; surfaced via the GET /sessions endpoint for tab ordering. */
   private readonly _startedAt = Date.now();
+  private _lastInputAt: number | null = null;
+  private _lastOutputAt: number | null = null;
   /**
    * Latched on the FIRST child exit; lets the resume/spawn route find out the
    * child died (instead of returning 200 OK while the PTY respawn-loops itself
@@ -257,6 +264,22 @@ export class PersistentSession {
     return this._startedAt;
   }
 
+  get lastInputAt(): number | null {
+    return this._lastInputAt;
+  }
+
+  get lastOutputAt(): number | null {
+    return this._lastOutputAt;
+  }
+
+  get lastActivityAt(): number {
+    return Math.max(this._lastInputAt ?? this._startedAt, this._lastOutputAt ?? this._startedAt);
+  }
+
+  get controllerOwner(): SessionControllerOwner | null {
+    return this.controller;
+  }
+
   /**
    * Resolve when the FIRST PTY child exits, or null when `timeoutMs` elapses
    * with the child still alive. Lets the REST spawn/resume handlers report
@@ -393,6 +416,40 @@ export class PersistentSession {
     return { ok: true };
   }
 
+  /**
+   * Programmatic stdin injection for non-browser controllers: market/event
+   * selectors, steward watchdogs, and debug tooling. It uses the same PTY edge
+   * as browser binary frames, but honors the controller lease so automation
+   * does not type over a human-owned terminal unless it explicitly takes over.
+   */
+  writeInput(input: Buffer | string, claim?: SessionControllerClaim): SessionWriteResult {
+    if (this.disposed) return { ok: false, reason: 'disposed' };
+    const owner = normalizeClaim(claim);
+    if (
+      owner &&
+      this.ws !== null &&
+      this.controller !== null &&
+      this.controller.id !== owner.id &&
+      !claim?.takeover
+    ) {
+      return { ok: false, reason: 'locked', owner: this.controller };
+    }
+
+    const buf = Buffer.isBuffer(input) ? input : Buffer.from(input, 'utf8');
+    try {
+      this.term.write(buf as unknown as string);
+      this._lastInputAt = Date.now();
+      this.log.event('session.stdin_injected', {
+        bytes: buf.length,
+        controller: owner,
+      });
+      return { ok: true, bytes: buf.length };
+    } catch (err) {
+      this.log.warn('session.write_error', { err });
+      throw err;
+    }
+  }
+
   /** Drop the current client without killing the PTY. */
   detach(): void {
     if (this.ws === null) return;
@@ -447,6 +504,7 @@ export class PersistentSession {
   private onPtyData(data: Buffer | string): void {
     if (this.disposed) return;
     const buf = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
+    this._lastOutputAt = Date.now();
     this.buffer.append(buf);
 
     const ws = this.ws;
@@ -506,6 +564,7 @@ export class PersistentSession {
         // converting through string corrupts arbitrary terminal sequences and
         // makes CJK/IME behavior depend on JS decoding instead of the PTY.
         this.term.write(buf as unknown as string);
+        this._lastInputAt = Date.now();
       } catch (err) {
         this.log.warn('session.write_error', { err });
       }

@@ -50,6 +50,8 @@ const AGENT_SESSION_ID_RE = /^[A-Za-z0-9_.-]{8,128}$/;
 
 /** Upper bound on a quick-chat seed prompt — matches the headless-dispatch cap. */
 const MAX_SEED_PROMPT = 16000;
+const MAX_SESSION_INPUT = 16000;
+const MAX_WAKE_REASON = 500;
 
 // In-flight resume coalescing, keyed `${wsId}::${recordId}`. A frontend
 // double-fire (two POST /resume within ms — ANG-120) would otherwise both pass
@@ -331,6 +333,14 @@ export function createWorkspaceRoutes(
     if (!cfg) return null;
     const slug = matchCredentialByApiKey(credentials, cfg.apiKey);
     return slug ? { slug, model: cfg.model ?? null } : null;
+  };
+
+  const touchSessionRecord = async (wsId: string, sessionId: string): Promise<void> => {
+    await svc.sessionRegistry
+      .update(wsId, sessionId, { lastActiveAt: new Date().toISOString() })
+      .catch((err) =>
+        launcherLogger.warn('session_registry.touch_failed', { wsId, sessionId, err }),
+      );
   };
 
   // ── templates / agents ───────────────────────────────────────────────────
@@ -1018,6 +1028,9 @@ export function createWorkspaceRoutes(
         pid: live.pid,
         startedAt: live.startedAt,
         agentSessionId: live.agentSessionId,
+        lastInputAt: live.lastInputAt,
+        lastOutputAt: live.lastOutputAt,
+        lastActivityAt: live.lastActivityAt,
       },
       adapter: {
         id: adapter.id,
@@ -1037,6 +1050,190 @@ export function createWorkspaceRoutes(
         envPWD: plan.envPWD,
       },
     });
+  });
+
+  // Programmatic stdin injection into a LIVE persistent PTY. This is the
+  // control-plane edge the production-like steward loop needs: a market/event
+  // selector writes durable event detail into the workspace, then sends a short
+  // envelope to the already-running Codex/Claude session instead of spawning
+  // a fresh `codex exec`. Controller leases prevent automation from typing over
+  // a human-owned terminal unless the caller explicitly asks for takeover.
+  app.post('/:id/sessions/:sid/input', async (c) => {
+    const id = c.req.param('id');
+    const token = c.req.param('sid');
+    if (!validId(id) || !validId(token)) {
+      return c.json({ error: 'not_found' }, 404);
+    }
+    if (!svc.registry.get(id)) return c.json({ error: 'workspace_not_found' }, 404);
+
+    let text: string;
+    let enter = true;
+    let takeover = false;
+    try {
+      const body = await safeJson(c);
+      const fields = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+      const rawText = fields['text'];
+      if (typeof rawText !== 'string' || rawText.trim().length === 0) {
+        return c.json({ error: 'text_required' }, 400);
+      }
+      if (rawText.length > MAX_SESSION_INPUT) {
+        return c.json({ error: 'text_too_long', message: `max ${MAX_SESSION_INPUT} chars` }, 400);
+      }
+      text = rawText;
+      if (fields['enter'] !== undefined) {
+        if (typeof fields['enter'] !== 'boolean') {
+          return c.json({ error: 'bad_request', message: 'enter must be a boolean' }, 400);
+        }
+        enter = fields['enter'];
+      }
+      if (fields['takeover'] !== undefined) {
+        if (typeof fields['takeover'] !== 'boolean') {
+          return c.json({ error: 'bad_request', message: 'takeover must be a boolean' }, 400);
+        }
+        takeover = fields['takeover'];
+      }
+    } catch (err) {
+      return c.json({ error: 'bad_request', message: (err as Error).message }, 400);
+    }
+
+    const live = svc.pool.get(token);
+    if (!live || live.wsId !== id) {
+      return c.json({ error: 'session_not_live', message: 'resume or spawn the session before sending input' }, 409);
+    }
+    const payload = enter ? appendTerminalEnter(text) : text;
+    try {
+      const result = svc.pool.writeInput(token, payload, {
+        controllerId: 'api:session-input',
+        controllerKind: 'api',
+        takeover,
+      });
+      if (!result.ok) {
+        if (result.reason === 'locked') {
+          return c.json({ error: 'session_locked', owner: result.owner }, 409);
+        }
+        if (result.reason === 'missing') {
+          return c.json({ error: 'session_not_live' }, 409);
+        }
+        return c.json({ error: 'session_disposed' }, 409);
+      }
+      await touchSessionRecord(id, token);
+      launcherLogger.info('workspace.session_input_sent', {
+        id,
+        sessionId: token,
+        bytes: result.bytes,
+        takeover,
+      });
+      return c.json({
+        ok: true,
+        bytes: result.bytes,
+        session: sessionActivity(live, Date.now()),
+      });
+    } catch (err) {
+      launcherLogger.warn('workspace.session_input_failed', { id, sessionId: token, err });
+      return c.json({ error: 'input_failed', message: (err as Error).message }, 500);
+    }
+  });
+
+  // Guarded wake signal for long-idle or output-stalled steward sessions. It is
+  // deliberately just stdin injection with a standard envelope: if Codex is
+  // alive, it sees a normal user message and recovers context from files; if it
+  // is not live, the caller gets a clear `session_not_live` and can resume first.
+  app.post('/:id/sessions/:sid/wake', async (c) => {
+    const id = c.req.param('id');
+    const token = c.req.param('sid');
+    if (!validId(id) || !validId(token)) {
+      return c.json({ error: 'not_found' }, 404);
+    }
+    if (!svc.registry.get(id)) return c.json({ error: 'workspace_not_found' }, 404);
+
+    let reason = 'watchdog wake';
+    let eventPath: string | undefined;
+    let ifIdleForMs: number | undefined;
+    let ifNoOutputForMs: number | undefined;
+    let takeover = false;
+    try {
+      const body = await safeJson(c);
+      const fields = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+      const rawReason = fields['reason'];
+      if (rawReason !== undefined) {
+        if (typeof rawReason !== 'string') return c.json({ error: 'bad_request', message: 'reason must be a string' }, 400);
+        reason = sanitizeWakeField(rawReason, MAX_WAKE_REASON) || reason;
+      }
+      const rawEventPath = fields['eventPath'];
+      if (rawEventPath !== undefined) {
+        if (typeof rawEventPath !== 'string') return c.json({ error: 'bad_request', message: 'eventPath must be a string' }, 400);
+        eventPath = sanitizeWakeField(rawEventPath, 500) || undefined;
+      }
+      const idle = parseOptionalMs(fields['ifIdleForMs'], 'ifIdleForMs');
+      if (!idle.ok) return c.json({ error: 'bad_request', message: idle.message }, 400);
+      ifIdleForMs = idle.value;
+      const noOutput = parseOptionalMs(fields['ifNoOutputForMs'], 'ifNoOutputForMs');
+      if (!noOutput.ok) return c.json({ error: 'bad_request', message: noOutput.message }, 400);
+      ifNoOutputForMs = noOutput.value;
+      if (fields['takeover'] !== undefined) {
+        if (typeof fields['takeover'] !== 'boolean') {
+          return c.json({ error: 'bad_request', message: 'takeover must be a boolean' }, 400);
+        }
+        takeover = fields['takeover'];
+      }
+    } catch (err) {
+      return c.json({ error: 'bad_request', message: (err as Error).message }, 400);
+    }
+
+    const live = svc.pool.get(token);
+    if (!live || live.wsId !== id) {
+      return c.json({ error: 'session_not_live', message: 'resume or spawn the session before waking it' }, 409);
+    }
+    const now = Date.now();
+    const activity = sessionActivity(live, now);
+    if (ifIdleForMs !== undefined && activity.idleForMs < ifIdleForMs) {
+      return c.json({ ok: true, skipped: 'activity_recent', session: activity });
+    }
+    if (ifNoOutputForMs !== undefined && activity.noOutputForMs < ifNoOutputForMs) {
+      return c.json({ ok: true, skipped: 'output_recent', session: activity });
+    }
+
+    const payload = appendTerminalEnter(buildStewardWakeMessage({
+      reason,
+      ...(eventPath !== undefined ? { eventPath } : {}),
+      idleForMs: activity.idleForMs,
+      noOutputForMs: activity.noOutputForMs,
+    }));
+    try {
+      const result = svc.pool.writeInput(token, payload, {
+        controllerId: 'system:steward-wake',
+        controllerKind: 'steward-wake',
+        takeover,
+      });
+      if (!result.ok) {
+        if (result.reason === 'locked') {
+          return c.json({ error: 'session_locked', owner: result.owner }, 409);
+        }
+        if (result.reason === 'missing') {
+          return c.json({ error: 'session_not_live' }, 409);
+        }
+        return c.json({ error: 'session_disposed' }, 409);
+      }
+      await touchSessionRecord(id, token);
+      launcherLogger.info('workspace.session_wake_sent', {
+        id,
+        sessionId: token,
+        bytes: result.bytes,
+        reason,
+        eventPath: eventPath ?? null,
+        idleForMs: activity.idleForMs,
+        noOutputForMs: activity.noOutputForMs,
+        takeover,
+      });
+      return c.json({
+        ok: true,
+        bytes: result.bytes,
+        session: sessionActivity(live, Date.now()),
+      });
+    } catch (err) {
+      launcherLogger.warn('workspace.session_wake_failed', { id, sessionId: token, err });
+      return c.json({ error: 'wake_failed', message: (err as Error).message }, 500);
+    }
   });
 
   // Headless probe: spawn the adapter's CLI against the workspace with a
@@ -1491,6 +1688,82 @@ export function createWorkspaceRoutes(
 // AI-provider config IO moved into the CLI adapters (writeAiConfig /
 // readAiConfig on claudeAdapter / codexAdapter). The routes above dispatch
 // through svc.adapters so each CLI owns its own file format.
+
+function sessionActivity(
+  session: {
+    readonly startedAt: number;
+    readonly lastInputAt: number | null;
+    readonly lastOutputAt: number | null;
+    readonly lastActivityAt: number;
+  },
+  now: number,
+): {
+  readonly startedAt: number;
+  readonly lastInputAt: number | null;
+  readonly lastOutputAt: number | null;
+  readonly lastActivityAt: number;
+  readonly idleForMs: number;
+  readonly noOutputForMs: number;
+} {
+  const outputAt = session.lastOutputAt ?? session.startedAt;
+  return {
+    startedAt: session.startedAt,
+    lastInputAt: session.lastInputAt,
+    lastOutputAt: session.lastOutputAt,
+    lastActivityAt: session.lastActivityAt,
+    idleForMs: Math.max(0, now - session.lastActivityAt),
+    noOutputForMs: Math.max(0, now - outputAt),
+  };
+}
+
+function parseOptionalMs(
+  raw: unknown,
+  name: string,
+): { readonly ok: true; readonly value?: number } | { readonly ok: false; readonly message: string } {
+  if (raw === undefined || raw === null) return { ok: true };
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) {
+    return { ok: false, message: `${name} must be a non-negative number` };
+  }
+  return { ok: true, value: Math.floor(raw) };
+}
+
+function sanitizeWakeField(raw: string, max: number): string {
+  return raw.replace(/[\r\n]+/g, ' ').trim().slice(0, max);
+}
+
+function buildStewardWakeMessage(input: {
+  readonly reason: string;
+  readonly eventPath?: string;
+  readonly idleForMs: number;
+  readonly noOutputForMs: number;
+}): string {
+  return [
+    '[OpenAlice steward wake]',
+    `Reason: ${input.reason}`,
+    `Idle: ${formatMs(input.idleForMs)}. No output: ${formatMs(input.noOutputForMs)}.`,
+    input.eventPath
+      ? `Event: read ${input.eventPath}.`
+      : 'Event: check pending steward event files if any.',
+    'Action: recover context from workspace files, inspect UTA state if relevant, then answer hold/no-op or stage/commit through alice-uta.',
+    'Safety: do not trade unless evidence is current and UTA policy/guards allow it.',
+    '',
+  ].join('\n');
+}
+
+function appendTerminalEnter(text: string): string {
+  // PTY-backed TUIs see the Enter key as carriage return. A bare "\n" may just
+  // insert a newline into the composer and never submit the message.
+  return text.endsWith('\r') ? text : `${text}\r`;
+}
+
+function formatMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
+}
 
 function validId(id: string | undefined): id is string {
   return typeof id === 'string' && /^[a-zA-Z0-9_-]+$/.test(id);

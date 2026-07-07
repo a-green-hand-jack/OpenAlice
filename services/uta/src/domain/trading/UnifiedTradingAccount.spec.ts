@@ -1192,7 +1192,7 @@ describe('UTA — guards', () => {
       {
         guard: 'max-position-size',
         verdict: 'pass',
-        metrics: { positionValuePct: 1, threshold: 25 },
+        metrics: { positionValuePct: 1, threshold: 25, orderValuePct: 1 },
       },
       {
         guard: 'cooldown',
@@ -1295,7 +1295,7 @@ describe('UTA — guards', () => {
         guard: 'max-position-size',
         verdict: 'reject',
         reason: 'Position for AAPL would be 30.0% of equity (limit: 25%)',
-        metrics: { positionValuePct: 30, threshold: 25 },
+        metrics: { positionValuePct: 30, threshold: 25, orderValuePct: 30 },
       },
       {
         guard: 'cooldown',

@@ -33,13 +33,13 @@
 | 授权档 | agent 可见的工具面 | 执行方式 | 账户类型 |
 |---|---|---|---|
 | **read_only** | 行情/新闻/分析/`riskStatus` + 只读交易查询（account/positions/orders） | 无 | 任意（含实盘，只读） |
-| **paper** | 上一档 + `stage`/`commit`（带 thesis） | **UTA 侧 auto-push**（虚拟钱，仅过 guards + P1 风险状态，无需预算信封） | **仅 paper/mock 账户** |
+| **paper** | 上一档 + `stage`/`commit`（带 thesis） | **UTA 侧 auto-push**（虚拟钱，无预算信封；但过 P1 风险状态 + guards + paper decision policy） | **仅 paper/mock 账户** |
 | **small_live** | 同 paper | 人工 push **逐笔**（审批门不变）+ **UTA 侧硬金额上限**（单笔 + 单日，人批准也拒超限） | 实盘账户 |
 | **limited_autonomy** | 同 paper | **UTA 侧确定性 auto-push，预算信封内**免逐笔审批；P1 降级即刻失效 | 先 paper（I9），达标后实盘 |
 
 读法（**D2 裁决后的正确读法**）：阶梯**不是按"自主程度"递增，而是按"真金暴露 / 已建立的信任"递增**。paper 用虚拟钱，所以 auto-push 是安全的、免费给；一旦上真钱（small_live）就收回自主权、要求逐笔人工 + 硬上限；只有在 small_live 用真钱证明过自己后，才在 limited_autonomy 把真钱的自主权在预算信封内交还。所以"自主"这条线是 auto→人工→auto，但"真金风险"这条线是单调递增的——阶梯保护的是后者。
 
-**三个写档（paper/small_live/limited_autonomy）的 agent 工具面完全相同**（都是 stage/commit，都**不含 push 工具**）；区别 100% 在 UTA 执行侧那条通道：paper=无条件 auto-push（仅 guards+风险）/ small_live=人工 push + 硬上限 / limited_autonomy=预算信封内 auto-push。工具面裁剪只区分 **read_only vs 写档**；三个写档之间靠 UTA 执行侧区分——这是 §5、§11 的设计核心。
+**三个写档（paper/small_live/limited_autonomy）的 agent 工具面完全相同**（都是 stage/commit，都**不含 push 工具**）；区别 100% 在 UTA 执行侧那条通道：paper=policy-gated auto-push（guards+风险状态+paper decision policy）/ small_live=人工 push + 硬上限 / limited_autonomy=预算信封内 auto-push。工具面裁剪只区分 **read_only vs 写档**；三个写档之间靠 UTA 执行侧区分——这是 §5、§11 的设计核心。
 
 ---
 
@@ -65,7 +65,7 @@
 
 **方案（D1 已批准，保持 I3）**：**任何档都不给 agent push 工具。** 三个写档的 agent 工具面都只有 `stage`/`commit`。真正的自动执行由 **UTA 侧一个确定性的 auto-push 组件**完成。
 
-- **paper 档**（D2 裁决：也用 auto-push）：commit 落地后 auto-push **无条件放行**（只过 guards + P1 风险状态检查，**不要求预算信封**——虚拟钱，目的就是无摩擦测试）。
+- **paper 档**（D2 裁决：也用 auto-push；2026-07-07 stress 后补准出闸）：commit 落地后 auto-push **不要求预算信封**（虚拟钱，目的就是无摩擦测试），但仍先过 P1 风险状态、配置 guards，以及 paper decision policy（stopLoss 必须存在且亏损≤8%，不得给亏损仓加仓）。
 - **limited_autonomy 档**：commit 落地后 auto-push 对照**预算信封**（预先由人批准）判定——
 
 - 单笔金额 ≤ 单笔上限？
@@ -115,7 +115,7 @@
 ## 8. 待决问题 —— maintainer 已全部裁决（2026-07-05）
 
 - **D1 ✅ 批准**：`limited_autonomy` 用 UTA 侧确定性 auto-push，agent 永不拿 push 工具。
-- **D2 ✅ 改为 paper 也用 auto-push**（不走人工）。已据此更新 §3/§5，并重述阶梯语义为"按真金暴露递增"（见 §3 读法）。paper auto-push 无条件（仅 guards+风险），limited_autonomy auto-push 要过预算信封。
+- **D2 ✅ 改为 paper 也用 auto-push**（不走人工）。已据此更新 §3/§5，并重述阶梯语义为"按真金暴露递增"（见 §3 读法）。2026-07-07 stress 发现 over-participation 后，paper auto-push 追加一层 paper decision policy；limited_autonomy auto-push 仍要过预算信封。
 - **D3 ✅ 复用 P1 DailyLoss 的 UTC 日界**。
 - **D4 ✅ 字段名 `authzLevel`**，四个取值 `read_only`/`paper`/`small_live`/`limited_autonomy`。
 - **D5 → 见 §11**：精确的 工具→授权档 映射表已在下方给出，**请过目批准；这是开始 P3-1 实现前的最后一个确认点。**

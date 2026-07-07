@@ -168,6 +168,23 @@ describe('PersistentSession backpressure / socket-drop deadlock', () => {
 
     session.dispose('test');
   });
+
+  it('writes programmatic input to the PTY and records input activity', () => {
+    const session = new PersistentSession(makeOptions());
+    const before = Date.now();
+
+    const result = session.writeInput(Buffer.from('wake\n'), {
+      controllerId: 'system:wake',
+      controllerKind: 'steward-wake',
+    });
+
+    expect(result).toEqual({ ok: true, bytes: 5 });
+    expect(term.write).toHaveBeenCalledWith(Buffer.from('wake\n'));
+    expect(session.lastInputAt).toBeGreaterThanOrEqual(before);
+    expect(session.lastActivityAt).toBeGreaterThanOrEqual(session.startedAt);
+
+    session.dispose('test');
+  });
 });
 
 describe('PersistentSession controller lease', () => {
@@ -228,6 +245,36 @@ describe('PersistentSession controller lease', () => {
     expect(takeover.ok).toBe(true);
     expect(ws1.close).toHaveBeenCalledWith(4001, 'kicked by new attach');
     expect(ws2.close).not.toHaveBeenCalled();
+
+    session.dispose('test');
+  });
+
+  it('blocks programmatic input while another controller owns the session', () => {
+    const session = new PersistentSession(makeOptions());
+    const ws = new FakeWs();
+    session.attach(ws as never, 80, 24, undefined, {
+      controllerId: 'web:tab-a',
+      controllerKind: 'web',
+    });
+
+    const blocked = session.writeInput('wake\n', {
+      controllerId: 'system:wake',
+      controllerKind: 'steward-wake',
+    });
+    expect(blocked).toEqual({
+      ok: false,
+      reason: 'locked',
+      owner: { id: 'web:tab-a', kind: 'web' },
+    });
+    expect(term.write).not.toHaveBeenCalled();
+
+    const takeover = session.writeInput('wake\n', {
+      controllerId: 'system:wake',
+      controllerKind: 'steward-wake',
+      takeover: true,
+    });
+    expect(takeover).toEqual({ ok: true, bytes: 5 });
+    expect(term.write).toHaveBeenCalledWith(Buffer.from('wake\n'));
 
     session.dispose('test');
   });

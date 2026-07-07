@@ -119,9 +119,9 @@ export const demoChatWorkspace: Workspace = {
 
 export const demoWorkspaces: Workspace[] = [demoWorkspace, demoChatWorkspace]
 
-// Templates — names + metadata mirror the real template at
-// src/workspaces/templates/chat/template.json. The name matters: the Chat /
-// Workspaces sidebars filter on the literal 'chat' template name.
+// Templates — names + metadata mirror the real templates under
+// src/workspaces/templates/. The `chat` name matters: the Chat / Workspaces
+// sidebars filter on the literal 'chat' template name.
 export const chatTemplate: TemplateInfo = {
   name: 'chat',
   displayName: 'Chat',
@@ -133,7 +133,18 @@ export const chatTemplate: TemplateInfo = {
   hasReadme: false,
 }
 
-export const demoTemplates: TemplateInfo[] = [chatTemplate]
+export const stewardTemplate: TemplateInfo = {
+  name: 'steward',
+  displayName: 'Steward',
+  description:
+    'Production-like trading steward workspace — a persistent agent session that handles market/event wakes, makes bounded trading decisions through alice-uta, and records every decision for audit.',
+  groupOrder: 15,
+  defaultAgents: ['codex', 'claude'],
+  version: '0.1.0',
+  hasReadme: false,
+}
+
+export const demoTemplates: TemplateInfo[] = [chatTemplate, stewardTemplate]
 
 // Back-compat singleton for older callers (other fixture files reference
 // `demoTemplate` and we want a stable name). Points at the flagship.

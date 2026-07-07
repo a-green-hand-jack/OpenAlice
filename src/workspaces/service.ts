@@ -932,6 +932,9 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
         agentSessionId: liveEntry?.agentSessionId ?? r.resumeHint?.value ?? null,
         pid: liveEntry?.pid ?? null,
         startedAt: liveEntry?.startedAt ?? null,
+        lastInputAt: liveEntry?.lastInputAt ?? null,
+        lastOutputAt: liveEntry?.lastOutputAt ?? null,
+        lastActivityAt: liveEntry?.lastActivityAt ?? null,
         title: r.title ?? null,
       };
     });

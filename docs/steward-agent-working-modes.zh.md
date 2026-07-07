@@ -1,5 +1,8 @@
 # Steward Agent 工作方式与调节旋钮
 
+> 版本：v0.6（2026-07-07）——新增内置 `steward` workspace 模板，常驻 Codex 的启动 prompt 现在包含 wake ACK、事件文件、有限决策循环、UTA-only 执行、decision/journal 审计记录等行为协议。
+> 版本：v0.5（2026-07-07）——补上常驻 session 的输入/唤醒控制边：selector/watchdog 可以向 live PTY 投递短 envelope，idle/no-output 条件满足时唤醒 Codex；记录 maintainer 裁决：目标是生产式真实交易模拟，不是离线 prompt 实验；每个交易点不应新开一次 `codex exec`。
+> 版本：v0.3（2026-07-07）——回填 v3/policy 复验：bear-smci 修复、bull H1 保住，但 chop-tsla 仍 FAIL；当前 Mode 1 不能宣称行为问题已解决，下一旋钮应针对 chop/unknown 仓位上限。
 > 版本：v0.2（2026-07-07）——§4 扩为两层：**系统拓扑**（agent(main) 未必是「人类交易员」，可作 bot 组合器 / agent 编排器 / 分层递归）× 单体决策方式；新增「按资金规模×市场环境选型」原则与「任何深度每笔交易必有记录」不变量。
 > 版本：v0.1（2026-07-07）——初稿：当前工作方式 + 调节旋钮 + 单层路线图。
 > 地位：**概念/方法论文档**，从属于 [steward-plan.zh.md](steward-plan.zh.md)（I1–I9 不变量）。
@@ -8,7 +11,8 @@
 > 用法：maintainer 直接批注；新增/改动工作方式或旋钮时同步更新本文件。
 >
 > 关联：[steward-prompt-anatomy.zh.md](steward-prompt-anatomy.zh.md)（旋钮之一「prompt」的真源）、
-> [steward-p3-campaign.zh.md](steward-p3-campaign.zh.md)（实验设置：窗口/regime/判据/执行）、
+> [steward-p3-campaign.zh.md](steward-p3-campaign.zh.md)（历史 campaign 设置：窗口/regime/判据/执行）、
+> [steward-production-runtime.zh.md](steward-production-runtime.zh.md)（生产式运行形态裁决）、
 > [steward-plan.zh.md](steward-plan.zh.md)（不变量）。
 
 ## 0. 为什么单列这份文档
@@ -19,11 +23,15 @@
 
 ## 1. 一句话定性
 
-当前 agent **不是 auto-trading-bot，也不是「列一个 plan 交给 broker 自动执行」**。它是一个 LLM agent，**每个决策周期像人类交易员一样现场推理一次**，用 `alice-uta` CLI 亲手下单，经 git-like 审批后由 paper broker 成交。策略即 agent（每次现推、无固定算法），broker 只负责撮合，git 审批层是可审计脊柱。
+当前 agent **不是 auto-trading-bot，也不是「列一个 plan 交给 broker 自动执行」**。它是一个 LLM agent，像人类交易员一样现场推理，用 `alice-uta` CLI 亲手下单，经 git-like 审批后由 paper broker 成交。策略即 agent，broker 只负责撮合，git 审批层是可审计脊柱。
 
-## 2. 当前工作方式（Mode 1：逐周期自主决策 / discretionary-per-period）
+重要修正：**生产式 steward 不应等同于「每个决策周期新开一个 headless Codex」**。Codex 可以作为一个常驻 workspace session 维护上下文；market/event selector 决定什么时候把事件送进这个常驻 steward。headless one-shot 仍适合观察报告、复盘、一次性任务，但不再作为每个交易点的默认生产路径。
 
-完整链路（对着代码 `campaign/stress.mjs:100-128` + prompt-v2 §ACT）：
+## 2. 当前工作方式（Mode 1：自主 discretionary steward）
+
+### 2.1 已实测形态：one-shot per-period harness
+
+这是 campaign harness 已经跑过的形态，适合评估 prompt/guards/UTA 行为，不应再被误称为生产默认形态：
 
 1. 每个决策周期，orchestrator 发一次 **headless 任务**（`POST /api/workspaces/:id/headless`）给 workspace 里的 agent（现为 codex），prompt = 到当前为止的 tape + 双目标 mandate。
 2. agent **自己读盘**（趋势/动量/波动/量），形成 thesis。
@@ -34,7 +42,26 @@
 
 **关键属性**：无预注册算法、无后台 bot 循环、每周期无状态重推 + 挂单在场；决策与执行之间隔着 git 审批闸。
 
-**「可接受」的实证**：v2 prompt 下，牛市 H1≈50%（NVDA 42% / TSLA 65% / AMD 43%），熊市全程持币、回撤 0%（见 [prompt-anatomy §1](steward-prompt-anatomy.zh.md)）。故 maintainer 判定 Mode 1「当前可接受」。已知弱点：震荡市可能因参与指令而被来回打损（stress 批次首个 chop cell −7.6% FAIL），详见 campaign 结果。
+**当前实证状态**：Mode 1 的形态仍成立（逐周期自主推理 + git 审批 + paper auto-push），但行为门还没全绿。v2 证明牛市 H1 可被拉到≈50%，同时暴露 bear-smci over-participation；v3/policy 把 bear 修到 4/4 PASS 并保住 bull 2/2 PASS，但 `sp-chop-tsla` 仍因震荡假突破中过大仓位 FAIL（见 [campaign §4.8](steward-p3-campaign.zh.md)）。所以「Mode 1 可作为起步工作方式」不等于「当前 prompt/旋钮已可晋级」。
+
+### 2.2 生产式目标形态：persistent steward session
+
+maintainer 裁决后，Mode 1 的生产式落点改为：
+
+```mermaid
+flowchart LR
+  A[market/event selector] --> B[persistent Codex steward session]
+  B --> C[alice-uta stage/commit]
+  C --> D[paper policy + guards]
+  D --> E[audit / inbox]
+```
+
+- Codex 作为**常驻 steward session**，而不是每个交易点重启一次。
+- 这个常驻 session 应跑在内置 `steward` 模板里，而不是普通 `chat` workspace：模板指令把 wake 后快速 ACK、读 `.alice/steward/events/`、有限决策循环、UTA-only 执行、decision/journal 记录写进 AGENTS/CLAUDE 真源。
+- selector 负责「什么时候值得让 steward 看一眼」；先可用低频 bar close / 持仓风险变化 / pending order 变化，后续再变复杂。投递方式是写事件文件后调用 live session 的 input/wake API，而不是 headless。
+- watchdog 负责「Codex 卡住或长期无活动怎么办」：用 `ifIdleForMs` / `ifNoOutputForMs` 条件唤醒原 session；如果 session 不 live，则先 resume，再 wake。
+- steward 仍亲手用 `alice-uta` 做交易动作；暂不优先拆 sub-agent 或 mechanical executor。
+- UTA 的 authz、paper decision policy、guards、risk state、audit 是硬边界，生产式模拟必须真实经过这些边界。
 
 ## 3. 调节旋钮（改变交易行为的杠杆）
 
@@ -42,18 +69,19 @@
 
 | 类 | 旋钮 | 当前取值 | 控什么 | 验证状态 |
 |---|---|---|---|---|
-| 软 | **Prompt 版本** | v2（双目标） | 参与度 / 风控 / 越权 / 是否作弊——**主杠杆** | 已验证：v1→v2 把牛市 H1 从 7–16% 拉到 ~50%。子旋钮逐段登记于 [prompt-anatomy §2](steward-prompt-anatomy.zh.md) |
+| 软 | **Prompt 版本** | v3.1（v3 + regime sizing） | 参与度 / 风控 / 越权 / 是否作弊——**主杠杆** | v3 stress 未全绿：bull 2/2 PASS、bear 4/4 PASS、chop 3/4 PASS；v3.1 加 `chop/unknown` 仓位/加仓上限，真源见 [prompt-anatomy §8](steward-prompt-anatomy.zh.md) |
 | 软 | **观察模式 + 盲化程度** | paste（OHLCV 内联）；盲但富（给全 OHLCV+量、可自算指标，抹标的/日期/新闻） | agent 拿到多少信息、怎么拿 | tool-native 底座已铺（#64）；盲化的结构性强制靠 #66 seal |
 | 软 | **CLI + 模型** | `agents:['codex']` | 换「大脑」——不同推理质量 → 不同判断 | 未系统对比（claude/opencode/pi 可换） |
 | 软 | **决策节奏** | 周线（6 周 × 5 日线，6 决策点） | 多久醒来决策一次 | 小时/日内 deferred（#65） |
-| 硬 | **`guards[]`** | **空 → 拟启用** | 账户级硬风险闸——无论 agent 想干什么都不许越线 | **决定启用**（2026-07-07，配 prompt v3 一起兜 over-participation）。**地面真相**：`max-drawdown` 触发→**READ_ONLY 挡新单/加仓，但不强平已有仓**（`risk-state.ts` 无清算路径），故 config 闸=限敞口·非强平；真 hard cap 需改代码。拟 `max-drawdown 10%`+`max-position-size 60%` |
+| 硬 | **Paper decision policy** | 已启用（paper auto-push 内置） | 每笔 paper 自动成交前的准出闸 | `paper-auto-push.ts` 强制风险增加订单：必须带 stopLoss、估算亏损 ≤8%、不得给亏损仓加仓；v3 跑批中 `policyDenied=0`，说明它是兜底，不足以解决合规但过大的 chop 仓位 |
+| 硬 | **`guards[]`** | v3.2 scratch：`max-position-size=60%` + `maxOrderPercentOfEquity=20%` | 账户级硬风险闸——无论 agent 想干什么都不许越线 | **决定启用且优先验证 position-size**。`max-drawdown` 触发→READ_ONLY 挡新单/加仓但不强平；`max-position-size` 更直接针对 `sp-chop-tsla` 的过大 exposure。本轮代码补齐 quote 估值，使 qty-based 市价新仓也会被 guard 评估；新增单笔风险增加订单 cap，用于压住震荡市初始仓过大 |
 | 硬 | **`maxAuthzLevel` / 授权档** | `paper` | 渐进授权：read-only → paper → small live | 钉死 paper（I9） |
 | 硬 | **起始资金** | `START=100000` | 规模基准 | — |
 | 硬 | **决策超时** | 260s/次（harness 侧） | agent 能思考多深 | 观察到部分决策卡在 260s 被截断——待调 |
 
-> **要点**：当前唯一在认真调的是 **prompt（软）**；硬风控闸 `guards` 还是空的。这也是 chop cell 会 FAIL 的结构原因——没有硬闸兜底时，全靠 prompt 里「别在震荡市乱交易」这句软约束，而它没兜住。**引入硬闸是一个尚未动用的独立杠杆。**
+> **要点**：v2 时代唯一认真拧的是 prompt（软）。现在第一道硬准出已经落在 paper auto-push：stop≤8% + 不给亏损仓加仓。账户级 `guards[]` 仍建议启用，它负责组合/账户层面的回撤和敞口；paper decision policy 负责单笔交易纪律。
 >
-> **更新（2026-07-07）**：压测确认 v2 有 **over-participation** 尾部风险（`sp-bear-smci` 两批皆 FAIL，深熊做多被止损 −17~24%，详见 [campaign §4.7](steward-p3-campaign.zh.md)）。对策拍板「**两者都上**」= 启用硬 `guards` + prompt v3。硬闸的机制边界已探明（见上表 `guards[]` 行）：config 级 `max-drawdown` 只降 READ_ONLY、不强平，因此它的作用是**限制敞口 + 阻止给亏损仓加仓**（正是 smci 两次的败因——它一路加仓），而非「严格 X% 强平」。要真·hard cap 得加一条 force-close 风险动作（属代码改动，走 codex）。
+> **更新（2026-07-07）**：压测确认 v2 有 **over-participation** 尾部风险（`sp-bear-smci` 两批皆 FAIL，深熊做多被止损 −17~24%，详见 [campaign §4.7](steward-p3-campaign.zh.md)）。对策拍板「**两者都上**」后，第一刀不是让 prompt 单扛，而是把 ai-berkshire 式 checklist 准出落到 UTA：违反交易纪律的 paper commit 不自动成交。v3/policy 复验显示这刀修掉 bear-smci，但没修完 chop 假突破；第二刀已落在 v3.1 regime-specific sizing + `max-position-size=60%` 复验账户，而不是把 stopLoss 规则再写一遍。
 
 ## 4. 工作方式路线图（未来更丰富的方式）
 

@@ -1,0 +1,9 @@
+{
+  "displayName": "Steward",
+  "groupOrder": 15,
+  "description": "Production-like trading steward workspace — a persistent agent session that handles market/event wakes, makes bounded trading decisions through alice-uta, and records every decision for audit.",
+  "defaultAgents": ["codex", "claude"],
+  "injectTools": true,
+  "injectPersona": true,
+  "bundledSkills": ["build-thesis", "retrospective", "opencli-reader"]
+}

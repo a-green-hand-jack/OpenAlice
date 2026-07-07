@@ -24,7 +24,12 @@ export function createGuardPipeline(
       account.getAccount(),
     ])
 
-    const ctx: GuardContext = { operation: op, positions, account: accountInfo }
+    const ctx: GuardContext = {
+      operation: op,
+      positions,
+      account: accountInfo,
+      getQuote: (contract) => account.getQuote(contract),
+    }
     await onContext?.(ctx)
     const guardVerdicts: GuardVerdict[] = []
 

@@ -8,7 +8,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +23,9 @@ const HERE = fileURLToPath(new URL('.', import.meta.url)); // src/workspaces/
 const CHAT_DIR = join(HERE, 'templates', 'chat');
 const CHAT_FILES = join(CHAT_DIR, 'files');
 const CHAT_BOOTSTRAP = join(CHAT_DIR, 'bootstrap.mjs');
+const STEWARD_DIR = join(HERE, 'templates', 'steward');
+const STEWARD_FILES = join(STEWARD_DIR, 'files');
+const STEWARD_BOOTSTRAP = join(STEWARD_DIR, 'bootstrap.mjs');
 const AQ_DIR = join(HERE, 'templates', 'auto-quant');
 const AQ_BOOTSTRAP = join(AQ_DIR, 'bootstrap.mjs');
 
@@ -83,6 +86,20 @@ function chatMeta(): TemplateMeta {
   };
 }
 
+function stewardMeta(): TemplateMeta {
+  return {
+    name: 'steward',
+    bootstrapScript: STEWARD_BOOTSTRAP,
+    filesDir: STEWARD_FILES,
+    templateDir: STEWARD_DIR,
+    version: '0.1.0',
+    defaultAgents: ['codex', 'claude'],
+    injectTools: true,
+    injectPersona: true,
+    bundledSkills: ['build-thesis', 'retrospective', 'opencli-reader'],
+  };
+}
+
 let parent: string;
 let dir: string;
 beforeEach(async () => {
@@ -131,6 +148,36 @@ describe('chat workspace create: bootstrap → inject → commit', () => {
     // working tree is clean (injected files were committed, not left dangling)
     const status = await run('git', ['-C', dir, 'status', '--porcelain']);
     expect(status.trim()).toBe('');
+  });
+});
+
+describe('steward workspace create: persistent-session scaffold', () => {
+  it('yields a fresh-git steward workspace with event, decision, and journal roots', async () => {
+    await runBootstrap(STEWARD_BOOTSTRAP, ['stewardtag', dir], { AQ_TEMPLATE_ROOT: STEWARD_DIR }, true);
+    await injectWorkspaceContext({ template: stewardMeta(), wsId: 'ws-steward-1', dir });
+    await commitInitial(dir, 'steward: stewardtag');
+
+    for (const rel of [
+      'CLAUDE.md',
+      'AGENTS.md',
+      'README.md',
+      '.alice/steward/events/.gitkeep',
+      'decisions/.gitkeep',
+      'journal/.gitkeep',
+      '.claude/skills/alice-uta/SKILL.md',
+      '.agents/skills/alice-workspace/SKILL.md',
+      '.claude/skills/build-thesis/SKILL.md',
+    ]) {
+      expect(existsSync(join(dir, rel)), rel).toBe(true);
+    }
+
+    const agentsMd = await readFile(join(dir, 'AGENTS.md'), 'utf8');
+    expect(agentsMd).toContain('Persistent Steward Workspace');
+    expect(agentsMd).toContain('STEWARD_WAKE_ACK');
+    expect(agentsMd).toContain('do not spawn a fresh `codex exec`');
+    expect(existsSync(join(dir, '.mcp.json'))).toBe(false);
+    expect((await run('git', ['-C', dir, 'log', '--pretty=%s'])).trim()).toBe('steward: stewardtag');
+    expect((await run('git', ['-C', dir, 'status', '--porcelain'])).trim()).toBe('');
   });
 });
 

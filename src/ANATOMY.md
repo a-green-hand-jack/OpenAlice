@@ -26,7 +26,14 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   session identity, scrollback, headless runs, schedules, and issue files.
   Open `src/workspaces/service.ts:94-104`, `src/workspaces/session-pool.ts:72-84`,
   `src/workspaces/template-registry.ts:106-111`, and
-  `src/workspaces/adapters/claude.ts:41-65`.
+  `src/workspaces/adapters/claude.ts:41-65`. Codex specifically has two
+  runtime shapes: persistent interactive sessions through
+  `src/workspaces/adapters/codex.ts:78-90`, and one-shot headless automation
+  through `src/workspaces/adapters/codex.ts:105-118`. Production-like steward
+  selectors/watchdogs feed the persistent shape through live session input/wake
+  at `src/webui/routes/workspaces.ts:1061`; the built-in steward workspace
+  prompt/scaffold is `src/workspaces/templates/steward/files/instruction.md:1`
+  and `src/workspaces/templates/steward/bootstrap.mjs:1`.
 - `services/` - Alice-owned cross-cutting clients: auth, UTA SDK wrappers, and
   UTA restart/health helpers. Anchors: `src/services/uta-client/UTAManagerSDK.ts:36-40`,
   `src/services/uta-supervisor/health.ts:22-36`,
@@ -75,6 +82,24 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
 - `workspaces/` computes adapter commands, then `SessionPool` owns live PTYs:
   `src/workspaces/service.ts:94-104` -> `src/workspaces/session-pool.ts:72-84`
   -> `src/workspaces/persistent-session.ts:128-150`.
+- Programmatic live-session input is the selector/watchdog edge into a
+  persistent steward: `src/webui/routes/workspaces.ts:1061` validates the route,
+  `src/workspaces/session-pool.ts:166` routes by record id, and
+  `src/workspaces/persistent-session.ts:425` writes to PTY stdin while honoring
+  controller leases. Activity timestamps used by wake decisions are exposed at
+  `src/workspaces/persistent-session.ts:267`.
+- The built-in `steward` template turns that PTY edge into agent behavior:
+  `src/workspaces/templates/steward/template.json:1` defaults new sessions to
+  Codex, `src/workspaces/templates/steward/bootstrap.mjs:30` creates
+  `.alice/steward/events/`, `decisions/`, and `journal/`, and
+  `src/workspaces/templates/steward/files/instruction.md:1` defines wake ACK,
+  event-file handling, UTA-only execution, and decision-record expectations.
+- Headless workspace dispatch is deliberately not pooled: the route describes a
+  fresh one-shot run at `src/webui/routes/workspaces.ts:1339`, and
+  `src/workspaces/headless-task.ts:4-18` spawns a child process and treats exit
+  as completion. Do not model production trading points as "new headless Codex
+  per point"; production-like steward trading should feed triggers into a
+  persistent workspace session.
 - Alice talks to UTA through `@traderalice/uta-protocol`: `src/main.ts:15-16`,
   `src/services/uta-client/UTAManagerSDK.ts:21-30`, and
   `packages/uta-protocol/src/client/UTAClient.ts:48`.

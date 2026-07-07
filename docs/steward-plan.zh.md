@@ -142,6 +142,10 @@
 
 **目标**：把"长期观察循环"做成一个内置 workspace 模板 `steward`，六类对象的观察结构化，产出走 Inbox，提案走 TradingGit 停在审批门前。
 
+> **2026-07-07 运行形态修正**：下面关于 `.alice/issues` → ScheduleScanner → headless run 的设计仍适合「观察报告 / 复盘 / 一次性自动任务」，但不再作为生产式交易决策的默认路径。生产式交易模拟应改为 market/event selector 触发**常驻 steward session**，详见 [steward-production-runtime.zh.md](steward-production-runtime.zh.md)。每个交易点新开一次 `codex exec` 已被判定为过慢、过贵、且不符合真实 steward 长期上下文模型。
+>
+> **2026-07-07 实现状态**：内置 `steward` 模板的第一版已落地，先承载 production-like 常驻 session 行为协议（event file + wake ACK + UTA-only 执行 + decision/journal 审计）。原 P4 的“每日观察报告 headless 调度”仍可作为观察/复盘子能力，不再代表交易决策主路径。
+
 **关键设计决定**：
 - 交付形态是**模板 + prompt/skill 资产**，不是 `src/` 新模块（I6）。`src/workspaces/templates/steward/bootstrap.mjs`（跨平台规则：ESM、`_common.mjs` 的 `git()`，禁止 `spawn('git')` 和新 `.sh`）。
 - 调度用现成机制：`.alice/issues/*.md` 的 cron 声明 → ScheduleScanner → headless run。核心节奏：每日一次 observe run（读组合/风险状态/市场/近期 commit 历史/上次观察报告 → 写结构化观察文档 → `inbox_push`）；提案性动作 stage+commit 后停住（awaiting approval）。

@@ -9,9 +9,14 @@ import {
   type PushResult,
   type RiskStateInfo,
 } from '@traderalice/uta-protocol'
+import { UNSET_DECIMAL } from '@traderalice/ibkr'
+import Decimal from 'decimal.js'
 import type { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
+import type { Operation } from './git/types.js'
+import type { Position } from './brokers/types.js'
 
 export const AUTO_PUSH_PAPER_VIA = 'auto-push-paper' as const
+const PAPER_POLICY_MAX_STOP_LOSS_PCT = 8
 
 export type PaperAutoPushAccountType = Extract<AuthzAccountType, 'mock' | 'paper'>
 
@@ -21,7 +26,28 @@ export type PaperAutoPushSkipReason =
   | 'account_type_not_paper'
   | 'authz_below_paper'
   | 'risk_state_not_normal'
+  | 'paper_policy_denied'
   | 'push_in_flight'
+
+export type PaperDecisionPolicyViolationCode =
+  | 'missing_stop_loss'
+  | 'stop_loss_wrong_side'
+  | 'stop_loss_too_wide'
+  | 'entry_price_unavailable'
+  | 'adding_to_losing_position'
+
+export interface PaperDecisionPolicyViolation {
+  code: PaperDecisionPolicyViolationCode
+  symbol: string
+  reason: string
+  metrics?: {
+    entryPrice?: string
+    stopLossPrice?: string
+    stopLossPct?: number
+    maxStopLossPct?: number
+    unrealizedPnL?: string
+  }
+}
 
 export type PaperAutoPushResult =
   | {
@@ -38,6 +64,7 @@ export type PaperAutoPushResult =
       accountType?: AuthzAccountType
       effectiveAuthzLevel?: AuthzLevel
       risk?: RiskStateInfo
+      policyViolations?: PaperDecisionPolicyViolation[]
     }
   | {
       status: 'failed'
@@ -147,6 +174,31 @@ async function executePaperAutoPush(
     }
   }
 
+  let policyViolations: PaperDecisionPolicyViolation[]
+  try {
+    policyViolations = await evaluatePaperDecisionPolicy(eligibility.uta)
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    return {
+      status: 'failed',
+      reason: `paper decision policy failed: ${reason}`,
+      pendingHash: eligibility.pendingHash,
+      effectiveAuthzLevel: eligibility.effectiveAuthzLevel,
+      risk,
+    }
+  }
+  if (policyViolations.length > 0) {
+    return {
+      status: 'skipped',
+      reason: 'paper_policy_denied',
+      pendingHash: eligibility.pendingHash,
+      accountType: eligibility.accountType,
+      effectiveAuthzLevel: eligibility.effectiveAuthzLevel,
+      risk,
+      policyViolations,
+    }
+  }
+
   const approver: ApproverIdentity = {
     via: AUTO_PUSH_PAPER_VIA,
     at: eligibility.now().toISOString(),
@@ -187,4 +239,168 @@ export async function tryAutoPushPaper(input: PaperAutoPushInput): Promise<Paper
   const resolved = resolvePaperAutoPushEligibility(input)
   if (!resolved.ok) return resolved.result
   return executePaperAutoPush(resolved.eligibility)
+}
+
+export async function evaluatePaperDecisionPolicy(uta: UnifiedTradingAccount): Promise<PaperDecisionPolicyViolation[]> {
+  const operations = uta.status().staged
+  if (operations.length === 0) return []
+
+  const positions = await uta.getPositions()
+  const violations: PaperDecisionPolicyViolation[] = []
+
+  for (const operation of operations) {
+    if (operation.action !== 'placeOrder') continue
+    if (!isIncreasingPlaceOrder(operation, positions)) continue
+
+    const symbol = operationSymbol(operation)
+    const existing = findPositionForOperation(operation, positions)
+    if (existing && new Decimal(existing.unrealizedPnL || '0').lt(0)) {
+      violations.push({
+        code: 'adding_to_losing_position',
+        symbol,
+        reason: `Paper auto-push refuses adding risk to losing position ${symbol}`,
+        metrics: { unrealizedPnL: existing.unrealizedPnL },
+      })
+    }
+
+    const stopLoss = decimalString(operation.tpsl?.stopLoss?.price)
+    if (!stopLoss) {
+      violations.push({
+        code: 'missing_stop_loss',
+        symbol,
+        reason: `Paper auto-push requires an attached stopLoss for risk-increasing ${symbol} orders`,
+        metrics: { maxStopLossPct: PAPER_POLICY_MAX_STOP_LOSS_PCT },
+      })
+      continue
+    }
+
+    const entryPrice = await estimateEntryPrice(uta, operation, existing)
+    if (!entryPrice) {
+      violations.push({
+        code: 'entry_price_unavailable',
+        symbol,
+        reason: `Paper auto-push could not estimate entry price for ${symbol}; use a limit price or wait for a quote`,
+        metrics: { stopLossPrice: stopLoss.toString(), maxStopLossPct: PAPER_POLICY_MAX_STOP_LOSS_PCT },
+      })
+      continue
+    }
+
+    const action = orderAction(operation)
+    const rawLossPct = action === 'SELL'
+      ? stopLoss.minus(entryPrice).div(entryPrice).mul(100)
+      : entryPrice.minus(stopLoss).div(entryPrice).mul(100)
+    const metrics = {
+      entryPrice: entryPrice.toString(),
+      stopLossPrice: stopLoss.toString(),
+      stopLossPct: rawLossPct.toNumber(),
+      maxStopLossPct: PAPER_POLICY_MAX_STOP_LOSS_PCT,
+    }
+
+    if (rawLossPct.lte(0)) {
+      violations.push({
+        code: 'stop_loss_wrong_side',
+        symbol,
+        reason: `Paper auto-push stopLoss for ${symbol} is on the wrong side of the estimated entry`,
+        metrics,
+      })
+      continue
+    }
+
+    if (rawLossPct.gt(PAPER_POLICY_MAX_STOP_LOSS_PCT)) {
+      violations.push({
+        code: 'stop_loss_too_wide',
+        symbol,
+        reason: `Paper auto-push stopLoss for ${symbol} risks ${rawLossPct.toFixed(1)}% (limit: ${PAPER_POLICY_MAX_STOP_LOSS_PCT}%)`,
+        metrics,
+      })
+    }
+  }
+
+  return violations
+}
+
+function isIncreasingPlaceOrder(operation: Operation, positions: readonly Position[]): boolean {
+  if (operation.action !== 'placeOrder') return false
+  const existing = findPositionForOperation(operation, positions)
+  if (!existing) return true
+
+  const action = orderAction(operation)
+  if (existing.side === 'long') return action === 'BUY'
+  if (existing.side === 'short') return action === 'SELL'
+  return true
+}
+
+function findPositionForOperation(operation: Extract<Operation, { action: 'placeOrder' }>, positions: readonly Position[]): Position | undefined {
+  const keys = new Set([
+    operation.contract.aliceId,
+    operation.contract.symbol,
+    operation.contract.localSymbol,
+  ].filter((v): v is string => typeof v === 'string' && v.length > 0))
+
+  return positions.find((position) => {
+    const positionKeys = [
+      position.contract.aliceId,
+      position.contract.symbol,
+      position.contract.localSymbol,
+    ].filter((v): v is string => typeof v === 'string' && v.length > 0)
+    return positionKeys.some((key) => keys.has(key))
+  })
+}
+
+async function estimateEntryPrice(
+  uta: UnifiedTradingAccount,
+  operation: Extract<Operation, { action: 'placeOrder' }>,
+  existing: Position | undefined,
+): Promise<Decimal | null> {
+  const limitPrice = decimalField(operation.order.lmtPrice)
+  if (limitPrice) return limitPrice
+
+  if (existing) {
+    const mark = decimalString(existing.marketPrice)
+    if (mark?.gt(0)) return mark
+  }
+
+  try {
+    const quote = await uta.getQuote(operation.contract)
+    const action = orderAction(operation)
+    const candidates = action === 'SELL'
+      ? [quote.bid, quote.last, quote.ask]
+      : [quote.ask, quote.last, quote.bid]
+    for (const candidate of candidates) {
+      const parsed = decimalString(candidate)
+      if (parsed?.gt(0)) return parsed
+    }
+  } catch {
+    return null
+  }
+
+  return null
+}
+
+function orderAction(operation: Extract<Operation, { action: 'placeOrder' }>): 'BUY' | 'SELL' {
+  return String(operation.order.action || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY'
+}
+
+function operationSymbol(operation: Extract<Operation, { action: 'placeOrder' }>): string {
+  return operation.contract.symbol || operation.contract.localSymbol || operation.contract.aliceId || 'unknown'
+}
+
+function decimalField(value: unknown): Decimal | null {
+  if (!value) return null
+  if (value instanceof Decimal) {
+    if (value.equals(UNSET_DECIMAL) || value.lte(0)) return null
+    return value
+  }
+  const parsed = decimalString(value)
+  return parsed?.gt(0) ? parsed : null
+}
+
+function decimalString(value: unknown): Decimal | null {
+  if (value == null || value === '') return null
+  try {
+    const parsed = new Decimal(String(value))
+    return parsed.isFinite() ? parsed : null
+  } catch {
+    return null
+  }
 }
