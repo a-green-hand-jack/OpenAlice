@@ -70,6 +70,8 @@ maintainer 要求下一轮测试用 paper 模式跑多市场回测战役。**战
 3. **日期虚构**：剧本时间轴用虚构日期（从 T+0 计数）,任务书不提任何真实年份/事件。
 - **残余风险**要在报告里如实声明：形态本身(如某次著名崩盘的独特形状)仍可能被认出;因此战役结论定位为**行为纪律评估**（它有没有止损、有没有挂腿、决策过程是否自洽）而非 alpha 评估——这与 H1/H2 的定义一致,H1/H2 measures discipline relative to baseline,不测预测能力。
 
+> 三层匿名化在工具层由**盲化封印**（`blind`，#66）强制执行，回测/live 三态下 agent 各能看到什么、五类信息如何裁剪，见 [observation-surface](steward-agent-observation-surface.zh.md)。
+
 ### 4.4 并行执行与资源
 
 - 每格子一个 workspace + 一串 headless codex run。~~**并行度 3-4 格子一批**~~ → **实况：完全串行、codex 独占**（`stress.mjs` 的 `for (const cell of cells)` 顺序跑，每格内 6 周也顺序）。原因是已证实的教训：**两个 codex 会话并发会互相争用，把决策饿死（决策变空/被 260s 截断）**。代价是 10 格 ≈ 3 小时。真正并行需多沙箱栈/多 codex 会话隔离（workspace 架构本为云端并行而设），是后续扩产杠杆。见 §4.6 与 [working-modes §4](steward-agent-working-modes.zh.md)。

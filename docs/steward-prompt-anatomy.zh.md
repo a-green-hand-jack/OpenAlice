@@ -45,6 +45,8 @@
 除实验提示词外，仓库内也有 agent-facing 提示文本。改动它们时须同步更新引用它们的
 `ANATOMY.md` 并在此登记：
 
+> 「工具描述串」是观察面的 **how-to-call** 侧；agent 各态**能看到什么**（五类信息、盲化裁剪）见 [observation-surface](steward-agent-observation-surface.zh.md)。
+
 | 面 | 位置（file:line） | 控什么 |
 | --- | --- | --- |
 | 模板 persona / 指令 | `src/workspaces/template-registry.ts:81-87`（`injectPersona` = Alice persona + 模板 `instruction.md`）；模板目录 `src/workspaces/templates/{auto-quant,chat}/` | workspace agent 的基础人设与任务框架 |
