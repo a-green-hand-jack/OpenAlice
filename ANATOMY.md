@@ -19,6 +19,9 @@ state, or ownership.
 - Alice is the agent runtime under `src/`. Its composition root is
   `src/main.ts:76`, and its assembled `EngineContext` is `src/main.ts:364-376`.
   Start with [src/ANATOMY.md](src/ANATOMY.md) before changing Alice internals.
+  For the full workspace-agent support map (interactive PTY, headless runs,
+  CLI/MCP tools, schedule, Inbox, and UTA trading surface), start with
+  [docs/openalice-agent-support.zh.md](docs/openalice-agent-support.zh.md).
 
 - UTA is the co-located broker carrier under `services/uta/`. Its process entry
   is `services/uta/src/main.ts:40`, its account manager starts at

@@ -917,8 +917,8 @@ export function createWorkspaceRoutes(
         };
         const session = svc.pool.spawn(id, ctx);
         // Give the child a brief window to prove it stays up. If it exits
-        // within ~800ms (claude --continue against a stale projectKey, broken
-        // .mcp.json, missing trust, etc.) we'd otherwise return 200 OK while
+        // within ~800ms (stale projectKey, broken project config, missing trust,
+        // etc.) we'd otherwise return 200 OK while
         // the pool respawn-loops itself into a circuit breaker behind the
         // user's back. Surface the failure so the caller knows resume failed.
         const earlyExit = await session.waitForFirstExit(800);
@@ -1162,12 +1162,12 @@ export function createWorkspaceRoutes(
 
   // Headless task dispatch — the standard automation API. Spawns the
   // workspace's agent CLI in one-shot headless mode with a positional prompt,
-  // runs to natural exit, returns exit/duration + bounded output tails. The
-  // agent reports its actual result via `inbox_push`; this endpoint just waits
-  // on the process exit (the turn boundary). No session/PTY — a fresh one-shot
-  // clone each call (no respawn, not pooled). Synchronous: the request stays
-  // open until the task exits (the cron/automation trigger calls
-  // `svc.runHeadlessTask` directly instead). Body: { prompt, agent?, timeoutMs? }.
+  // runs to natural exit, and records exit/duration + bounded output tails. The
+  // agent reports its actual result via `inbox_push`; this endpoint records the
+  // process exit (the turn boundary). No session/PTY — a fresh one-shot clone
+  // each call (no respawn, not pooled). Default is async (202 + taskId);
+  // `wait:true` keeps the request open until exit and returns the full result.
+  // Body: { prompt, agent?, timeoutMs?, wait? }.
   //   curl -XPOST .../:id/headless -d '{"prompt":"...","agent":"claude"}'
   app.post('/:id/headless', async (c) => {
     const id = c.req.param('id');

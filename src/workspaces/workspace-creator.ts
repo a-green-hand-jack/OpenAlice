@@ -203,7 +203,7 @@ export class WorkspaceCreator {
       };
     }
 
-    // Launcher-owned context injection (MCP / persona / skills, gated by the
+    // Launcher-owned context injection (persona / skills / CLI playbooks, gated by the
     // template manifest), then the initial commit. The launcher — not the
     // bootstrap script — owns what lands in the workspace's first commit.
     try {

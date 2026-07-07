@@ -182,7 +182,7 @@ export class TemplateRegistry {
 
   /**
    * Name used when a client doesn't specify a template. Prefers `chat`
-   * (the new MCP-injection demo) if available, otherwise falls back to the
+   * (the general-purpose CLI-tooling workspace) if available, otherwise falls back to the
    * first alphabetical template.
    */
   defaultName(): string | undefined {
@@ -330,4 +330,3 @@ function parseAgentCredentials(raw: unknown): Record<string, AgentCredentialDecl
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
-

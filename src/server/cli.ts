@@ -18,9 +18,10 @@
  *   POST /cli/:wsId/:export/invoke     { tool, args } -> validate + execute.
  *
  * Each export resolves tools from ONE scope (global ToolCenter for `data`,
- * the per-workspace WorkspaceToolCenter for `workspace`) and invoke is gated to
- * that export's own map — so `alice` can't reach a collaboration tool and
- * vice-versa, and trading/cron stay off entirely (no `uta` export yet).
+ * `traderhub`, and `uta`; the per-workspace WorkspaceToolCenter for
+ * `workspace`) and invoke is gated to that export's own map — so `alice` can't
+ * reach collaboration tools and `alice-workspace` can't place trades. Trading
+ * is reachable only through `alice-uta`'s read/proposal map; cron stays off CLI.
  */
 
 import { randomUUID } from 'node:crypto'

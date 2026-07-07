@@ -10,16 +10,11 @@ const SESSION_FILE_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 const CLAUDE_SETTINGS_PATH = '.claude/settings.local.json';
 
 /**
- * Claude Code parks project-scoped `.mcp.json` servers at "⏸ Pending
- * approval" (the trust gate for VCS-shared MCP config) until the user
- * approves them — and every workspace dir is a fresh project key, so an
- * interactive session would re-prompt on every new workspace. Inject the
- * auto-trust setting at spawn instead of writing it into
- * `.claude/settings.local.json`, whose lifecycle `writeAiConfig` owns (the
- * file is deleted wholesale on AI-config reset). Headless `-p` connects to
- * project servers without approval today (verified on 2.1.170), but gets the
- * same flag so automation doesn't silently lose MCP if a future version
- * closes that gap.
+ * Claude Code can park project-scoped MCP servers at "⏸ Pending approval" when
+ * a workspace does provide them. New built-in OpenAlice templates no longer
+ * write `.mcp.json` (the default tool path is the injected `alice*` CLI shims),
+ * but keep the auto-trust setting at spawn so third-party/satellite workspaces
+ * that do ship MCP config do not stall on first launch.
  */
 const AUTOTRUST_SETTINGS = '{"enableAllProjectMcpServers":true}';
 
@@ -34,9 +29,9 @@ function projectKey(workspaceDir: string): string {
  * behavior bit-identical with what shipped previously (`composeCommand` here
  * is the verbatim move of `index.ts:composeCommand` from before refactor).
  *
- * MCP wiring for claude is handled by the template's `.mcp.json` (the launcher
- * still does the placeholder-substitution at spawn-env-build time). v2.M4
- * generalizes that into `bootstrap()` here.
+ * Tool access for built-in templates comes from the workspace-local `alice*`
+ * CLI shims and skills. Claude's native MCP path is still tolerated for
+ * third-party templates, but it is no longer the launcher-owned default.
  */
 export const claudeAdapter: CliAdapter = {
   id: 'claude',
@@ -81,11 +76,12 @@ export const claudeAdapter: CliAdapter = {
   },
 
   // Headless: `claude -p` is non-interactive and exits at the turn boundary.
-  // MCP rides the workspace `.mcp.json` (same as interactive) — so NEVER pass
-  // `--bare`, which sets CLAUDE_CODE_SIMPLE=1 and disables MCP (the agent would
-  // lose inbox_push). The prompt is the trailing positional AFTER a `--`
-  // end-of-options terminator, so a prompt that starts with `-`/`--` isn't
-  // mis-parsed as a flag (verified: without `--`, claude errors out).
+  // Tool access for built-in workspaces is through the injected CLI shims; do
+  // not pass `--bare`, which sets CLAUDE_CODE_SIMPLE=1 and can disable project
+  // features third-party templates may rely on. The prompt is the trailing
+  // positional AFTER a `--` end-of-options terminator, so a prompt that starts
+  // with `-`/`--` isn't mis-parsed as a flag (verified: without `--`, claude
+  // errors out).
   // Output is `stream-json` (one event per line, REQUIRES --verbose — plain
   // `-p --output-format stream-json` errors out): the launcher gets live
   // progress in the task log AND every event carries `session_id`, so the

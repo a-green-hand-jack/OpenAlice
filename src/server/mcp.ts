@@ -42,8 +42,9 @@ import { readUTAsConfig } from '../core/config.js'
  *                           workspaceId.
  *
  *   GET  /cli/:wsId/:export/manifest   Same identity-by-URL trick — the gateway
- *   POST /cli/:wsId/:export/invoke     for the workspace-local CLIs (alice*, traderhub)
- *                              (`:export` = data | workspace; see ./cli.ts).
+ *   POST /cli/:wsId/:export/invoke     for the workspace-local CLIs
+ *                              (`:export` = data | workspace | traderhub | uta;
+ *                              see ./cli-commands.ts).
  *                              Reuses this server's port so the shim needs no
  *                              token.
  *
