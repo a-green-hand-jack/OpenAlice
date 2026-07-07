@@ -87,6 +87,7 @@ function makeBlindBarRefusalAuditor(
       workspaceLabel: event.workspaceLabel ?? ws.tag,
       toolName: event.toolName,
       ...(event.barId ? { barId: event.barId } : {}),
+      ...(event.aliceId ? { aliceId: event.aliceId } : {}),
       ...(event.sourceId ? { sourceId: event.sourceId } : {}),
       allowedSources: event.allowedSources,
     }

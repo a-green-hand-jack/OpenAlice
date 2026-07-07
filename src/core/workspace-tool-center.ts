@@ -156,6 +156,14 @@ export function filterWorkspaceToolCatalog(
 
 const BLIND_BAR_TOOL_NAMES = new Set(['bars', 'searchBars'])
 
+const BLIND_TRADING_MARKET_TOOL_NAMES = new Set([
+  'searchContracts',
+  'getContractDetails',
+  'getQuote',
+  'expandContract',
+  'getMarketClock',
+])
+
 const BLIND_BLOCKED_TOOL_NAMES = new Set([
   'calculateIndicator',
   'calculateQuant',
@@ -184,6 +192,7 @@ export interface BlindBarSourceRefusal {
   readonly workspaceLabel?: string
   readonly toolName: string
   readonly barId?: string
+  readonly aliceId?: string
   readonly sourceId?: string
   readonly allowedSources: readonly string[]
   readonly message: string
@@ -216,16 +225,22 @@ function blindBarRefusalMessage(input: {
   const allowed = input.allowedSources.length > 0
     ? `Allowed bar sources: ${input.allowedSources.join(', ')}.`
     : 'No bar sources are allowlisted for this blind workspace.'
-  if (!input.barId) {
-    return (
-      `Blind workspace refused ${input.toolName}: this workspace cannot search real vendors or tickers. ` +
-      `Pass an explicit allowlisted barId ("source|symbol"). ${allowed}`
-    )
-  }
   if (!input.sourceId) {
+    if (!input.barId) {
+      return (
+        `Blind workspace refused ${input.toolName}: this workspace cannot search real vendors, brokers, or tickers. ` +
+        `Pass an explicit allowlisted source/barId. ${allowed}`
+      )
+    }
     return (
       `Blind workspace refused ${input.toolName} for barId "${input.barId}": expected "source|symbol". ` +
       allowed
+    )
+  }
+  if (!input.barId) {
+    return (
+      `Blind workspace refused ${input.toolName}: source "${input.sourceId}" is not allowlisted. ` +
+      `${allowed} This workspace can only query anonymized market-data sources provided by its blind campaign.`
     )
   }
   return (
@@ -240,6 +255,25 @@ function readBarIdArg(toolName: string, args: unknown): string | undefined {
   if (typeof record['barId'] === 'string') return record['barId']
   if (toolName === 'searchBars' && typeof record['query'] === 'string') return record['query']
   return undefined
+}
+
+function readStringArg(args: unknown, key: string): string | undefined {
+  if (typeof args !== 'object' || args === null || Array.isArray(args)) return undefined
+  const value = (args as Record<string, unknown>)[key]
+  return typeof value === 'string' ? value : undefined
+}
+
+function withNormalizedStringArgs(
+  args: unknown,
+  updates: Record<string, string | undefined>,
+): unknown {
+  if (typeof args !== 'object' || args === null || Array.isArray(args)) return args
+  const next: Record<string, unknown> = { ...(args as Record<string, unknown>) }
+  for (const [key, value] of Object.entries(updates)) {
+    if (value === undefined) delete next[key]
+    else next[key] = value
+  }
+  return next
 }
 
 function blindSearchBarsCandidate(barId: string, sourceId: string, nativeSymbol: string): unknown {
@@ -299,7 +333,98 @@ function wrapBlindBarTool(
         }
       }
 
-      return await execute(args, options)
+      return await execute(withNormalizedStringArgs(args, { barId }), options)
+    },
+  } as Tool
+}
+
+function readBlindTradingMarketSources(toolName: string, args: unknown): {
+  readonly sourceIds: readonly string[]
+  readonly args: unknown
+  readonly aliceId?: string
+  readonly source?: string
+} {
+  const rawSource = readStringArg(args, 'source')
+  const rawAliceId = readStringArg(args, 'aliceId')
+  const source = rawSource?.trim()
+  const aliceId = rawAliceId?.trim()
+  const updates: Record<string, string | undefined> = {}
+  if (rawSource !== undefined) updates['source'] = source && source.length > 0 ? source : undefined
+  if (rawAliceId !== undefined) updates['aliceId'] = aliceId && aliceId.length > 0 ? aliceId : undefined
+
+  const sourceIds: string[] = []
+  const addSource = (value: string | undefined) => {
+    if (value && !sourceIds.includes(value)) sourceIds.push(value)
+  }
+  const addAliceIdSource = (value: string | undefined) => {
+    if (!value) return
+    addSource(splitBarId(value)?.sourceId)
+  }
+
+  switch (toolName) {
+    case 'searchContracts':
+    case 'getMarketClock':
+      addSource(source)
+      break
+    case 'getQuote':
+    case 'expandContract':
+      addAliceIdSource(aliceId)
+      addSource(source)
+      break
+    case 'getContractDetails':
+      addSource(source)
+      addAliceIdSource(aliceId)
+      break
+  }
+
+  return {
+    sourceIds,
+    args: withNormalizedStringArgs(args, updates),
+    ...(aliceId ? { aliceId } : {}),
+    ...(source ? { source } : {}),
+  }
+}
+
+function wrapBlindTradingMarketTool(
+  name: string,
+  tool: Tool,
+  opts: Required<Pick<BlindWorkspaceToolSealOptions, 'blind'>> & Omit<BlindWorkspaceToolSealOptions, 'blind'>,
+): Tool {
+  const executable = tool as Tool & { execute?: (args: unknown, options: unknown) => unknown }
+  if (!executable.execute) return tool
+  const execute = executable.execute
+  const allowedSources = normalizeBlindAllowSources(opts.blindAllowBarSources)
+
+  return {
+    ...tool,
+    execute: async (args: unknown, options: unknown) => {
+      const refs = readBlindTradingMarketSources(name, args)
+      const denied = refs.sourceIds.find((sourceId) => !allowedSources.includes(sourceId))
+      const sourceId = denied ?? refs.sourceIds[0]
+      if (refs.sourceIds.length === 0 || denied) {
+        const message = blindBarRefusalMessage({
+          toolName: name,
+          ...(refs.aliceId ? { barId: refs.aliceId } : {}),
+          ...(sourceId ? { sourceId } : {}),
+          allowedSources,
+        })
+        try {
+          await opts.auditRefusal?.({
+            ...(opts.workspaceId ? { workspaceId: opts.workspaceId } : {}),
+            ...(opts.workspaceLabel ? { workspaceLabel: opts.workspaceLabel } : {}),
+            toolName: name,
+            ...(refs.aliceId ? { aliceId: refs.aliceId, barId: refs.aliceId } : {}),
+            ...(sourceId ? { sourceId } : {}),
+            allowedSources,
+            message,
+          })
+        } catch (err) {
+          console.warn('blind workspace source-refusal audit failed', err)
+        }
+        return { error: message, code: 'BLIND_BAR_SOURCE_DENIED' }
+      }
+
+      return await execute(refs.args, options)
     },
   } as Tool
 }
@@ -316,6 +441,10 @@ export function sealBlindWorkspaceToolCatalog(
   for (const [name, tool] of Object.entries(tools)) {
     if (BLIND_BAR_TOOL_NAMES.has(name)) {
       out[name] = wrapBlindBarTool(name, tool, { ...opts, blind: true })
+      continue
+    }
+    if (BLIND_TRADING_MARKET_TOOL_NAMES.has(name)) {
+      out[name] = wrapBlindTradingMarketTool(name, tool, { ...opts, blind: true })
       continue
     }
     const group = opts.groupForTool?.(name) ?? null

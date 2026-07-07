@@ -177,11 +177,13 @@ describe('blind workspace market-data seal', () => {
         searchBars: executable('searchBars'),
         calculate: executable('calculate'),
         getAccount: executable('getAccount'),
+        searchContracts: executable('searchContracts'),
+        getQuote: executable('getQuote'),
       },
       { inbox_push: executable('inbox_push'), workspace_path: executable('workspace_path') },
       {
         authzLevel: 'read_only',
-        groupForTool: (name) => name === 'getAccount' ? 'trading' : marketGroupForTool(name),
+        groupForTool: (name) => ['getAccount', 'searchContracts', 'getQuote'].includes(name) ? 'trading' : marketGroupForTool(name),
         blind: { blind: true, blindAllowBarSources: ['mock-paper'] },
       },
     )
@@ -190,7 +192,9 @@ describe('blind workspace market-data seal', () => {
       'bars',
       'calculate',
       'getAccount',
+      'getQuote',
       'inbox_push',
+      'searchContracts',
       'searchBars',
       'workspace_path',
     ].sort())
@@ -264,6 +268,82 @@ describe('blind workspace market-data seal', () => {
       count: 1,
       candidates: [expect.objectContaining({ barId: 'mock-paper|ASSET-A', sourceId: 'mock-paper' })],
     })
+  })
+
+  it('passes allowed bars through with the trimmed barId', async () => {
+    const calls: unknown[] = []
+    const sealed = sealBlindWorkspaceToolCatalog({
+      bars: executable('bars', async (args) => {
+        calls.push(args)
+        return { ok: true }
+      }),
+    }, {
+      blind: true,
+      blindAllowBarSources: ['mock-paper'],
+    })
+
+    const result = await (sealed.bars.execute as (args: unknown, opts: unknown) => Promise<unknown>)(
+      { barId: ' mock-paper|ASSET-A ', interval: '1d' },
+      {},
+    )
+
+    expect(result).toEqual({ ok: true })
+    expect(calls).toEqual([{ barId: 'mock-paper|ASSET-A', interval: '1d' }])
+  })
+
+  it('refuses blind trading market-data tools when their source is not allowlisted', async () => {
+    const calls: string[] = []
+    const sealed = sealBlindWorkspaceToolCatalog({
+      searchContracts: executable('searchContracts', async () => { calls.push('searchContracts') }),
+      getQuote: executable('getQuote', async () => { calls.push('getQuote') }),
+      getContractDetails: executable('getContractDetails', async () => { calls.push('getContractDetails') }),
+      expandContract: executable('expandContract', async () => { calls.push('expandContract') }),
+      getMarketClock: executable('getMarketClock', async () => { calls.push('getMarketClock') }),
+    }, {
+      blind: true,
+      blindAllowBarSources: ['mock-paper'],
+    })
+
+    const invoke = (name: string, args: unknown) =>
+      (sealed[name].execute as (a: unknown, o: unknown) => Promise<unknown>)(args, {})
+
+    await expect(invoke('searchContracts', { pattern: 'AAPL' })).resolves.toMatchObject({ code: 'BLIND_BAR_SOURCE_DENIED' })
+    await expect(invoke('searchContracts', { source: 'alpaca-paper', pattern: 'AAPL' })).resolves.toMatchObject({ code: 'BLIND_BAR_SOURCE_DENIED' })
+    await expect(invoke('getQuote', { aliceId: 'alpaca-paper|AAPL' })).resolves.toMatchObject({ code: 'BLIND_BAR_SOURCE_DENIED' })
+    await expect(invoke('getContractDetails', { source: 'mock-paper', aliceId: 'alpaca-paper|AAPL' })).resolves.toMatchObject({ code: 'BLIND_BAR_SOURCE_DENIED' })
+    await expect(invoke('expandContract', { aliceId: 'alpaca-paper|issuer:abc' })).resolves.toMatchObject({ code: 'BLIND_BAR_SOURCE_DENIED' })
+    await expect(invoke('getMarketClock', {})).resolves.toMatchObject({ code: 'BLIND_BAR_SOURCE_DENIED' })
+
+    expect(calls).toEqual([])
+  })
+
+  it('allows blind trading market-data tools only for allowlisted sources and trims args', async () => {
+    const seen: Record<string, unknown> = {}
+    const sealed = sealBlindWorkspaceToolCatalog({
+      searchContracts: executable('searchContracts', async (args) => { seen.searchContracts = args; return { ok: true } }),
+      getQuote: executable('getQuote', async (args) => { seen.getQuote = args; return { ok: true } }),
+      getContractDetails: executable('getContractDetails', async (args) => { seen.getContractDetails = args; return { ok: true } }),
+      expandContract: executable('expandContract', async (args) => { seen.expandContract = args; return { ok: true } }),
+      getMarketClock: executable('getMarketClock', async (args) => { seen.getMarketClock = args; return { ok: true } }),
+    }, {
+      blind: true,
+      blindAllowBarSources: ['mock-paper'],
+    })
+
+    const invoke = (name: string, args: unknown) =>
+      (sealed[name].execute as (a: unknown, o: unknown) => Promise<unknown>)(args, {})
+
+    await expect(invoke('searchContracts', { source: ' mock-paper ', pattern: 'ASSET-A' })).resolves.toEqual({ ok: true })
+    await expect(invoke('getQuote', { aliceId: ' mock-paper|ASSET-A ', source: ' mock-paper ' })).resolves.toEqual({ ok: true })
+    await expect(invoke('getContractDetails', { source: ' mock-paper ', aliceId: ' mock-paper|ASSET-A ' })).resolves.toEqual({ ok: true })
+    await expect(invoke('expandContract', { aliceId: ' mock-paper|issuer:abc ' })).resolves.toEqual({ ok: true })
+    await expect(invoke('getMarketClock', { source: ' mock-paper ' })).resolves.toEqual({ ok: true })
+
+    expect(seen.searchContracts).toMatchObject({ source: 'mock-paper' })
+    expect(seen.getQuote).toMatchObject({ aliceId: 'mock-paper|ASSET-A', source: 'mock-paper' })
+    expect(seen.getContractDetails).toMatchObject({ source: 'mock-paper', aliceId: 'mock-paper|ASSET-A' })
+    expect(seen.expandContract).toMatchObject({ aliceId: 'mock-paper|issuer:abc' })
+    expect(seen.getMarketClock).toMatchObject({ source: 'mock-paper' })
   })
 })
 
