@@ -24,6 +24,8 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   `src/main.ts:217-253`.
 - `workspaces/` - PTY-backed workspace launcher, templates, adapters, persistent
   session identity, scrollback, headless runs, schedules, and issue files.
+  The behavior/support map is
+  [../docs/openalice-agent-support.zh.md](../docs/openalice-agent-support.zh.md).
   Open `src/workspaces/service.ts:94-104`, `src/workspaces/session-pool.ts:72-84`,
   `src/workspaces/template-registry.ts:106-111`, and
   `src/workspaces/adapters/claude.ts:41-65`.

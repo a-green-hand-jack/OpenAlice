@@ -102,8 +102,8 @@ export const piAdapter: CliAdapter = {
   },
 
   // Headless: `pi -p <prompt>` is non-interactive and exits at the turn
-  // boundary. The MCP bridge + skills auto-load from `<cwd>/.pi` (process cwd =
-  // workspace), so the agent reaches inbox_push without any flag. NOTE: pi
+  // boundary. Tool access is the same CLI-injection path as interactive Pi:
+  // `alice*` shims on PATH plus skills auto-loaded from `<cwd>/.pi`. NOTE: pi
   // REJECTS a `--` end-of-options terminator ("Unknown option: --", verified
   // 0.78.1), so the prompt is a bare trailing positional — a prompt literally
   // starting with `-`/`--` is unprotected on pi (rare for task prompts).

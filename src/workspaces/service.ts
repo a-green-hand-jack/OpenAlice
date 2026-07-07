@@ -140,7 +140,7 @@ export interface WorkspaceService {
    * `composeHeadlessCommand` (prompt placed) on a plain pipe, run to natural
    * exit (= done), return exit/duration + output tails. The automation
    * primitive — the agent reports via `inbox_push`; this just waits on exit.
-   * Reuses the spawn env/cwd of a fresh interactive spawn (same MCP injection),
+   * Reuses the spawn env/cwd of a fresh interactive spawn (same tool/env injection),
    * but is NOT pooled (one-shot, no respawn). Throws if the adapter has no
    * headless mode.
    */
@@ -504,7 +504,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       adapter,
       logger: launcherLogger,
     });
-    // Reuse a fresh interactive spawn's env/cwd (identical MCP injection),
+    // Reuse a fresh interactive spawn's env/cwd (identical tool/env injection),
     // then swap the interactive command for the one-shot headless argv. Inject
     // AQ_RUN_ID = this run's taskId so the agent's inbox pushes self-link to the
     // run server-side (via the `alice` shim header / opencode's MCP header) —

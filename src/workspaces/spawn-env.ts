@@ -103,8 +103,8 @@ export function buildSpawnEnv(
   // `spawnCwd` was the workspace dir.
   if (cwd) out['PWD'] = cwd;
   // Caller-supplied per-session env (e.g. AQ_WS_ID, AQ_LAUNCHER_REPO_ROOT)
-  // wins over the inherited env so .mcp.json `${VAR}` expansion at Claude
-  // startup resolves to the right values.
+  // wins over the inherited env so tool URLs and any third-party project config
+  // resolve to the right values.
   for (const [k, v] of Object.entries(extras)) {
     out[k] = v;
   }
