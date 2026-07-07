@@ -62,6 +62,33 @@ describe('WorkspaceRegistry authzLevel persistence', () => {
     })
   })
 
+  it('persists blind mode and allowed bar sources in workspaces.json', async () => {
+    await withRegistry(async (path) => {
+      const reg = await WorkspaceRegistry.load(path, noopLogger)
+      await reg.add({
+        id: 'ws-blind',
+        tag: 'blind',
+        dir: '/tmp/ws-blind',
+        createdAt: '2026-07-06T00:00:00.000Z',
+        agents: ['codex'],
+        blind: true,
+        blindAllowBarSources: ['mock-paper', 'mock-campaign'],
+      })
+
+      const raw = JSON.parse(await readFile(path, 'utf8')) as {
+        workspaces: Array<{ blind?: boolean; blindAllowBarSources?: string[] }>
+      }
+      expect(raw.workspaces[0]).toMatchObject({
+        blind: true,
+        blindAllowBarSources: ['mock-paper', 'mock-campaign'],
+      })
+      expect((await WorkspaceRegistry.load(path, noopLogger)).get('ws-blind')).toMatchObject({
+        blind: true,
+        blindAllowBarSources: ['mock-paper', 'mock-campaign'],
+      })
+    })
+  })
+
   it('updates launcher-owned authzLevel in place', async () => {
     await withRegistry(async (path) => {
       const reg = await WorkspaceRegistry.load(path, noopLogger)
@@ -106,6 +133,36 @@ describe('WorkspaceRegistry authzLevel persistence', () => {
         expect(reg.get('ws-bad')?.authzLevel).toBe('read_only')
         expect(reg.get('ws-good')?.authzLevel).toBe('paper')
         expect(warn).toHaveBeenCalledWith(expect.stringMatching(/invalid authzLevel.*degrading/))
+      } finally {
+        warn.mockRestore()
+      }
+    })
+  })
+
+  it('degrades invalid blind fields without aborting load', async () => {
+    await withRegistry(async (path) => {
+      await writeFile(path, JSON.stringify({
+        version: 1,
+        workspaces: [{
+          id: 'ws-bad-blind',
+          tag: 'bad-blind',
+          dir: '/tmp/ws-bad-blind',
+          createdAt: '2026-07-06T00:00:00.000Z',
+          agents: ['claude'],
+          blind: 'yes',
+          blindAllowBarSources: ['mock-paper', 7, '', ' mock-paper ', 'mock-two'],
+        }],
+      }), 'utf8')
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const reg = await WorkspaceRegistry.load(path, noopLogger)
+        expect(reg.get('ws-bad-blind')).toMatchObject({
+          blindAllowBarSources: ['mock-paper', 'mock-two'],
+        })
+        expect(reg.get('ws-bad-blind')?.blind).toBeUndefined()
+        expect(warn).toHaveBeenCalledWith(expect.stringMatching(/invalid blind/))
+        expect(warn).toHaveBeenCalledWith(expect.stringMatching(/invalid blindAllowBarSources entries/))
       } finally {
         warn.mockRestore()
       }

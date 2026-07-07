@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createQuantTools } from './quant.js'
 import type { BarService } from '@/domain/market-data/bars/index'
 
@@ -18,6 +18,17 @@ const mockSvc = {
 const ctx = { toolCallId: 't', messages: [] as never, abortSignal: undefined as never }
 
 describe('quant tools wiring', () => {
+  it('bars fetches an explicit barId through the bar service', async () => {
+    const getBars = vi.fn(mockSvc.getBars)
+    const { bars } = createQuantTools({ barService: { ...mockSvc, getBars } as unknown as BarService })
+    const r = (await bars.execute!({ barId: 'mock-paper|ASSET-A', interval: '1d', count: 2 }, ctx)) as { meta: { barId: string } }
+    expect(r.meta.barId).toBe('yfinance|X')
+    expect(getBars).toHaveBeenCalledWith(
+      { barId: 'mock-paper|ASSET-A' },
+      { interval: '1d', count: 2 },
+    )
+  })
+
   it('searchBars returns barId candidates from the bar service', async () => {
     const { searchBars } = createQuantTools({ barService: mockSvc })
     const r = (await searchBars.execute!({ query: 'AAPL' }, ctx)) as { candidates: unknown[]; count: number }

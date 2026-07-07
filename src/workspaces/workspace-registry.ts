@@ -35,6 +35,14 @@ export interface WorkspaceMeta {
    */
   readonly authzLevel?: AuthzLevel;
   /**
+   * Blind workspaces are campaign sandboxes: their agent tool catalog is sealed
+   * away from real vendor/ticker market data while preserving allowlisted mock
+   * barIds.
+   */
+  readonly blind?: boolean;
+  /** Allowlisted barId sources (`source` in `source|symbol`) for blind mode. */
+  readonly blindAllowBarSources?: readonly string[];
+  /**
    * Adapter ids enabled in this workspace. Order is significant: the first
    * entry is the default for one-click spawns. Legacy rows (missing this
    * field) are normalized to `['claude']` at load time.
@@ -197,6 +205,37 @@ function validateFile(value: unknown): WorkspaceMeta[] {
         withTemplate = { ...withTemplate, authzLevel: DEFAULT_AUTHZ_LEVEL };
       } else {
         withTemplate = { ...withTemplate, authzLevel: e['authzLevel'] };
+      }
+    }
+    if (e['blind'] !== undefined) {
+      if (typeof e['blind'] === 'boolean') {
+        if (e['blind']) withTemplate = { ...withTemplate, blind: true };
+      } else {
+        console.warn(
+          `workspaces.json: entry ${i} (${e['id']}) has invalid blind ` +
+          `${JSON.stringify(e['blind'])}; degrading that row to blind=false.`,
+        );
+      }
+    }
+    if (e['blindAllowBarSources'] !== undefined) {
+      if (Array.isArray(e['blindAllowBarSources'])) {
+        const sources = [...new Set(e['blindAllowBarSources']
+          .filter((s): s is string => typeof s === 'string')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0))];
+        withTemplate = { ...withTemplate, blindAllowBarSources: sources };
+        if (sources.length !== e['blindAllowBarSources'].length) {
+          console.warn(
+            `workspaces.json: entry ${i} (${e['id']}) has invalid blindAllowBarSources entries; ` +
+            'dropping non-string/empty values.',
+          );
+        }
+      } else {
+        console.warn(
+          `workspaces.json: entry ${i} (${e['id']}) has invalid blindAllowBarSources ` +
+          `${JSON.stringify(e['blindAllowBarSources'])}; degrading that row to an empty allowlist.`,
+        );
+        withTemplate = { ...withTemplate, blindAllowBarSources: [] };
       }
     }
     return withTemplate;

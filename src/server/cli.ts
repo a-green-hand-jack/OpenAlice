@@ -23,13 +23,15 @@
  * vice-versa, and trading/cron stay off entirely (no `uta` export yet).
  */
 
+import { randomUUID } from 'node:crypto'
 import type { Hono } from 'hono'
 import { z } from 'zod'
 import type { Tool } from 'ai'
 import type { ToolCenter } from '../core/tool-center.js'
 import {
   accountAuthzSnapshotFromConfig,
-  filterWorkspaceToolCatalog,
+  buildWorkspaceToolCatalog,
+  type BlindBarSourceRefusal,
   type WorkspaceToolCenter,
   makeWorkspaceResolver,
   resolveWorkspaceToolAuthzLevel,
@@ -43,6 +45,7 @@ import { type CliExport, getExport, mappedToolNames } from './cli-commands.js'
 import { resolveInboxOrigin } from './inbox-origin.js'
 import { readUTAsConfig } from '../core/config.js'
 import type { AuthzLevel } from '@traderalice/uta-protocol'
+import type { ToolCallLog } from '../core/tool-call-log.js'
 
 export interface CliGatewayDeps {
   toolCenter: ToolCenter
@@ -52,13 +55,54 @@ export interface CliGatewayDeps {
   entityStore: IEntityStore
   /** Lazy — WorkspaceService is created after McpPlugin starts. */
   getWorkspaceService: () => WorkspaceService | null
+  /** Optional visible audit sink for blind workspace de-anonymization attempts. */
+  toolCallLog?: ToolCallLog
 }
 
-type WsMeta = { id: string; tag: string; authzLevel?: AuthzLevel }
+type WsMeta = {
+  id: string
+  tag: string
+  authzLevel?: AuthzLevel
+  blind?: boolean
+  blindAllowBarSources?: readonly string[]
+}
+
+function blindAuditSessionId(ws: WsMeta, origin?: InboxOrigin): string {
+  if (origin?.kind === 'interactive' && origin.sessionId) return origin.sessionId
+  if (origin?.kind === 'headless' && origin.runId) return origin.runId
+  return `workspace:${ws.id}`
+}
+
+function makeBlindBarRefusalAuditor(
+  toolCallLog: ToolCallLog | undefined,
+  ws: WsMeta,
+  origin?: InboxOrigin,
+): ((event: BlindBarSourceRefusal) => Promise<void>) | undefined {
+  if (!toolCallLog) return undefined
+  return async (event) => {
+    const id = `blind-${randomUUID()}`
+    const input = {
+      kind: 'blind_bar_source_refusal',
+      workspaceId: event.workspaceId ?? ws.id,
+      workspaceLabel: event.workspaceLabel ?? ws.tag,
+      toolName: event.toolName,
+      ...(event.barId ? { barId: event.barId } : {}),
+      ...(event.sourceId ? { sourceId: event.sourceId } : {}),
+      allowedSources: event.allowedSources,
+    }
+    toolCallLog.start(id, event.toolName, input, blindAuditSessionId(ws, origin))
+    await toolCallLog.complete(id, JSON.stringify({
+      error: event.message,
+      code: 'BLIND_BAR_SOURCE_DENIED',
+      workspaceId: event.workspaceId ?? ws.id,
+      toolName: event.toolName,
+    }))
+  }
+}
 
 /** Mount /cli/:wsId/:export/* onto an existing Hono app (the MCP server's app). */
 export function registerCliRoutes(app: Hono, deps: CliGatewayDeps): void {
-  const { toolCenter, workspaceToolCenter, inboxStore, entityStore, getWorkspaceService } = deps
+  const { toolCenter, workspaceToolCenter, inboxStore, entityStore, getWorkspaceService, toolCallLog } = deps
 
   /** Resolve + validate the workspace from the URL path. */
   const resolveWs = (wsId: string): { meta: WsMeta } | { error: 'unavailable' | 'unknown' } => {
@@ -66,7 +110,15 @@ export function registerCliRoutes(app: Hono, deps: CliGatewayDeps): void {
     if (!svc) return { error: 'unavailable' }
     const meta = svc.registry.get(wsId)
     if (!meta) return { error: 'unknown' }
-    return { meta: { id: meta.id, tag: meta.tag, ...(meta.authzLevel ? { authzLevel: meta.authzLevel } : {}) } }
+    return {
+      meta: {
+        id: meta.id,
+        tag: meta.tag,
+        ...(meta.authzLevel ? { authzLevel: meta.authzLevel } : {}),
+        ...(meta.blind === true ? { blind: true } : {}),
+        ...(meta.blindAllowBarSources ? { blindAllowBarSources: meta.blindAllowBarSources } : {}),
+      },
+    }
   }
 
   const resolveToolAuthzLevel = async (ws: WsMeta) => {
@@ -136,9 +188,17 @@ export function registerCliRoutes(app: Hono, deps: CliGatewayDeps): void {
       workspaceAuthzLevel: authzLevel,
       accounts: utas.map(accountAuthzSnapshotFromConfig),
     })
-    const filtered = filterWorkspaceToolCatalog(gated, {
+    const auditRefusal = makeBlindBarRefusalAuditor(toolCallLog, ws, origin)
+    const filtered = buildWorkspaceToolCatalog(gated, {}, {
       authzLevel,
       groupForTool: (name) => toolCenter.getGroup(name),
+      blind: {
+        blind: ws.blind === true,
+        blindAllowBarSources: ws.blindAllowBarSources ?? [],
+        workspaceId: ws.id,
+        workspaceLabel: ws.tag,
+        ...(auditRefusal ? { auditRefusal } : {}),
+      },
     })
     return {
       resolve: (name) => filtered[name] ?? null,

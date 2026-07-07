@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import { ToolCenter } from '../core/tool-center.js'
 import { WorkspaceToolCenter } from '../core/workspace-tool-center.js'
@@ -9,6 +9,9 @@ import { createMemoryInboxStore } from '../core/inbox-store.js'
 import { extractMcpShape } from '../core/mcp-export.js'
 import { inboxPushFactory } from '../tool/inbox-push.js'
 import { registerCliRoutes, type CliGatewayDeps } from './cli.js'
+import { createQuantTools } from '../tool/quant.js'
+import { createMarketSearchTools } from '../tool/market.js'
+import type { BarService } from '../domain/market-data/bars/index.js'
 
 /**
  * End-to-end gateway test using the real `calculate` tool (no client deps), so
@@ -102,6 +105,103 @@ describe('CLI gateway — data export', () => {
   it('invoke 404s on unknown workspace', async () => {
     const res = await post('/cli/nope/data/invoke', { tool: 'calculate', args: { expression: '1' } })
     expect(res.status).toBe(404)
+  })
+})
+
+describe('CLI gateway — blind workspace data seal', () => {
+  const barService = {
+    searchBarSources: async () => {
+      throw new Error('real search should not run in blind mode')
+    },
+    getBars: async () => ({
+      bars: [{ date: '2026-01-01', open: 1, high: 2, low: 1, close: 2, volume: 10 }],
+      meta: { symbol: 'ASSET-A', from: '2026-01-01', to: '2026-01-01', bars: 1, source: 'uta', sourceId: 'mock-paper', barId: 'mock-paper|ASSET-A' },
+    }),
+  } as unknown as BarService
+
+  function makeBlindApp() {
+    const toolCenter = new ToolCenter()
+    toolCenter.register(createThinkingTools(), 'thinking')
+    toolCenter.register(createMarketSearchTools({} as never), 'market-search')
+    toolCenter.register(createQuantTools({ barService }), 'quant')
+    const fakeSvc = {
+      registry: {
+        get: (id: string) =>
+          id === 'ws1'
+            ? { id: 'ws1', tag: 'blind', blind: true, blindAllowBarSources: ['mock-paper'] }
+            : undefined,
+      },
+    }
+    const toolCallLog = {
+      start: vi.fn(),
+      complete: vi.fn(async () => {}),
+      flushPending: vi.fn(),
+      query: vi.fn(),
+      recent: vi.fn(),
+      lastSeq: vi.fn(),
+      subscribe: vi.fn(),
+      close: vi.fn(),
+      _resetForTest: vi.fn(),
+    }
+    const app = new Hono()
+    registerCliRoutes(app, {
+      toolCenter,
+      workspaceToolCenter: new WorkspaceToolCenter(),
+      inboxStore: {} as never,
+      entityStore: {} as never,
+      getWorkspaceService: () => fakeSvc as never,
+      toolCallLog: toolCallLog as never,
+    })
+    return { app, toolCallLog }
+  }
+
+  it('removes real-market CLI verbs from a blind workspace manifest but keeps explicit barId reads', async () => {
+    const { app } = makeBlindApp()
+    const res = await app.request('/cli/ws1/data/manifest')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      groups: Record<string, Record<string, { tool: string }>>
+      unmapped: string[]
+    }
+
+    expect(body.groups['analysis']?.['bars']?.tool).toBe('bars')
+    expect(body.groups['analysis']?.['search-bars']?.tool).toBe('searchBars')
+    expect(body.groups['analysis']?.['quant']).toBeUndefined()
+    expect(body.groups['market']).toBeUndefined()
+    expect(body.unmapped).not.toContain('calculateQuant')
+    expect(body.unmapped).not.toContain('marketSearchForResearch')
+  })
+
+  it('audits a refused blind bars invocation through the tool-call log', async () => {
+    const { app, toolCallLog } = makeBlindApp()
+    const res = await app.request('/cli/ws1/data/invoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tool: 'bars',
+        args: { barId: 'yfinance|AAPL', interval: '1d', asset: 'equity' },
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { content: Array<{ text?: string }> }
+    const text = body.content.map((b) => b.text ?? '').join('')
+    expect(text).toContain('BLIND_BAR_SOURCE_DENIED')
+    expect(toolCallLog.start).toHaveBeenCalledWith(
+      expect.stringMatching(/^blind-/),
+      'bars',
+      expect.objectContaining({
+        kind: 'blind_bar_source_refusal',
+        workspaceId: 'ws1',
+        barId: 'yfinance|AAPL',
+        sourceId: 'yfinance',
+      }),
+      'workspace:ws1',
+    )
+    expect(toolCallLog.complete).toHaveBeenCalledWith(
+      expect.stringMatching(/^blind-/),
+      expect.stringContaining('BLIND_BAR_SOURCE_DENIED'),
+    )
   })
 })
 

@@ -11,9 +11,42 @@
 import { tool } from 'ai'
 import { z } from 'zod'
 import { runScript, type CalcDeps } from '@/domain/analysis/calc-v2/index'
+import type { AssetClass } from '@/domain/market-data/aggregate-search.js'
+
+const assetClassSchema = z.enum(['equity', 'crypto', 'currency', 'commodity'])
 
 export function createQuantTools(deps: CalcDeps) {
   return {
+    bars: tool({
+      description: `Fetch OHLCV bars from an explicit barId.
+
+Use a barId returned by searchBars or searchContracts, e.g. "alpaca-paper|AAPL" or
+"yfinance|AAPL". Broker/mock barIds route directly to that source. Vendor barIds
+need asset="equity|crypto|currency|commodity" so the bar service can choose the
+right historical endpoint.`,
+      inputSchema: z.object({
+        barId: z.string().describe('Explicit bar source id in the form "source|symbol".'),
+        interval: z.string().describe('Bar interval, e.g. "1m", "5m", "1h", "1d", "1w".'),
+        count: z.number().int().positive().optional().describe('Number of most-recent bars to return.'),
+        start: z.string().optional().describe('Optional inclusive lower bound, YYYY-MM-DD.'),
+        end: z.string().optional().describe('Optional inclusive upper bound, YYYY-MM-DD.'),
+        asOf: z.string().optional().describe('Point-in-time anchor for count-bounded reads, YYYY-MM-DD.'),
+        asset: assetClassSchema.optional().describe('Required for vendor barIds; omitted for broker/mock barIds.'),
+      }).meta({ examples: [{ barId: 'alpaca-paper|AAPL', interval: '1d', count: 250 }] }),
+      execute: async ({ barId, interval, count, start, end, asOf, asset }) => {
+        return deps.barService.getBars(
+          asset ? { barId, assetClass: asset as AssetClass } : { barId },
+          {
+            interval,
+            ...(count !== undefined ? { count } : {}),
+            ...(start ? { start } : {}),
+            ...(end ? { end } : {}),
+            ...(asOf ? { asOf } : {}),
+          },
+        )
+      },
+    }),
+
     searchBars: tool({
       description: `Find K-line sources for a symbol — returns barIds to paste into calculateQuant's bars(...).
 

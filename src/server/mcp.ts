@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { serve } from '@hono/node-server'
+import { randomUUID } from 'node:crypto'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import type { Plugin, EngineContext } from '../core/types.js'
@@ -8,6 +9,7 @@ import type { ToolCenter } from '../core/tool-center.js'
 import {
   buildWorkspaceToolCatalog,
   accountAuthzSnapshotFromConfig,
+  type BlindBarSourceRefusal,
   filterWorkspaceToolCatalog,
   type WorkspaceToolCenter,
   makeWorkspaceResolver,
@@ -72,12 +74,42 @@ export class McpPlugin implements Plugin {
     private getWorkspaceService: () => WorkspaceService | null,
   ) {}
 
-  async start(_ctx: EngineContext) {
+  async start(ctx: EngineContext) {
     const toolCenter = this.toolCenter
     const workspaceToolCenter = this.workspaceToolCenter
     const inboxStore = this.inboxStore
     const entityStore = this.entityStore
     const getWorkspaceService = this.getWorkspaceService
+    const toolCallLog = ctx.toolCallLog
+
+    const auditSessionId = (wsId: string, origin?: InboxOrigin): string => {
+      if (origin?.kind === 'interactive' && origin.sessionId) return origin.sessionId
+      if (origin?.kind === 'headless' && origin.runId) return origin.runId
+      return `workspace:${wsId}`
+    }
+
+    const makeBlindBarRefusalAuditor = (
+      wsId: string,
+      wsLabel: string,
+      origin?: InboxOrigin,
+    ): ((event: BlindBarSourceRefusal) => Promise<void>) => async (event) => {
+      const id = `blind-${randomUUID()}`
+      toolCallLog.start(id, event.toolName, {
+        kind: 'blind_bar_source_refusal',
+        workspaceId: event.workspaceId ?? wsId,
+        workspaceLabel: event.workspaceLabel ?? wsLabel,
+        toolName: event.toolName,
+        ...(event.barId ? { barId: event.barId } : {}),
+        ...(event.sourceId ? { sourceId: event.sourceId } : {}),
+        allowedSources: event.allowedSources,
+      }, auditSessionId(wsId, origin))
+      await toolCallLog.complete(id, JSON.stringify({
+        error: event.message,
+        code: 'BLIND_BAR_SOURCE_DENIED',
+        workspaceId: event.workspaceId ?? wsId,
+        toolName: event.toolName,
+      }))
+    }
 
     /** Build a per-request McpServer with the global ToolCenter catalog. */
     const createGlobalMcpServer = async () => {
@@ -140,6 +172,13 @@ export class McpPlugin implements Plugin {
       const tools = buildWorkspaceToolCatalog(globalTools, scopedTools, {
         authzLevel,
         groupForTool: (name) => toolCenter.getGroup(name),
+        blind: {
+          blind: meta?.blind === true,
+          blindAllowBarSources: meta?.blindAllowBarSources ?? [],
+          workspaceId: wsId,
+          workspaceLabel: wsLabel,
+          auditRefusal: makeBlindBarRefusalAuditor(wsId, wsLabel, origin),
+        },
       })
       const mcp = new McpServer({ name: 'open-alice-workspace', version: '1.0.0' })
       for (const [name, t] of Object.entries(tools)) {
@@ -206,6 +245,7 @@ export class McpPlugin implements Plugin {
       inboxStore,
       entityStore,
       getWorkspaceService,
+      toolCallLog,
     })
 
     // LOOPBACK-ONLY, ALWAYS — deliberately NOT honoring OPENALICE_BIND_HOST.

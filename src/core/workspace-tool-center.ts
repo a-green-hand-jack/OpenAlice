@@ -152,18 +152,198 @@ export function filterWorkspaceToolCatalog(
   return out
 }
 
+// ==================== Blind workspace market-data seal ====================
+
+const BLIND_BAR_TOOL_NAMES = new Set(['bars', 'searchBars'])
+
+const BLIND_BLOCKED_TOOL_NAMES = new Set([
+  'calculateIndicator',
+  'calculateQuant',
+  'marketSearchForResearch',
+])
+
+const BLIND_BLOCKED_GROUPS = new Set([
+  'analysis',
+  'derivatives',
+  'economy',
+  'equity',
+  'etf',
+  'indices',
+  'market-board',
+  'market-search',
+  'market-vendors',
+  'news',
+  'rss',
+  'sector-rotation',
+  'simulate',
+  'snapshot',
+])
+
+export interface BlindBarSourceRefusal {
+  readonly workspaceId?: string
+  readonly workspaceLabel?: string
+  readonly toolName: string
+  readonly barId?: string
+  readonly sourceId?: string
+  readonly allowedSources: readonly string[]
+  readonly message: string
+}
+
+export interface BlindWorkspaceToolSealOptions {
+  readonly blind?: boolean | null
+  readonly blindAllowBarSources?: readonly string[] | null
+  readonly workspaceId?: string
+  readonly workspaceLabel?: string
+  readonly auditRefusal?: (event: BlindBarSourceRefusal) => void | Promise<void>
+}
+
+function normalizeBlindAllowSources(sources: readonly string[] | null | undefined): readonly string[] {
+  return [...new Set((sources ?? []).map((s) => s.trim()).filter((s) => s.length > 0))]
+}
+
+function splitBarId(barId: string): { sourceId: string; nativeSymbol: string } | null {
+  const idx = barId.indexOf('|')
+  if (idx <= 0 || idx === barId.length - 1) return null
+  return { sourceId: barId.slice(0, idx), nativeSymbol: barId.slice(idx + 1) }
+}
+
+function blindBarRefusalMessage(input: {
+  readonly toolName: string
+  readonly barId?: string
+  readonly sourceId?: string
+  readonly allowedSources: readonly string[]
+}): string {
+  const allowed = input.allowedSources.length > 0
+    ? `Allowed bar sources: ${input.allowedSources.join(', ')}.`
+    : 'No bar sources are allowlisted for this blind workspace.'
+  if (!input.barId) {
+    return (
+      `Blind workspace refused ${input.toolName}: this workspace cannot search real vendors or tickers. ` +
+      `Pass an explicit allowlisted barId ("source|symbol"). ${allowed}`
+    )
+  }
+  if (!input.sourceId) {
+    return (
+      `Blind workspace refused ${input.toolName} for barId "${input.barId}": expected "source|symbol". ` +
+      allowed
+    )
+  }
+  return (
+    `Blind workspace refused ${input.toolName} for barId "${input.barId}": source "${input.sourceId}" is not allowlisted. ` +
+    `${allowed} This workspace can only read anonymized barIds provided by its blind campaign.`
+  )
+}
+
+function readBarIdArg(toolName: string, args: unknown): string | undefined {
+  if (typeof args !== 'object' || args === null) return undefined
+  const record = args as Record<string, unknown>
+  if (typeof record['barId'] === 'string') return record['barId']
+  if (toolName === 'searchBars' && typeof record['query'] === 'string') return record['query']
+  return undefined
+}
+
+function blindSearchBarsCandidate(barId: string, sourceId: string, nativeSymbol: string): unknown {
+  return {
+    barId,
+    source: 'uta',
+    sourceId,
+    symbol: nativeSymbol,
+    assetClass: 'unknown',
+    label: `${nativeSymbol} (${sourceId}) - blind-allowed`,
+  }
+}
+
+function wrapBlindBarTool(
+  name: string,
+  tool: Tool,
+  opts: Required<Pick<BlindWorkspaceToolSealOptions, 'blind'>> & Omit<BlindWorkspaceToolSealOptions, 'blind'>,
+): Tool {
+  const executable = tool as Tool & { execute?: (args: unknown, options: unknown) => unknown }
+  if (!executable.execute) return tool
+  const execute = executable.execute
+  const allowedSources = normalizeBlindAllowSources(opts.blindAllowBarSources)
+
+  return {
+    ...tool,
+    execute: async (args: unknown, options: unknown) => {
+      const barId = readBarIdArg(name, args)?.trim()
+      const parsed = barId ? splitBarId(barId) : null
+      const allowed = parsed ? allowedSources.includes(parsed.sourceId) : false
+      if (!allowed) {
+        const message = blindBarRefusalMessage({
+          toolName: name,
+          ...(barId ? { barId } : {}),
+          ...(parsed?.sourceId ? { sourceId: parsed.sourceId } : {}),
+          allowedSources,
+        })
+        try {
+          await opts.auditRefusal?.({
+            ...(opts.workspaceId ? { workspaceId: opts.workspaceId } : {}),
+            ...(opts.workspaceLabel ? { workspaceLabel: opts.workspaceLabel } : {}),
+            toolName: name,
+            ...(barId ? { barId } : {}),
+            ...(parsed?.sourceId ? { sourceId: parsed.sourceId } : {}),
+            allowedSources,
+            message,
+          })
+        } catch (err) {
+          console.warn('blind workspace bar-refusal audit failed', err)
+        }
+        return { error: message, code: 'BLIND_BAR_SOURCE_DENIED' }
+      }
+
+      if (name === 'searchBars') {
+        return {
+          candidates: [blindSearchBarsCandidate(barId!, parsed!.sourceId, parsed!.nativeSymbol)],
+          count: 1,
+        }
+      }
+
+      return await execute(args, options)
+    },
+  } as Tool
+}
+
+export function sealBlindWorkspaceToolCatalog(
+  tools: Record<string, Tool>,
+  opts: BlindWorkspaceToolSealOptions & {
+    readonly groupForTool?: (name: string) => string | null
+  },
+): Record<string, Tool> {
+  if (opts.blind !== true) return tools
+
+  const out: Record<string, Tool> = {}
+  for (const [name, tool] of Object.entries(tools)) {
+    if (BLIND_BAR_TOOL_NAMES.has(name)) {
+      out[name] = wrapBlindBarTool(name, tool, { ...opts, blind: true })
+      continue
+    }
+    const group = opts.groupForTool?.(name) ?? null
+    if (BLIND_BLOCKED_TOOL_NAMES.has(name) || (group !== null && BLIND_BLOCKED_GROUPS.has(group))) {
+      continue
+    }
+    out[name] = tool
+  }
+  return out
+}
+
 export function buildWorkspaceToolCatalog(
   globalTools: Record<string, Tool>,
   scopedTools: Record<string, Tool>,
   opts: {
     readonly authzLevel: AuthzLevel
     readonly groupForTool?: (name: string) => string | null
+    readonly blind?: BlindWorkspaceToolSealOptions
   },
 ): Record<string, Tool> {
-  return {
+  const tools = {
     ...filterWorkspaceToolCatalog(globalTools, opts),
     ...scopedTools,
   }
+  return sealBlindWorkspaceToolCatalog(tools, {
+    ...(opts.blind ?? {}),
+    ...(opts.groupForTool ? { groupForTool: opts.groupForTool } : {}),
+  })
 }
 
 export interface AccountAuthzSnapshot {

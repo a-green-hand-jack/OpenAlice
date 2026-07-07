@@ -10,6 +10,7 @@ import {
   checkTradingProposalAuthz,
   makeWorkspaceResolver,
   resolveWorkspaceToolAuthzLevel,
+  sealBlindWorkspaceToolCatalog,
   wrapTradingProposalToolsWithAuthz,
 } from './workspace-tool-center.js'
 import type { AuthzLevel } from '@traderalice/uta-protocol'
@@ -111,6 +112,159 @@ describe('workspace tool surface authz filtering', () => {
       ].sort())
     },
   )
+})
+
+describe('blind workspace market-data seal', () => {
+  const marketGroupForTool = (name: string): string | null => ({
+    calculateIndicator: 'analysis',
+    calculateQuant: 'quant',
+    marketSearchForResearch: 'market-search',
+    marketGetBoard: 'market-board',
+    equityGetProfile: 'equity',
+    economyFredSearch: 'economy',
+    indexSearch: 'indices',
+    sectorRotation: 'sector-rotation',
+    cryptoOptionsChains: 'derivatives',
+    etfSearch: 'etf',
+    grepRss: 'rss',
+    bars: 'quant',
+    searchBars: 'quant',
+    calculate: 'thinking',
+  } as Record<string, string | undefined>)[name] ?? null
+
+  const executable = (name: string, fn: (args: unknown) => unknown = async () => ({ ok: true })) => ({
+    description: name,
+    execute: fn,
+  }) as unknown as Tool
+
+  it('leaves a non-blind catalog unchanged', () => {
+    const global = {
+      bars: executable('bars'),
+      calculateQuant: executable('calculateQuant'),
+      marketSearchForResearch: executable('marketSearchForResearch'),
+      calculate: executable('calculate'),
+    }
+    const normal = buildWorkspaceToolCatalog(global, {}, {
+      authzLevel: 'read_only',
+      groupForTool: marketGroupForTool,
+    })
+    const nonBlind = buildWorkspaceToolCatalog(global, {}, {
+      authzLevel: 'read_only',
+      groupForTool: marketGroupForTool,
+      blind: { blind: false, blindAllowBarSources: ['mock-paper'] },
+    })
+
+    expect(Object.keys(nonBlind).sort()).toEqual(Object.keys(normal).sort())
+    expect(nonBlind.bars).toBe(normal.bars)
+    expect(nonBlind.calculateQuant).toBe(normal.calculateQuant)
+  })
+
+  it('drops real-market tools while keeping trading, thinking, scoped, and explicit barId tools', () => {
+    const sealed = buildWorkspaceToolCatalog(
+      {
+        calculateIndicator: executable('calculateIndicator'),
+        calculateQuant: executable('calculateQuant'),
+        marketSearchForResearch: executable('marketSearchForResearch'),
+        marketGetBoard: executable('marketGetBoard'),
+        equityGetProfile: executable('equityGetProfile'),
+        economyFredSearch: executable('economyFredSearch'),
+        indexSearch: executable('indexSearch'),
+        sectorRotation: executable('sectorRotation'),
+        cryptoOptionsChains: executable('cryptoOptionsChains'),
+        etfSearch: executable('etfSearch'),
+        grepRss: executable('grepRss'),
+        bars: executable('bars'),
+        searchBars: executable('searchBars'),
+        calculate: executable('calculate'),
+        getAccount: executable('getAccount'),
+      },
+      { inbox_push: executable('inbox_push'), workspace_path: executable('workspace_path') },
+      {
+        authzLevel: 'read_only',
+        groupForTool: (name) => name === 'getAccount' ? 'trading' : marketGroupForTool(name),
+        blind: { blind: true, blindAllowBarSources: ['mock-paper'] },
+      },
+    )
+
+    expect(Object.keys(sealed).sort()).toEqual([
+      'bars',
+      'calculate',
+      'getAccount',
+      'inbox_push',
+      'searchBars',
+      'workspace_path',
+    ].sort())
+  })
+
+  it('passes allowed bars through unchanged', async () => {
+    const calls: unknown[] = []
+    const sealed = sealBlindWorkspaceToolCatalog({
+      bars: executable('bars', async (args) => {
+        calls.push(args)
+        return { ok: true }
+      }),
+    }, {
+      blind: true,
+      blindAllowBarSources: ['mock-paper'],
+    })
+
+    const result = await (sealed.bars.execute as (args: unknown, opts: unknown) => Promise<unknown>)(
+      { barId: 'mock-paper|ASSET-A', interval: '1d' },
+      {},
+    )
+    expect(result).toEqual({ ok: true })
+    expect(calls).toEqual([{ barId: 'mock-paper|ASSET-A', interval: '1d' }])
+  })
+
+  it('refuses and audits disallowed bar sources', async () => {
+    const audits: unknown[] = []
+    const sealed = sealBlindWorkspaceToolCatalog({
+      bars: executable('bars'),
+    }, {
+      blind: true,
+      blindAllowBarSources: ['mock-paper'],
+      workspaceId: 'ws-blind',
+      workspaceLabel: 'blind lab',
+      auditRefusal: async (event) => { audits.push(event) },
+    })
+
+    const result = await (sealed.bars.execute as (args: unknown, opts: unknown) => Promise<unknown>)(
+      { barId: 'yfinance|AAPL', interval: '1d', asset: 'equity' },
+      {},
+    )
+    expect(result).toMatchObject({ code: 'BLIND_BAR_SOURCE_DENIED' })
+    expect((result as { error: string }).error).toMatch(/source "yfinance" is not allowlisted/)
+    expect(audits).toEqual([expect.objectContaining({
+      workspaceId: 'ws-blind',
+      toolName: 'bars',
+      barId: 'yfinance|AAPL',
+      sourceId: 'yfinance',
+      allowedSources: ['mock-paper'],
+    })])
+  })
+
+  it('blind searchBars never calls the real search path and only returns an allowlisted explicit barId', async () => {
+    let called = false
+    const sealed = sealBlindWorkspaceToolCatalog({
+      searchBars: executable('searchBars', async () => {
+        called = true
+        return { candidates: [], count: 0 }
+      }),
+    }, {
+      blind: true,
+      blindAllowBarSources: ['mock-paper'],
+    })
+
+    const result = await (sealed.searchBars.execute as (args: unknown, opts: unknown) => Promise<unknown>)(
+      { query: 'mock-paper|ASSET-A' },
+      {},
+    )
+    expect(called).toBe(false)
+    expect(result).toMatchObject({
+      count: 1,
+      candidates: [expect.objectContaining({ barId: 'mock-paper|ASSET-A', sourceId: 'mock-paper' })],
+    })
+  })
 })
 
 describe('trading proposal per-account authz binding', () => {

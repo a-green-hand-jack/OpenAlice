@@ -19,6 +19,7 @@ import type { IInboxStore } from '../core/inbox-store.js'
 import type { IEntityStore } from '../core/entity-store.js'
 import type { WorkspaceService } from '../workspaces/service.js'
 import { registerCliRoutes } from './cli.js'
+import type { ToolCallLog } from '../core/tool-call-log.js'
 
 export interface LocalToolGatewayDeps {
   readonly toolCenter: ToolCenter
@@ -26,6 +27,7 @@ export interface LocalToolGatewayDeps {
   readonly inboxStore: IInboxStore
   readonly entityStore: IEntityStore
   readonly getWorkspaceService: () => WorkspaceService | null
+  readonly toolCallLog?: ToolCallLog
 }
 
 export function mountLocalToolGateway(app: Hono, deps: LocalToolGatewayDeps): void {
@@ -41,14 +43,14 @@ export class LocalToolGatewayPlugin implements Plugin {
     private deps: LocalToolGatewayDeps,
   ) {}
 
-  async start(_ctx: EngineContext) {
+  async start(ctx: EngineContext) {
     const app = new Hono()
     app.use('*', cors({
       origin: '*',
       allowMethods: ['GET', 'POST', 'OPTIONS'],
       allowHeaders: ['Content-Type', 'x-openalice-run', 'x-openalice-session'],
     }))
-    mountLocalToolGateway(app, this.deps)
+    mountLocalToolGateway(app, { ...this.deps, toolCallLog: ctx.toolCallLog })
     this.server = serve({ fetch: app.fetch, port: this.port, hostname: '127.0.0.1' }, (info) => {
       console.log(`local tool gateway listening on http://127.0.0.1:${info.port}/cli`)
     })

@@ -178,6 +178,7 @@ export class WebPlugin implements Plugin {
         inboxStore: ctx.inboxStore,
         entityStore: ctx.entityStore,
         getWorkspaceService: () => this.workspaceServiceRef?.current ?? this.workspaceService,
+        toolCallLog: ctx.toolCallLog,
       })
     }
 
