@@ -22,6 +22,7 @@ Thumbs.db
 # Build cache
 *.tsbuildinfo
 /*.tgz
+/vendor/
 
 # Test
 coverage/

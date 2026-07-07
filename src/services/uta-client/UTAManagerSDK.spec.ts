@@ -7,18 +7,30 @@
  */
 import { describe, it, expect } from 'vitest'
 import { UTAManagerSDK } from './UTAManagerSDK.js'
-import type { UTATier } from '@traderalice/uta-protocol'
+import type { UTATier, UTASummary } from '@traderalice/uta-protocol'
 
-const summary = (id: string, tier: UTATier) => ({
-  id, label: id, capabilities: {},
-  health: { status: 'healthy', reach: 'connected', tier, consecutiveFailures: 0, recovering: false, connecting: false },
-})
+const summary = (id: string, tier: UTATier, over: Partial<UTASummary> = {}): UTASummary => {
+  const base: UTASummary = {
+    id,
+    label: id,
+    asVendor: true,
+    capabilities: { supportedSecTypes: [], supportedOrderTypes: [] },
+    health: { status: 'healthy', reach: 'connected', tier, consecutiveFailures: 0, recovering: false, connecting: false, disabled: false },
+    authzAccountType: 'unknown',
+  }
+  return { ...base, ...over, authzAccountType: over.authzAccountType ?? base.authzAccountType }
+}
 
 function fakeClient(utas: unknown[]) {
   return {
     get: async (path: string) => {
       if (path === '/api/trading/uta') return { utas }
       throw new Error(`unexpected GET ${path}`)
+    },
+    post: async (path: string) => {
+      if (path.includes('/wallet/stage-place-order')) return { hash: 'stage' }
+      if (path.includes('/wallet/push')) return { hash: 'push' }
+      throw new Error(`unexpected POST ${path}`)
     },
   } as never
 }
@@ -53,5 +65,58 @@ describe('UTAManagerSDK.resolve — tier filter (#390)', () => {
     const m = new UTAManagerSDK({ client: fakeClient(UTAS) })
     const ids = (await m.resolve('alpaca', { tradingOnly: true })).map((u) => u.id)
     expect(ids).toEqual(['alpaca-paper'])
+  })
+})
+
+describe('UTAManagerSDK — data-source participation', () => {
+  it('excludes disabled UTA vendors from bar capability discovery', async () => {
+    const m = new UTAManagerSDK({
+      client: fakeClient([
+        summary('alpaca-paper', 'trading', {
+          capabilities: { supportedSecTypes: [], supportedOrderTypes: [], historicalBars: { supported: true, quality: 'iex' } },
+        }),
+        summary('bybit-paper', 'trading', {
+          asVendor: false,
+          capabilities: { supportedSecTypes: [], supportedOrderTypes: [], historicalBars: { supported: true, quality: 'realtime' } },
+        }),
+      ]),
+    })
+
+    await expect(m.getBarCapabilities()).resolves.toEqual({ 'alpaca-paper': 'iex' })
+  })
+})
+
+describe('UTAManagerSDK — unavailable carrier', () => {
+  it('degrades local reads without touching the UTA HTTP client', async () => {
+    const disabledReason = 'UTA disabled by OPENALICE_LITE_MODE'
+    const client = {
+      get: async (path: string) => {
+        throw new Error(`unexpected GET ${path}`)
+      },
+    } as never
+    const m = new UTAManagerSDK({ client, unavailableReason: disabledReason })
+
+    await expect(m.listUTAs()).resolves.toEqual([])
+    await expect(m.resolve()).resolves.toEqual([])
+    await expect(m.getBarCapabilities()).resolves.toEqual({})
+    await expect(m.getFxRates()).resolves.toEqual([])
+    await expect(m.searchContracts('BTC')).resolves.toEqual([])
+    await expect(m.reconnectUTA('alpaca-paper')).resolves.toEqual({ success: false, error: disabledReason })
+    await expect(m.removeUTA('alpaca-paper')).resolves.toBeUndefined()
+    await expect(m.getAggregatedEquity()).rejects.toThrow(disabledReason)
+    await expect(m.getContractDetails('alpaca-paper', {} as never)).rejects.toThrow(disabledReason)
+  })
+})
+
+describe('UTAManagerSDK — readonly product mode', () => {
+  it('allows local staging but blocks venue push', async () => {
+    const m = new UTAManagerSDK({
+      client: fakeClient([summary('alpaca-paper', 'trading')]),
+      readonlyMutationReason: () => 'Trading mode is readonly',
+    })
+    const [account] = await m.resolve()
+
+    await expect(account.stagePlaceOrder({} as never)).resolves.toEqual({ hash: 'stage' })
+    await expect(account.push()).rejects.toThrow('Trading mode is readonly')
   })
 })

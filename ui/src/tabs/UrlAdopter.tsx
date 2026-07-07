@@ -30,6 +30,8 @@ export function UrlAdopter() {
             chat front door), not an information summary (Inbox is task sync, à
             la Linear — but Linear's comms live in Slack; ours live here). */}
         <Route path="/" element={<Navigate to="/chat" replace />} />
+        <Route path="/onboarding" element={<AdoptStatic spec={{ kind: 'onboarding', params: {} }} />} />
+        <Route path="/design/:project" element={<AdoptDesignProject />} />
 
         {/* Activities */}
         {/* /chat → the "Ask Alice" quick-chat landing (composer). Legacy
@@ -57,6 +59,7 @@ export function UrlAdopter() {
         {/* Settings — one entry per category */}
         <Route path="/settings" element={<AdoptStatic spec={{ kind: 'settings', params: { category: 'general' } }} />} />
         <Route path="/settings/ai-provider" element={<AdoptStatic spec={{ kind: 'settings', params: { category: 'ai-provider' } }} />} />
+        <Route path="/settings/agent-permissions" element={<AdoptStatic spec={{ kind: 'settings', params: { category: 'agent-permissions' } }} />} />
         <Route path="/settings/trading" element={<AdoptStatic spec={{ kind: 'settings', params: { category: 'trading' } }} />} />
         <Route path="/settings/issues" element={<AdoptStatic spec={{ kind: 'settings', params: { category: 'issues' } }} />} />
         <Route path="/settings/mcp" element={<AdoptStatic spec={{ kind: 'settings', params: { category: 'mcp' } }} />} />
@@ -181,7 +184,7 @@ function AdoptUtaDetail() {
 
 function AdoptDev() {
   const { tab } = useParams<{ tab: string }>()
-  const valid: ReadonlyArray<string> = ['tools', 'snapshots', 'logs', 'simulator']
+  const valid: ReadonlyArray<string> = ['tools', 'onboarding', 'snapshots', 'logs', 'simulator']
   if (!tab || !valid.includes(tab)) return <Navigate to="/dev/tools" replace />
   return (
     <AdoptStatic
@@ -237,6 +240,12 @@ function AdoptFileViewer() {
   return <AdoptStatic spec={{ kind: 'file-viewer', params: { wsId, path } }} />
 }
 
+function AdoptDesignProject() {
+  const { project } = useParams<{ project: string }>()
+  if (!project) return <Navigate to="/dev/tools" replace />
+  return <AdoptStatic spec={{ kind: 'design-project', params: { project } }} />
+}
+
 function RedirectUtaDetail() {
   const { id } = useParams<{ id: string }>()
   return <Navigate to={`/settings/uta/${id ?? ''}`} replace />
@@ -273,7 +282,9 @@ function specToSection(spec: ViewSpec): ActivitySection {
     case 'market-rotation':
     case 'market-board':
     case 'market-detail':      return 'market'
-    case 'settings':           return 'settings'
+    case 'settings':
+    case 'onboarding':         return 'settings'
+    case 'design-project':     return 'dev'
     case 'dev':                return 'dev'
   }
 }

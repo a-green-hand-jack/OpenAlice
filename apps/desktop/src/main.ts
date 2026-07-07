@@ -7,10 +7,10 @@
  * plus the desktop-only concerns: data relocation, BrowserWindow, quit UX.
  *
  * Lifecycle:
- *   relocate data → resolve ports → spawn UTA → poll /__uta/health
- *   → spawn Alice (OPENALICE_UTA_URL injected) → wait Alice ready
+ *   relocate data → resolve ports → spawn UTA unless lite mode disables it
+ *   → spawn Alice (UTA URL or lite env injected) → wait Alice ready
  *   → open window. Watch `data/control/restart-uta.flag` → respawn UTA.
- *   On quit or unexpected child exit: cascade tree-kill both children.
+ *   On quit or unexpected Alice exit: cascade tree-kill both children.
  *
  * The port + supervision logic is an inline mirror of
  * scripts/guardian/{shared.ts,prod.mjs} — the desktop package is a separate
@@ -22,10 +22,11 @@
 
 import { app, BrowserWindow, dialog, Menu, protocol } from 'electron'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { existsSync, statSync } from 'node:fs'
 import { mkdir, readFile, watch } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { delimiter, dirname, join, resolve } from 'node:path'
 import { probeFreePort } from './probe-port.js'
 import { relocateLegacyData } from './relocate-data.js'
 import { configureAutoUpdate } from './auto-update.js'
@@ -141,6 +142,101 @@ async function readMcpConfigFile(userDataHome: string): Promise<{ enabled: boole
 function parseEnabledEnv(raw: string | undefined): boolean | null {
   if (raw === undefined || raw === '') return null
   return raw === '1' || raw.toLowerCase() === 'true'
+}
+
+function truthyEnv(raw: string | undefined): boolean {
+  if (raw === undefined || raw === '') return false
+  const normalized = raw.toLowerCase()
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
+}
+
+function existingFile(path: string): string | null {
+  try {
+    return existsSync(path) && statSync(path).isFile() ? path : null
+  } catch {
+    return null
+  }
+}
+
+function existingDir(path: string): string | null {
+  try {
+    return existsSync(path) && statSync(path).isDirectory() ? path : null
+  } catch {
+    return null
+  }
+}
+
+function resolveManagedRuntimeEnv(opts: {
+  readonly appHome: string
+  readonly launcherMode: 'electron-dev' | 'electron-packaged'
+}): Record<string, string> {
+  const out: Record<string, string> = {
+    OPENALICE_RUNTIME_PROFILE: opts.launcherMode,
+  }
+  const platformArch = `${process.platform}-${process.arch}`
+
+  const managedPiCli = existingFile(join(
+    opts.appHome,
+    'vendor',
+    'pi',
+    'node_modules',
+    '@earendil-works',
+    'pi-coding-agent',
+    'dist',
+    'cli.js',
+  ))
+  const managedPiBinary = existingFile(join(
+    opts.appHome,
+    'vendor',
+    'pi',
+    platformArch,
+    process.platform === 'win32' ? 'pi.exe' : 'pi',
+  ))
+  if (managedPiCli) {
+    out.OPENALICE_MANAGED_PI_PATH = managedPiCli
+    out.OPENALICE_MANAGED_PI_NODE_PATH = process.execPath
+  } else if (managedPiBinary) {
+    out.OPENALICE_MANAGED_PI_PATH = managedPiBinary
+  }
+
+  const toolchainPaths: string[] = []
+  if (process.platform === 'win32') {
+    const gitDir = existingDir(join(opts.appHome, 'vendor', 'git', platformArch))
+    if (gitDir) {
+      out.OPENALICE_MANAGED_GIT_DIR = gitDir
+      out.LOCAL_GIT_DIRECTORY = gitDir
+
+      const gitBin =
+        existingFile(join(gitDir, 'cmd', 'git.exe')) ??
+        existingFile(join(gitDir, 'bin', 'git.exe')) ??
+        existingFile(join(gitDir, 'mingw64', 'bin', 'git.exe')) ??
+        existingFile(join(gitDir, 'clangarm64', 'bin', 'git.exe'))
+      if (gitBin) out.OPENALICE_MANAGED_GIT_BIN = gitBin
+
+      const shellPath =
+        existingFile(join(gitDir, 'bin', 'bash.exe')) ??
+        existingFile(join(gitDir, 'usr', 'bin', 'bash.exe'))
+      if (shellPath) out.OPENALICE_MANAGED_SHELL_PATH = shellPath
+
+      for (const rel of ['cmd', 'bin', 'usr/bin', 'mingw64/bin', 'clangarm64/bin']) {
+        const dir = existingDir(join(gitDir, ...rel.split('/')))
+        if (dir) toolchainPaths.push(dir)
+      }
+    }
+  } else if (opts.launcherMode === 'electron-packaged') {
+    const shellPath = existingFile('/bin/bash') ?? existingFile('/bin/sh')
+    if (shellPath) out.OPENALICE_MANAGED_SHELL_PATH = shellPath
+  }
+
+  if (toolchainPaths.length > 0) {
+    out.OPENALICE_MANAGED_TOOLCHAIN_PATH = toolchainPaths.join(delimiter)
+  }
+
+  return out
+}
+
+function isLiteModeEnv(env: NodeJS.ProcessEnv): boolean {
+  return truthyEnv(env['OPENALICE_LITE_MODE']) || truthyEnv(env['OPENALICE_UTA_DISABLED'])
 }
 
 /** Explicit (env/file) port → assert free or throw; unset → probe upward. */
@@ -325,12 +421,24 @@ app.whenReady().then(async () => {
   const portsFile = await readPortsFile(homeEnv.OPENALICE_HOME)
   const mcpFile = await readMcpConfigFile(homeEnv.OPENALICE_HOME)
   const mcpEnabled = parseEnabledEnv(process.env['OPENALICE_MCP_ENABLED']) ?? mcpFile.enabled
+  const liteMode = isLiteModeEnv(process.env)
   const mcpPort = mcpEnabled
     ? await claimPort('mcp', 'OPENALICE_MCP_PORT', portsFile.mcp ?? mcpFile.port, DEFAULT_WEB_PORT_START + 1)
     : null
-  const utaPort = await claimPort('uta', 'OPENALICE_UTA_PORT', portsFile.uta, mcpPort !== null ? mcpPort + 1 : DEFAULT_WEB_PORT_START + 1)
-  const utaUrl = `http://127.0.0.1:${utaPort}`
+  const utaPort = liteMode
+    ? null
+    : await claimPort('uta', 'OPENALICE_UTA_PORT', portsFile.uta, mcpPort !== null ? mcpPort + 1 : DEFAULT_WEB_PORT_START + 1)
+  const utaUrl = utaPort !== null ? `http://127.0.0.1:${utaPort}` : null
   const launcherMode = app.isPackaged ? 'electron-packaged' : 'electron-dev'
+  const runtimeEnv = resolveManagedRuntimeEnv({
+    appHome: homeEnv.OPENALICE_APP_HOME,
+    launcherMode,
+  })
+  const piRuntime = runtimeEnv.OPENALICE_MANAGED_PI_PATH
+    ? runtimeEnv.OPENALICE_MANAGED_PI_NODE_PATH
+      ? `pi=${runtimeEnv.OPENALICE_MANAGED_PI_NODE_PATH} ${runtimeEnv.OPENALICE_MANAGED_PI_PATH}`
+      : `pi=${runtimeEnv.OPENALICE_MANAGED_PI_PATH}`
+    : 'managed pi unavailable'
   const toolBaseUrl = '/cli'
   const toolSocketPath = process.platform === 'win32'
     ? `\\\\.\\pipe\\openalice-${process.pid}-tools`
@@ -342,6 +450,7 @@ app.whenReady().then(async () => {
   // Node runtime mode. Without it each spawn would open a new app window.
 
   const spawnUTA = (): ChildProcess => {
+    if (utaPort === null) throw new Error('spawnUTA called while OPENALICE_LITE_MODE disables UTA')
     const child = spawn(process.execPath, [utaEntry], {
       env: {
         ...process.env,
@@ -349,13 +458,13 @@ app.whenReady().then(async () => {
         OPENALICE_UTA_PORT: String(utaPort),
         OPENALICE_LAUNCHER: 'electron',
         ...homeEnv,
+        ...runtimeEnv,
       },
       stdio: 'inherit',
     })
     child.once('exit', (code, signal) => {
       if (appQuitting || restartingUTA) return
-      console.error(`[guardian] UTA exited unexpectedly code=${code} signal=${signal}`)
-      shutdown()
+      console.error(`[guardian] UTA exited unexpectedly code=${code} signal=${signal} — trading offline, app stays up`)
     })
     return child
   }
@@ -371,12 +480,10 @@ app.whenReady().then(async () => {
         OPENALICE_LOCAL_CLI_ON_WEB: '1',
         OPENALICE_TOOL_BASE_URL: toolBaseUrl,
         OPENALICE_TOOL_SOCKET: toolSocketPath,
-        // The fix: Alice hard-requires OPENALICE_UTA_URL at boot
-        // (src/main.ts) and throws without it. The pre-UTA desktop shell
-        // never set it, so the packaged app crashed on launch.
-        OPENALICE_UTA_URL: utaUrl,
+        ...(liteMode ? { OPENALICE_LITE_MODE: '1' } : { OPENALICE_UTA_URL: utaUrl ?? '' }),
         OPENALICE_LAUNCHER: 'electron',
         ...homeEnv,
+        ...runtimeEnv,
       },
       // The fourth fd opens Node child_process IPC. Electron app mode uses it
       // as the local PTY transport between BrowserWindow/preload and Alice's
@@ -406,7 +513,8 @@ app.whenReady().then(async () => {
   console.log(`[guardian] mode     →  ${launcherMode}`)
   console.log(`[guardian] data     →  ${homeEnv.OPENALICE_HOME}`)
   console.log(`[guardian] app      →  ${homeEnv.OPENALICE_APP_HOME}`)
-  console.log(`[guardian] UTA      →  ${utaUrl}`)
+  console.log(`[guardian] runtime  →  ${piRuntime}`)
+  console.log(`[guardian] UTA      →  ${utaUrl ?? 'disabled (OPENALICE_LITE_MODE)'}`)
   console.log(`[guardian] Alice    →  app://openalice (Electron IPC)`)
   console.log(`[guardian] Tools    →  ${toolSocketPath}`)
   console.log(`[guardian] MCP      →  ${mcpPort !== null ? `http://127.0.0.1:${mcpPort}/mcp` : 'disabled'}`)
@@ -427,18 +535,13 @@ app.whenReady().then(async () => {
       return new Response(err instanceof Error ? err.message : String(err), { status: 503 })
     }
   })
-  uta = spawnUTA()
-  const utaReady = await waitForUTA(utaUrl)
-  if (!utaReady) {
-    dialog.showErrorBox(
-      'OpenAlice — trading service failed to start',
-      `The UTA trading service did not become ready within ${UTA_READY_TIMEOUT_MS / 1000}s.\n\n` +
-        `OpenAlice can't start without it. Check the logs at ${join(userDataHome, 'logs')} and relaunch.`,
-    )
-    shutdown()
-    return
+  if (utaUrl !== null) {
+    uta = spawnUTA()
+    void waitForUTA(utaUrl).then((ready) => {
+      if (ready) console.log(`[guardian] UTA ready pid=${uta?.pid ?? ''}`)
+      else console.warn(`[guardian] UTA did not become ready within ${UTA_READY_TIMEOUT_MS / 1000}s — continuing with trading offline`)
+    })
   }
-  console.log(`[guardian] UTA ready pid=${uta.pid}`)
 
   alice = spawnAlice()
   console.log(`[guardian] Alice pid=${alice.pid} web=ipc mcpPort=${mcpPort ?? 'disabled'}`)
@@ -446,7 +549,9 @@ app.whenReady().then(async () => {
 
   // ── Restart-flag watcher: broker config changes touch the flag; SIGTERM
   // + respawn UTA without restarting Alice (mirrors prod.mjs). ────────────
-  void startFlagWatcher(homeEnv.OPENALICE_HOME, utaUrl, spawnUTA)
+  if (utaUrl !== null) {
+    void startFlagWatcher(homeEnv.OPENALICE_HOME, utaUrl, spawnUTA)
+  }
 
   // No in-window menu bar on Windows/Linux — Electron's default
   // File/Edit/View/Window/Help renders *inside* the window there and is

@@ -67,11 +67,13 @@ export interface UnifiedTradingAccountOptions {
   onHealthChange?: (accountId: string, health: BrokerHealthInfo) => void
   onPostPush?: (accountId: string) => void | Promise<void>
   onPostReject?: (accountId: string) => void | Promise<void>
-  /** Refuse write operations (stage/commit/push). Implied by keyless. */
+  /** Refuse external account mutations. Proposal staging stays local; push is blocked. Implied by keyless. */
   readOnly?: boolean
   /** Public-data-only account (no key) — no account/positions; excluded from
    *  equity aggregation. Implies readOnly. */
   keyless?: boolean
+  /** Whether this UTA participates in broker-backed market-data discovery. */
+  asVendor?: boolean
   /** Test-only override for per-account guard state under data/trading/. */
   guardStateBaseDir?: string
   /** Test-only override for per-account risk state under data/trading/. */
@@ -144,8 +146,10 @@ export class UnifiedTradingAccount {
   readonly git: TradingGit
   /** Public-data-only (no key, no account/positions, excluded from equity agg). */
   readonly keyless: boolean
-  /** Write operations refused (implied by keyless). */
+  /** External account mutations refused (implied by keyless). */
   readonly readOnly: boolean
+  /** Broker-backed market-data discovery participation. */
+  readonly asVendor: boolean
 
   private readonly _getState: () => Promise<GitState>
   private readonly _onHealthChange?: (accountId: string, health: BrokerHealthInfo) => void
@@ -206,6 +210,7 @@ export class UnifiedTradingAccount {
     this.label = broker.label
     this.keyless = options.keyless ?? false
     this.readOnly = options.readOnly ?? options.keyless ?? false
+    this.asVendor = options.asVendor ?? true
     // Optimistically assume we'll reach this account's target until the first
     // probe says otherwise — preserves "usable immediately after construction"
     // (the probe corrects/demotes within ms).
@@ -269,6 +274,7 @@ export class UnifiedTradingAccount {
     }
 
     const dispatcher = async (op: Operation): Promise<unknown> => {
+      this._assertCanMutateAccount(op.action)
       switch (op.action) {
         case 'placeOrder':
           return broker.placeOrder(op.contract, op.order, op.tpsl)
@@ -623,11 +629,19 @@ export class UnifiedTradingAccount {
 
   // ==================== Stage operations ====================
 
-  /** Loud-refuse writes on a read-only / keyless (data-only) account. */
-  private _assertWritable(): void {
+  /** Loud-refuse proposal staging on a keyless public-data source. */
+  private _assertCanCreateProposal(): void {
+    if (this.keyless) {
+      throw new BrokerError('CONFIG',
+        `Account "${this.label}" is a keyless public-data account — trading proposals require a funded account.`)
+    }
+  }
+
+  /** Loud-refuse broker-side account mutations on read-only / keyless accounts. */
+  private _assertCanMutateAccount(action: string): void {
     if (this.readOnly) {
       throw new BrokerError('CONFIG',
-        `Account "${this.label}" is read-only${this.keyless ? ' (keyless public-data account)' : ''} — trading operations are not allowed.`)
+        `Account "${this.label}" is read-only${this.keyless ? ' (keyless public-data account)' : ''} — ${action} would mutate the external account, which is not allowed.`)
     }
   }
 
@@ -736,7 +750,7 @@ export class UnifiedTradingAccount {
   }
 
   /**
-   * Resolve + validate the target sub-account for a WRITE. When the connection
+   * Resolve + validate the target sub-account for a proposed account mutation. When the connection
    * spans >1 sub-account, an explicit selector is REQUIRED (placing an order is
    * irreversible — we never guess a wallet). The selector is also checked
    * against the instrument: "place this on spot" with a perp contract
@@ -772,7 +786,7 @@ export class UnifiedTradingAccount {
   // ==================== Staging ====================
 
   stagePlaceOrder(params: StagePlaceOrderParams): AddResult {
-    this._assertWritable()
+    this._assertCanCreateProposal()
     this._validatePlaceOrderParams(params)
     // Resolve aliceId → full contract via broker (fills secType, exchange, currency, conId, etc.)
     const contract = this.contractFromAliceId(params.aliceId)
@@ -808,7 +822,7 @@ export class UnifiedTradingAccount {
   }
 
   stageModifyOrder(params: StageModifyOrderParams): AddResult {
-    this._assertWritable()
+    this._assertCanCreateProposal()
     const changes: Partial<Order> = {}
     if (params.totalQuantity != null) changes.totalQuantity = new Decimal(String(params.totalQuantity))
     if (params.lmtPrice != null) changes.lmtPrice = new Decimal(String(params.lmtPrice))
@@ -825,7 +839,7 @@ export class UnifiedTradingAccount {
   }
 
   stageClosePosition(params: StageClosePositionParams): AddResult {
-    this._assertWritable()
+    this._assertCanCreateProposal()
     const contract = this.contractFromAliceId(params.aliceId)
     if (params.symbol) contract.symbol = params.symbol
 
@@ -841,7 +855,7 @@ export class UnifiedTradingAccount {
   }
 
   stageCancelOrder(params: { orderId: string }): AddResult {
-    this._assertWritable()
+    this._assertCanCreateProposal()
     const operation: Operation = { action: 'cancelOrder', orderId: params.orderId }
     this._assertRiskStateAllowsWrite('stage', operation)
     return this.git.add(operation)
@@ -850,7 +864,7 @@ export class UnifiedTradingAccount {
   // ==================== Git flow ====================
 
   commit(message: string): CommitPrepareResult {
-    this._assertWritable()
+    this._assertCanCreateProposal()
     this._assertRiskStateAllowsWrite('commit')
     const result = this.git.commit(this._stampSubAccount(message))
     this._emitEvent('trade.committed', {
@@ -876,7 +890,7 @@ export class UnifiedTradingAccount {
   }
 
   async push(approver?: ApproverIdentity): Promise<PushResult> {
-    this._assertWritable()
+    this._assertCanMutateAccount('push')
     try {
       this._assertRiskStateAllowsWrite('push')
     } catch (err) {
@@ -1186,7 +1200,7 @@ export class UnifiedTradingAccount {
     cancelOrders: boolean
     triggerIdentity?: ApproverIdentity
   }): Promise<EmergencyStopResult> {
-    this._assertWritable()
+    this._assertCanMutateAccount('emergencyCancelAllOpenOrders')
 
     const cancellations: Array<{ orderId: string; contract: Contract; order?: Order; result: PlaceOrderResult }> = []
     const cancelResults: EmergencyCancelOrderResult[] = []
@@ -1251,7 +1265,7 @@ export class UnifiedTradingAccount {
    * close-position pipeline.
    */
   async flattenAllOpenPositions(triggerIdentity?: ApproverIdentity): Promise<FlattenResult> {
-    this._assertWritable()
+    this._assertCanMutateAccount('flattenAllOpenPositions')
 
     const positions = await this._callBroker(() => this.broker.getPositions())
     for (const position of positions) this.stampAliceId(position.contract)

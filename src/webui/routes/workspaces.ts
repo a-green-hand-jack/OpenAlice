@@ -41,6 +41,7 @@ import {
   getAgentCredentialReadiness,
 } from '../../workspaces/agent-credential-readiness.js';
 import { approverFromAliceRequest } from './approver-identity.js';
+import { isTerminalThemeVariant, type TerminalThemeVariant } from '../../workspaces/terminal-theme.js';
 
 // The spawn body's `resume` value is an AGENT-side session id, whose shape is
 // adapter-native: uuid for claude/codex/pi, `ses_<base62>` for opencode. This
@@ -99,6 +100,12 @@ function parseSeedPrompt(
     return { error: 'prompt_too_long', message: `max ${MAX_SEED_PROMPT} chars` };
   }
   return { prompt: trimmed };
+}
+
+function parseTerminalThemeField(raw: unknown): TerminalThemeVariant | { error: string; message: string } | undefined {
+  if (raw === undefined) return undefined;
+  if (isTerminalThemeVariant(raw)) return raw;
+  return { error: 'bad_request', message: 'terminalTheme must be "light" or "dark"' };
 }
 
 /** Max stored length of a session title (the seed message); the row truncates further. */
@@ -170,6 +177,7 @@ export function createWorkspaceRoutes(
       readonly resume?: SessionFactoryContext['resume'];
       readonly initialPrompt?: string;
       readonly credentialSlug?: string;
+      readonly terminalTheme?: TerminalThemeVariant;
     },
   ): Promise<SpawnSessionResult> {
     const id = meta.id;
@@ -237,6 +245,7 @@ export function createWorkspaceRoutes(
         ...(resume !== undefined ? { resume } : {}),
         agentId,
         ...(initialPrompt !== undefined ? { initialPrompt } : {}),
+        ...(opts.terminalTheme !== undefined ? { terminalTheme: opts.terminalTheme } : {}),
         recordId,
         recordName,
       };
@@ -660,6 +669,7 @@ export function createWorkspaceRoutes(
     let agentId: string | undefined;
     let initialPrompt: string | undefined;
     let credentialSlug: string | undefined;
+    let terminalTheme: TerminalThemeVariant | undefined;
     try {
       const body = await safeJson(c);
       const fields = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
@@ -670,6 +680,9 @@ export function createWorkspaceRoutes(
       if (typeof rawAgent === 'string' && rawAgent.length > 0) agentId = rawAgent;
       const rawSlug = fields['credentialSlug'];
       if (typeof rawSlug === 'string' && rawSlug.length > 0) credentialSlug = rawSlug;
+      const theme = parseTerminalThemeField(fields['terminalTheme']);
+      if (theme && typeof theme === 'object' && 'error' in theme) return c.json(theme, 400);
+      terminalTheme = theme;
       // Quick-chat seed (fresh-only): a first message the TUI opens already
       // working on. Ignored when resuming — seeding + resume is ambiguous on
       // codex's `resume <id>` / pi's `--session-id`.
@@ -684,6 +697,7 @@ export function createWorkspaceRoutes(
       ...(resume !== undefined ? { resume } : {}),
       ...(initialPrompt !== undefined ? { initialPrompt } : {}),
       ...(credentialSlug !== undefined ? { credentialSlug } : {}),
+      ...(terminalTheme !== undefined ? { terminalTheme } : {}),
     });
     if (!result.ok) return c.json(result.body, result.status as 400 | 500);
     return c.json(result.session, 201);
@@ -700,6 +714,7 @@ export function createWorkspaceRoutes(
     let agentId: string | undefined;
     let credentialSlug: string | undefined;
     let targetWsId: string | undefined;
+    let terminalTheme: TerminalThemeVariant | undefined;
     try {
       const body = await safeJson(c);
       const fields = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
@@ -717,6 +732,9 @@ export function createWorkspaceRoutes(
       // chat sidebar's per-workspace "+" ("Ask Alice, but in this workspace").
       const rawTarget = fields['targetWsId'];
       if (typeof rawTarget === 'string' && rawTarget.length > 0) targetWsId = rawTarget;
+      const theme = parseTerminalThemeField(fields['terminalTheme']);
+      if (theme && typeof theme === 'object' && 'error' in theme) return c.json(theme, 400);
+      terminalTheme = theme;
     } catch (err) {
       return c.json({ error: 'bad_request', message: (err as Error).message }, 400);
     }
@@ -745,6 +763,7 @@ export function createWorkspaceRoutes(
     const spawn = await spawnInteractiveSession(meta, {
       ...(agentId !== undefined ? { agentId } : {}),
       ...(credentialSlug !== undefined ? { credentialSlug } : {}),
+      ...(terminalTheme !== undefined ? { terminalTheme } : {}),
       initialPrompt: prompt,
     });
     if (!spawn.ok) return c.json(spawn.body, spawn.status as 400 | 500);
@@ -803,6 +822,16 @@ export function createWorkspaceRoutes(
     const token = c.req.param('sid');
     if (!validId(id) || !validId(token)) {
       return c.json({ error: 'not_found' }, 404);
+    }
+    let terminalTheme: TerminalThemeVariant | undefined;
+    try {
+      const body = await safeJson(c);
+      const fields = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+      const theme = parseTerminalThemeField(fields['terminalTheme']);
+      if (theme && typeof theme === 'object' && 'error' in theme) return c.json(theme, 400);
+      terminalTheme = theme;
+    } catch (err) {
+      return c.json({ error: 'bad_request', message: (err as Error).message }, 400);
     }
     // Serialize concurrent resumes of this record (ANG-120 — see resumeInFlight).
     // A later double-fire awaits the in-flight resume, then doResume()'s in-lock
@@ -893,6 +922,7 @@ export function createWorkspaceRoutes(
           agentId: record.agent,
           recordId: record.id,
           recordName: record.name,
+          ...(terminalTheme !== undefined ? { terminalTheme } : {}),
           ...(initialReplayBytes ? { initialReplayBytes } : {}),
         };
         const session = svc.pool.spawn(id, ctx);

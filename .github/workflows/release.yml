@@ -189,6 +189,9 @@ jobs:
       - name: Build Alice + UTA + desktop shell
         run: pnpm electron:build
 
+      - name: Vendor managed workspace runtime
+        run: pnpm vendor:runtime
+
       - name: Write Apple notarization API key
         if: runner.os == 'macOS'
         run: |

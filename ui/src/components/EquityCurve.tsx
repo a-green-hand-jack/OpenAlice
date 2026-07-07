@@ -83,16 +83,16 @@ export function EquityCurve({
   return (
     <div className="border border-border rounded-lg bg-bg-secondary p-4">
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <h3 className="text-[13px] font-semibold text-text-muted uppercase tracking-wide">
           Equity Curve
         </h3>
-        <div className="flex gap-1">
+        <div className="flex flex-wrap gap-1">
           {RANGES.map(r => (
             <button
               key={r.label}
               onClick={() => setRange(r.label)}
-              className={`px-2 py-0.5 text-[11px] rounded transition-colors ${
+              className={`shrink-0 whitespace-nowrap px-2 py-0.5 text-[11px] rounded transition-colors ${
                 range === r.label
                   ? 'bg-accent/20 text-accent font-medium'
                   : 'text-text-muted hover:text-text hover:bg-bg-tertiary'
@@ -106,12 +106,12 @@ export function EquityCurve({
 
       {/* Account switcher */}
       {accounts.length > 1 && (
-        <div className="flex gap-1 mb-3">
+        <div className="scrollbar-hide -mx-1 mb-3 flex gap-1 overflow-x-auto px-1 pb-1">
           {accounts.map(a => (
             <button
               key={a.id}
               onClick={() => onAccountChange(a.id)}
-              className={`px-2.5 py-1 text-[11px] rounded border transition-colors ${
+              className={`shrink-0 whitespace-nowrap px-2.5 py-1 text-[11px] rounded border transition-colors ${
                 selectedAccountId === a.id
                   ? 'border-accent/40 bg-accent/10 text-accent font-medium'
                   : 'border-border text-text-muted hover:text-text hover:bg-bg-tertiary'
@@ -122,7 +122,7 @@ export function EquityCurve({
           ))}
           <button
             onClick={() => onAccountChange('all')}
-            className={`px-2.5 py-1 text-[11px] rounded border transition-colors ${
+            className={`shrink-0 whitespace-nowrap px-2.5 py-1 text-[11px] rounded border transition-colors ${
               isAllView
                 ? 'border-accent/40 bg-accent/10 text-accent font-medium'
                 : 'border-border text-text-muted hover:text-text hover:bg-bg-tertiary'

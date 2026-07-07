@@ -10,7 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { basename, delimiter as pathDelimiter, join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { cliBinPath } from '@/core/paths.js';
 import { readIssueDefaultAgent, readWorkspaceDefaultAgent } from '@/core/config.js';
@@ -66,10 +66,11 @@ import { ScrollbackStore } from './scrollback-store.js';
 import { SessionPool, type SessionFactoryContext } from './session-pool.js';
 import { SessionRegistry, type SessionRecord } from './session-registry.js';
 import { buildCliPath, buildSpawnEnv } from './spawn-env.js';
+import { terminalThemeEnv } from './terminal-theme.js';
 import { readReadmeVersion, TemplateRegistry } from './template-registry.js';
 import { readWorkspaceMetadata } from './workspace-metadata.js';
 import { TranscriptWatcher } from './transcript-watcher.js';
-import { detectBinary, type AgentAvailability } from './agent-detect.js';
+import { detectAgentBinary, runtimeInstallOverride, type AgentAvailability } from './agent-detect.js';
 import { resolveLaunchCommand } from './win-command.js';
 import { WorkspaceCreator } from './workspace-creator.js';
 import { WorkspaceRegistry, type WorkspaceMeta } from './workspace-registry.js';
@@ -382,7 +383,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       // from its shell (it reads OPENALICE_TOOL_URL + AQ_WS_ID above). Shared
       // script — not written into the workspace, so it never pollutes the
       // workspace's git repo.
-      PATH: `${cliBinPath()}${pathDelimiter}${process.env.PATH ?? ''}`,
+      OPENALICE_WORKSPACE_CLI_BIN_PATH: cliBinPath(),
       // Per-workspace git identity — so any commit the agent makes (in its own
       // repo OR a peer's, during cross-workspace collaboration) self-attributes
       // to this workspace, and never fails for a missing identity on a clean
@@ -854,7 +855,10 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
         // carries AQ_SESSION_ID; a spawn carries AQ_RUN_ID XOR AQ_SESSION_ID. The
         // `alice` shim forwards it as the `x-openalice-session` header, resolved
         // server-side against the session registry — agent never sees it.
-        { AQ_SESSION_ID: ctx.recordId },
+        {
+          ...terminalThemeEnv(ctx.terminalTheme),
+          AQ_SESSION_ID: ctx.recordId,
+        },
       );
 
       // path.trace — single line capturing every path the spawn touches. The
@@ -906,8 +910,13 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     const out: Record<string, AgentAvailability> = {};
     const env = { ...process.env, PATH: buildCliPath(process.env) };
     for (const a of adapters.list()) {
+      const override = isAgentRuntime(a) ? runtimeInstallOverride(a.id, env) : null;
+      if (override) {
+        out[a.id] = override;
+        continue;
+      }
       // No declared binary (shell → `$SHELL`) is always available.
-      out[a.id] = a.binary ? detectBinary(a.binary, { env }) : { installed: true, path: null };
+      out[a.id] = a.binary ? detectAgentBinary(a.id, a.binary, { env }) : { installed: true, path: null };
     }
     return out;
   };
