@@ -60,8 +60,18 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   tools are additionally gated against the target account ceiling/type before
   execution:
   `src/main.ts:217-253` -> `src/core/tool-center.ts:17-21` ->
-  `src/core/workspace-tool-center.ts:33-143` and
-  `src/core/workspace-tool-center.ts:189-245` -> `src/server/mcp.ts:74-128`.
+  `src/core/workspace-tool-center.ts:33-153`,
+  `src/core/workspace-tool-center.ts:459-475`, and
+  `src/core/workspace-tool-center.ts:500-560` -> `src/server/mcp.ts:74-128`.
+- Blind workspaces apply a second catalog seal after authz filtering: real
+  market-data groups are removed, explicit `bars` / `searchBars` reads are
+  allowlisted by barId source, and trading market-data reads
+  (`searchContracts`, `getQuote`, `getContractDetails`, `expandContract`,
+  `getMarketClock`) are runtime-gated by `blindAllowBarSources` on both MCP and
+  CLI surfaces. Anchors:
+  `src/core/workspace-tool-center.ts:155-188`,
+  `src/core/workspace-tool-center.ts:290-455`,
+  `src/server/mcp.ts:172-181`, and `src/server/cli.ts:192-201`.
 - `workspaces/` computes adapter commands, then `SessionPool` owns live PTYs:
   `src/workspaces/service.ts:94-104` -> `src/workspaces/session-pool.ts:72-84`
   -> `src/workspaces/persistent-session.ts:128-150`.

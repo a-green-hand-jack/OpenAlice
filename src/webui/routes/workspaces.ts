@@ -106,6 +106,18 @@ const authzLevelBodySchema = z.object({
   authzLevel: z.enum(AUTHZ_LEVELS),
 });
 
+function parseBlindAllowBarSources(raw: unknown): { ok: true; sources?: readonly string[] } | { ok: false; message: string } {
+  if (raw === undefined) return { ok: true };
+  if (!Array.isArray(raw)) return { ok: false, message: 'blindAllowBarSources must be an array of strings' };
+  const sources: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== 'string') return { ok: false, message: 'blindAllowBarSources must be an array of strings' };
+    const trimmed = value.trim();
+    if (trimmed.length > 0 && !sources.includes(trimmed)) sources.push(trimmed);
+  }
+  return { ok: true, sources };
+}
+
 /** The 201 body both `/:id/sessions/spawn` and `/quick-chat` return. */
 interface SpawnedSessionBody {
   readonly sessionId: string;
@@ -406,10 +418,22 @@ export function createWorkspaceRoutes(
     const agentsRequested = Array.isArray(rawAgents)
       ? rawAgents.filter((a): a is string => typeof a === 'string' && a.length > 0)
       : undefined;
+    const rawBlind = fields['blind'];
+    if (rawBlind !== undefined && typeof rawBlind !== 'boolean') {
+      return c.json({ error: 'bad_request', message: 'blind must be a boolean' }, 400);
+    }
+    const parsedAllowSources = parseBlindAllowBarSources(fields['blindAllowBarSources']);
+    if (!parsedAllowSources.ok) {
+      return c.json({ error: 'bad_request', message: parsedAllowSources.message }, 400);
+    }
     const result = await svc.creator.create(
       tag,
       templateName,
-      agentsRequested && agentsRequested.length > 0 ? agentsRequested : undefined,
+      {
+        ...(agentsRequested && agentsRequested.length > 0 ? { agentsRequested } : {}),
+        ...(rawBlind === true ? { blind: true } : {}),
+        ...(parsedAllowSources.sources !== undefined ? { blindAllowBarSources: parsedAllowSources.sources } : {}),
+      },
     );
     if (!result.ok) {
       const status =

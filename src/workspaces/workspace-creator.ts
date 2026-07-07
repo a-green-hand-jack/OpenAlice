@@ -53,6 +53,12 @@ export type CreateResult =
       readonly exitCode?: number;
     };
 
+export interface CreateWorkspaceOptions {
+  readonly agentsRequested?: readonly string[];
+  readonly blind?: boolean;
+  readonly blindAllowBarSources?: readonly string[];
+}
+
 const TAG_RE = /^[a-z0-9][a-z0-9_-]{0,32}$/;
 
 /**
@@ -84,6 +90,10 @@ export function resolveCreateAgents(
   ];
 }
 
+function normalizeBlindAllowBarSources(sources: readonly string[]): readonly string[] {
+  return [...new Set(sources.map((s) => s.trim()).filter((s) => s.length > 0))];
+}
+
 /**
  * Creates a workspace by invoking the template's bootstrap script.
  *
@@ -99,8 +109,12 @@ export class WorkspaceCreator {
   async create(
     tag: string,
     templateName: string,
-    agentsRequested?: readonly string[],
+    agentsRequestedOrOptions?: readonly string[] | CreateWorkspaceOptions,
+    legacyOptions?: Omit<CreateWorkspaceOptions, 'agentsRequested'>,
   ): Promise<CreateResult> {
+    const createOptions: CreateWorkspaceOptions = Array.isArray(agentsRequestedOrOptions)
+      ? { ...(legacyOptions ?? {}), agentsRequested: agentsRequestedOrOptions }
+      : { ...(agentsRequestedOrOptions ?? {}), ...(legacyOptions ?? {}) };
     if (!TAG_RE.test(tag)) {
       return {
         ok: false,
@@ -123,7 +137,7 @@ export class WorkspaceCreator {
     // Agent policy lives in `resolveCreateAgents` (this file) so every create
     // path — form, quick-chat, headless — converges on it.
     const agents = resolveCreateAgents(
-      agentsRequested,
+      createOptions.agentsRequested,
       template.defaultAgents,
       this.opts.adapterRegistry.list().map((a) => a.id),
     );
@@ -272,6 +286,10 @@ export class WorkspaceCreator {
       spawnedFromVersion: template.version,
       authzLevel: DEFAULT_AUTHZ_LEVEL,
       agents,
+      ...(createOptions.blind === true ? { blind: true } : {}),
+      ...(createOptions.blindAllowBarSources !== undefined
+        ? { blindAllowBarSources: normalizeBlindAllowBarSources(createOptions.blindAllowBarSources) }
+        : {}),
     };
     await this.opts.registry.add(workspace);
     log.info('bootstrap.ok', { stdout: result.stdout.slice(-400) });

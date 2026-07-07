@@ -68,6 +68,7 @@ export const CLI_EXPORTS: Record<string, CliExport> = {
         'vendor-set': 'setMarketVendor',
       },
       analysis: {
+        bars: 'bars',
         'search-bars': 'searchBars',
         quant: 'calculateQuant',
         // Honest as-of read (dated bars, no-lookahead, freshness contract) + a

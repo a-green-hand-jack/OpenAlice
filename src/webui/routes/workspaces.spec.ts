@@ -49,7 +49,14 @@ afterEach(async () => {
 })
 
 function build(
-  opts: { meta?: any; adapters?: Record<string, any>; resolveTo?: any; dispatch?: any; authzProducer?: ProducerHandle<readonly ['authz.level-changed']> } = {},
+  opts: {
+    meta?: any
+    adapters?: Record<string, any>
+    resolveTo?: any
+    dispatch?: any
+    create?: any
+    authzProducer?: ProducerHandle<readonly ['authz.level-changed']>
+  } = {},
 ) {
   const claude = {
     id: 'claude',
@@ -62,6 +69,19 @@ function build(
   const runHeadlessTask = vi.fn(async () => HEADLESS_RESULT);
   const dispatchHeadlessTask = opts.dispatch ?? vi.fn(async () => ({ taskId: 'task-1' }));
   let liveMeta = meta;
+  const createWorkspace = opts.create ?? vi.fn(async (tag: string, template: string, createOpts: any = {}) => {
+    liveMeta = {
+      id: 'ws-1',
+      tag,
+      dir: '/w',
+      createdAt: '2026-07-06T00:00:00.000Z',
+      template,
+      agents: createOpts.agentsRequested ?? ['claude'],
+      ...(createOpts.blind === true ? { blind: true } : {}),
+      ...(createOpts.blindAllowBarSources !== undefined ? { blindAllowBarSources: createOpts.blindAllowBarSources } : {}),
+    }
+    return { ok: true, workspace: liveMeta }
+  })
   const svc = {
     registry: {
       get: (id: string) => (id === 'ws-1' ? liveMeta : undefined),
@@ -71,7 +91,14 @@ function build(
         liveMeta = { ...liveMeta, authzLevel }
         return { workspace: liveMeta, from, to: authzLevel, changed: from !== authzLevel }
       }),
+      list: () => [liveMeta],
     },
+    templates: {
+      defaultName: () => 'chat',
+      get: (name: string) => ({ name, defaultAgents: ['claude'], version: '1.0.0' }),
+      list: () => [],
+    },
+    creator: { create: createWorkspace },
     adapters: { get: (a: string) => adapters[a] },
     resolveAdapter: (_m: any, a?: string) => opts.resolveTo ?? adapters[a ?? 'claude'] ?? claude,
     config: { launcherRepoRoot: '/repo' },
@@ -82,7 +109,7 @@ function build(
       return { ...m, ...(res.ok ? res.metadata : {}) };
     }),
   } as unknown as WorkspaceService;
-  return { app: createWorkspaceRoutes(svc, { authzProducer: opts.authzProducer }), runHeadlessTask, dispatchHeadlessTask, svc };
+  return { app: createWorkspaceRoutes(svc, { authzProducer: opts.authzProducer }), runHeadlessTask, dispatchHeadlessTask, svc, createWorkspace };
 }
 
 async function post(app: any, path: string, body?: unknown) {
@@ -215,6 +242,50 @@ describe('PATCH /:id/authz-level', () => {
     expect(r.status).toBe(400)
     expect(svc.registry.get('ws-1')?.authzLevel).toBe('read_only')
     expect(authzProducer.emit).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /', () => {
+  it('accepts blind mode fields and returns the registry/public metadata round-trip', async () => {
+    const { app, createWorkspace } = build()
+
+    const r = await post(app, '/', {
+      tag: 'blind-lab',
+      template: 'chat',
+      agents: ['codex'],
+      blind: true,
+      blindAllowBarSources: [' mock-paper ', 'mock-paper', 'mock-campaign'],
+    })
+
+    expect(r.status).toBe(201)
+    expect(createWorkspace).toHaveBeenCalledWith('blind-lab', 'chat', {
+      agentsRequested: ['codex'],
+      blind: true,
+      blindAllowBarSources: ['mock-paper', 'mock-campaign'],
+    })
+    expect(r.body.workspace).toMatchObject({
+      id: 'ws-1',
+      tag: 'blind-lab',
+      template: 'chat',
+      agents: ['codex'],
+      blind: true,
+      blindAllowBarSources: ['mock-paper', 'mock-campaign'],
+    })
+  })
+
+  it('rejects malformed blind create fields before workspace creation', async () => {
+    const { app, createWorkspace } = build()
+
+    const r = await post(app, '/', {
+      tag: 'blind-lab',
+      template: 'chat',
+      blind: 'true',
+      blindAllowBarSources: ['mock-paper'],
+    })
+
+    expect(r.status).toBe(400)
+    expect(r.body.error).toBe('bad_request')
+    expect(createWorkspace).not.toHaveBeenCalled()
   })
 })
 
