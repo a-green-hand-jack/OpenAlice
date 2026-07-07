@@ -626,9 +626,11 @@ it saves. Hand parallel tracks off to cloud Claude sessions.
   `dev` are GitHub-protected (`allow_deletions: false`,
   `allow_force_pushes: false`). `local` is conventionally permanent too.
 - When merging PRs, do not combine the merge with automatic
-  `--delete-branch`. Merge first, then delete stale feature branches
-  deliberately only after the PR merge commit preserves the history.
-  Never delete long-lived branches.
+  `--delete-branch`. Merge first, then delete the merged feature branch
+  deliberately — **both the local branch and its `origin` remote**
+  (`git branch -D <b>` + `git push origin --delete <b>`) — the merge
+  commit already preserves the SHAs, so nothing is lost. Never delete
+  long-lived branches (`master` / `dev` / `local`).
 - **Prefer `--merge` over `--squash`** — squash flattens individual
   commits. Squash only when the history is genuinely messy and even
   then never combined with `--delete-branch`.
@@ -760,7 +762,8 @@ migrations, pre-commit verification) still applies. Full process:
   `.worktrees/issue-N/` worktree created from `jieke/dev` →
   implementation by a sub-agent → PR to `jieke/dev` → CI green +
   independent review by a different sub-agent or the main agent → merge
-  (`--merge`, never squash by default) → cleanup stale branch/worktree.
+  (`--merge`, never squash by default) → delete the merged branch
+  (local + `origin` remote) and remove its worktree.
   Upstream sync is separate: `upstream/master` → `origin/master`, then
   `origin/master` → `jieke/dev`. Periodically merge reviewed, mature
   batches from `jieke/dev` into fork `master`.
