@@ -51,7 +51,7 @@ const AGENT_SESSION_ID_RE = /^[A-Za-z0-9_.-]{8,128}$/;
 
 /** Upper bound on a quick-chat seed prompt — matches the headless-dispatch cap. */
 const MAX_SEED_PROMPT = 16000;
-/** Upper bound on a manual wake message. The route may append one newline. */
+/** Upper bound on a manual wake message. The route may append one terminal Enter. */
 const MAX_WAKE_MESSAGE = 16000;
 
 // In-flight resume coalescing, keyed `${wsId}::${recordId}`. A frontend
@@ -110,7 +110,7 @@ function parseTerminalThemeField(raw: unknown): TerminalThemeVariant | { error: 
 
 function parseWakeInput(
   raw: unknown,
-): { input: string } | { error: string; message: string } {
+): { input: string | readonly string[] } | { error: string; message: string } {
   if (typeof raw !== 'object' || raw === null) {
     return { error: 'bad_request', message: 'body must be an object' };
   }
@@ -126,7 +126,11 @@ function parseWakeInput(
   if (appendRaw !== undefined && typeof appendRaw !== 'boolean') {
     return { error: 'bad_request', message: 'appendNewline must be a boolean' };
   }
-  return { input: appendRaw === false ? message : `${message}\n` };
+  // Terminal UIs (including Codex) submit on carriage return as a key event.
+  // Send the text and the Enter separately; one pasted "text\r" chunk can stay
+  // in Codex's prompt box without submitting.
+  if (appendRaw === false) return { input: message };
+  return { input: message.length === 0 ? '\r' : [message, '\r'] };
 }
 
 /** Max stored length of a session title (the seed message); the row truncates further. */
@@ -790,7 +794,7 @@ export function createWorkspaceRoutes(
       return c.json({ error: 'not_found' }, 404);
     }
 
-    let input: string;
+    let input: string | readonly string[];
     try {
       const parsed = parseWakeInput(await safeJson(c));
       if ('error' in parsed) return c.json(parsed, 400);

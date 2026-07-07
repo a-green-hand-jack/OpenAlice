@@ -28,7 +28,10 @@ OpenAlice 本身不是一个「每次任务都只会开 `codex exec`」的简陋
    一个已存在、仍 live 的 session 注入窄 wake message，而不会偷偷 spawn 新
    headless run。schedule scanner 仍只会发新的 headless run；要做生产级常驻
    steward，还要把 event selector / scheduler policy / heartbeat / watchdog 接到
-   这个 input seam 上。
+   这个 input seam 上。`tools/persistent-wake-loop-backtest.mjs` 是验收 harness：
+   它用 shell PTY 长驻 runner 跑完整 campaign wake-loop，证明同 session/pid/
+   transcript 多周期不变；Codex interactive 完整回测仍缺稳定 per-turn completion
+   boundary。
 
 所以问题不在于 OpenAlice 完全不支持 agent 在 workspace 里用工具做事；问题在于
 **现有自动化触发面默认仍是 fresh headless run；新增 wake seam 只解决「已有 live
@@ -51,8 +54,11 @@ session 可被窄消息唤醒」这一刀。交易 steward 的生产循环还需
 4. Launcher 注入 `AQ_WS_ID`、`OPENALICE_TOOL_URL`、`AQ_SESSION_ID` 等环境变量。
    Agent 只看到普通 shell 命令；identity 由 shim header 传回服务端。
 5. 手动/API wake 走 `POST /api/workspaces/:id/sessions/:sid/wake`，body 为
-   `{ message, appendNewline? }`。它只向**已 live** 的 PTY stdin 写入消息，默认补
-   一个换行；session 不存在返回 404，不 live 返回 409，不隐式启动 Codex。
+   `{ message, appendNewline? }`。它只向**已 live** 的 PTY stdin 写入消息，默认把
+   message 与 terminal Enter（CR）分成两次 PTY write，适配 Codex 这类 TUI；
+   session 不存在返回 404，不 live 返回 409，不隐式启动 Codex。
+   多周期验收见
+   [persistent wake-loop appendix](appendix/persistent-wake-loop-backtest.zh.md)。
 6. 暂停/恢复走 session registry。Agent 自己的 transcript id 若可发现，会作为
    `resumeHint` 保存；恢复时 adapter 转成 `--resume` / `resume <id>` / `--session`。
 

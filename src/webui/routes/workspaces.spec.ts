@@ -445,12 +445,12 @@ describe('POST /:id/sessions/:sid/wake', () => {
     return { app: createWorkspaceRoutes(svc), wakeSession };
   }
 
-  it('writes a wake message with a default trailing newline', async () => {
+  it('writes a wake message with a default terminal Enter', async () => {
     const { app, wakeSession } = buildWake();
     const r = await post(app, `/ws-1/sessions/${TOKEN}/wake`, { message: 'check ASSET-A' });
 
     expect(r.status).toBe(200);
-    expect(wakeSession).toHaveBeenCalledWith('ws-1', TOKEN, 'check ASSET-A\n');
+    expect(wakeSession).toHaveBeenCalledWith('ws-1', TOKEN, ['check ASSET-A', '\r']);
     expect(r.body).toMatchObject({
       ok: true,
       wsId: 'ws-1',
@@ -470,6 +470,14 @@ describe('POST /:id/sessions/:sid/wake', () => {
 
     expect(r.status).toBe(200);
     expect(wakeSession).toHaveBeenCalledWith('ws-1', TOKEN, 'raw bytes stay caller-controlled');
+  });
+
+  it('can submit a terminal Enter without extra text', async () => {
+    const { app, wakeSession } = buildWake();
+    const r = await post(app, `/ws-1/sessions/${TOKEN}/wake`, { message: '' });
+
+    expect(r.status).toBe(200);
+    expect(wakeSession).toHaveBeenCalledWith('ws-1', TOKEN, '\r');
   });
 
   it('404s missing sessions', async () => {

@@ -60,6 +60,10 @@
 > `POST /api/workspaces/:id/sessions/:sid/wake` 只把调用方提供的 `message` 写入
 > 已 live 的 PTY stdin；具体 wake envelope 文本属于调度/实验层，若未来固化进仓库，
 > 必须在本文件登记并升/标版本。
+>
+> Persistent wake-loop harness note（2026-07-08）：`tools/persistent-wake-loop-backtest.mjs`
+> 固化的是**验收 envelope schema 与 shell proving runner**，不是 steward prompt
+> 新版本。它用于证明同一 live session 多周期 wake plumbing；不改变 v2 prompt 真源。
 
 ## 4. Prompt 漂移规则（Drift Rule for Prompts）
 

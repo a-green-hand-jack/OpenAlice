@@ -75,10 +75,13 @@ export interface LiveSessionInfo {
 export interface SessionInputResult {
   readonly id: string;
   readonly wsId: string;
+  readonly bytes: number;
   readonly lastInputAt: number | null;
   readonly lastOutputAt: number | null;
   readonly lastActivityAt: number;
 }
+
+export type SessionInputPayload = string | Buffer | readonly (string | Buffer)[];
 
 /**
  * Owns every live PTY, keyed by the record id (a stable launcher id the
@@ -153,13 +156,19 @@ export class SessionPool {
   }
 
   /** Write stdin to an already-live PTY. Returns undefined when not running. */
-  sendInput(recordId: string, input: string | Buffer): SessionInputResult | undefined {
+  sendInput(recordId: string, input: SessionInputPayload): SessionInputResult | undefined {
     const session = this.sessions.get(recordId);
     if (!session) return undefined;
-    session.writeInput(input);
+    const chunks = Array.isArray(input) ? input : [input];
+    let bytes = 0;
+    for (const chunk of chunks) {
+      session.writeInput(chunk);
+      bytes += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk);
+    }
     return {
       id: recordId,
       wsId: session.wsId,
+      bytes,
       lastInputAt: session.lastInputAt,
       lastOutputAt: session.lastOutputAt,
       lastActivityAt: session.lastActivityAt,

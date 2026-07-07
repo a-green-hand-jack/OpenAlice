@@ -63,7 +63,7 @@ export class HeadlessCapacityError extends Error {
   }
 }
 import { ScrollbackStore } from './scrollback-store.js';
-import { SessionPool, type SessionFactoryContext, type SessionInputResult } from './session-pool.js';
+import { SessionPool, type SessionFactoryContext, type SessionInputPayload, type SessionInputResult } from './session-pool.js';
 import { SessionRegistry, type SessionRecord } from './session-registry.js';
 import { buildCliPath, buildSpawnEnv } from './spawn-env.js';
 import { terminalThemeEnv } from './terminal-theme.js';
@@ -173,7 +173,7 @@ export interface WorkspaceService {
   wakeSession(
     wsId: string,
     recordId: string,
-    input: string | Buffer,
+    input: SessionInputPayload,
   ): Promise<WakeSessionResult>;
   /** Read-only scheduling projection of every workspace's `.alice/issues/`
    *  directory (scheduled issues only) + each task's last-fired marker and
@@ -923,7 +923,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
   const wakeSession = async (
     wsId: string,
     recordId: string,
-    input: string | Buffer,
+    input: SessionInputPayload,
   ): Promise<WakeSessionResult> => {
     if (!registry.get(wsId)) return { ok: false, reason: 'workspace-not-found' };
     await sessionRegistry.ensureLoaded(wsId);
@@ -958,7 +958,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     launcherLogger.info('workspace.session_wake', {
       wsId,
       sessionId: recordId,
-      bytes: Buffer.isBuffer(input) ? input.length : Buffer.byteLength(input),
+      bytes: activity.bytes,
       lastInputAt: activity.lastInputAt,
       lastOutputAt: activity.lastOutputAt,
       lastActivityAt: activity.lastActivityAt,
