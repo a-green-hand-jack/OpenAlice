@@ -690,7 +690,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       });
       created = true;
       const selected = await ensureStewardScheduleSession(ws, config, wake.agent);
-      const injected = injectStewardWake({
+      const injected = await injectStewardWake({
         pool,
         sessionId: selected.sessionId,
         record,
