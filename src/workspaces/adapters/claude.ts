@@ -10,13 +10,61 @@ const SESSION_FILE_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 const CLAUDE_SETTINGS_PATH = '.claude/settings.local.json';
 
 /**
+ * CLI binaries every `injectTools` template (chat, steward) teaches the agent
+ * to use via injected skills — see `CLI_TOOLS_SKILLS` in `context-injector.ts`
+ * (keep this list in sync with that one). Pre-approving Bash access to these
+ * specific, already-taught binaries is not a new capability grant: the skill
+ * files already teach the agent to invoke them regardless of which template
+ * spawned it.
+ *
+ * Without this, Claude Code's default permission model treats each
+ * *subcommand family* (tool name + first positional arg — "alice-uta
+ * account", "alice-uta order", "alice-uta market", ...) as its own one-time
+ * approval gate: fine for a human-attended session (click through once per
+ * family), fatal for an unattended steward wake (issue #92) — the PTY just
+ * sits on an interactive "This command requires approval" prompt with no one
+ * to answer it, until the wake's deadline timeout fires. Confirmed live
+ * 2026-07-08 against a real steward wake session.
+ *
+ * `Bash(<tool> *)` is Claude Code's current "wildcard" match syntax (the
+ * space-separated form; `Bash(<tool>:*)` colon-prefix matching still works
+ * but is documented as legacy) — verified empirically against claude
+ * 2.1.202 via a standalone PTY probe: a single `Bash(alice-uta *)` entry
+ * covers every subcommand family (account/order/market/git/...) in one rule,
+ * not just the first family used in a session, eliminating the repeated
+ * per-family prompt entirely.
+ *
+ * Scope: applied globally to every claude spawn (interactive + headless),
+ * not gated per-template. `SpawnContext` carries no template identity today
+ * (see `cli-adapter.ts`), so scoping this to steward-only would mean
+ * threading template identity through the adapter interface and every call
+ * site — real plumbing cost for no added safety, since chat and steward (the
+ * only two `injectTools` templates) already teach these same binaries
+ * unconditionally.
+ *
+ * NOT covered by this list: the separate "Contains brace with quote
+ * character (expansion obfuscation)" prompt seen when a heredoc body embeds
+ * JSON (e.g. a `cat >> ledger.jsonl <<'EOF' ... EOF` ledger write). That is a
+ * static too-complex/unparseable classification Claude Code applies before
+ * any `permissions.allow` rule is even consulted — verified empirically that
+ * it still fires with a matching `Bash(cat *)` allow rule in place. See the
+ * PR description for what does and doesn't route around it.
+ */
+const PRETRUSTED_BASH_TOOLS = ['alice', 'alice-analysis', 'alice-uta', 'alice-workspace', 'traderhub'];
+
+/**
  * Claude Code can park project-scoped MCP servers at "⏸ Pending approval" when
  * a workspace does provide them. New built-in OpenAlice templates no longer
  * write `.mcp.json` (the default tool path is the injected `alice*` CLI shims),
  * but keep the auto-trust setting at spawn so third-party/satellite workspaces
  * that do ship MCP config do not stall on first launch.
  */
-const AUTOTRUST_SETTINGS = '{"enableAllProjectMcpServers":true}';
+const AUTOTRUST_SETTINGS = JSON.stringify({
+  enableAllProjectMcpServers: true,
+  permissions: {
+    allow: PRETRUSTED_BASH_TOOLS.map((bin) => `Bash(${bin} *)`),
+  },
+});
 
 /** dashed-cwd convention used by Claude Code's project store. */
 function projectKey(workspaceDir: string): string {

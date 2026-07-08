@@ -46,7 +46,10 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   `src/workspaces/service.ts:650-913`.
   Open `src/workspaces/service.ts:94-104`, `src/workspaces/session-pool.ts:72-84`,
   `src/workspaces/template-registry.ts:106-111`, and
-  `src/workspaces/adapters/claude.ts:41-65`.
+  `src/workspaces/adapters/claude.ts:89-113` (shifted from `:41-65` by the
+  issue #92 permission-preseed block inserted above it — see
+  `src/workspaces/adapters/claude.ts:12-60` for the pre-approved-Bash-tools
+  rationale that now occupies the file's opening lines).
 - `services/` - Alice-owned cross-cutting clients: auth, UTA SDK wrappers, and
   UTA restart/health helpers. Anchors: `src/services/uta-client/UTAManagerSDK.ts:36-40`,
   `src/services/uta-supervisor/health.ts:22-36`,
@@ -59,8 +62,10 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   workspace WebSocket/IPCs. `WebPlugin` starts at `src/webui/plugin.ts:73-94`;
   core API routes are `src/webui/plugin.ts:221-245`; workspace routes are
   `src/webui/plugin.ts:250-263`; workspace `authzLevel` changes live at
-  `src/webui/routes/workspaces.ts:712-742`; manual steward wake routes live at
-  `src/webui/routes/workspaces.ts:744-935`; account `maxAuthzLevel` changes are
+  `src/webui/routes/workspaces.ts:717-749`; manual steward wake routes live at
+  `src/webui/routes/workspaces.ts:751-970` (both shifted a few lines by issue
+  #88's stuck-wake Inbox push addition inside the supervisor/tick handler);
+  account `maxAuthzLevel` changes are
   audited in `src/webui/routes/trading-config.ts:197-207`; trading proxy is
   `src/webui/routes/trading-proxy.ts:32-41`; event ingest's external/internal
   token gate is `src/webui/routes/events.ts:42-60`.
@@ -98,11 +103,15 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   -> `src/workspaces/persistent-session.ts:128-150`. Server-side PTY input for
   future steward wakes goes through `SessionPool.writeToSession()` and
   `PersistentSession.writeInput()`, not through fabricated WebSocket frames.
-- Manual steward wake dispatch is workspace-scoped: `src/webui/routes/workspaces.ts:744-935`
+- Manual steward wake dispatch is workspace-scoped: `src/webui/routes/workspaces.ts:751-970`
   acquires `.alice/steward/locks/*.json`, writes `.alice/steward/wakes/*.json`,
   reuses or resumes the configured interactive session via
   `src/webui/routes/workspaces.ts:352-507`, then calls
-  `src/workspaces/steward/injector.ts:19-28`. Manual supervisor tick at
+  `src/workspaces/steward/injector.ts:50-65` (shifted from `:19-28`, and now
+  async: issue #91 found the message write landing in one PTY burst never
+  actually submits in an interactive TUI — see the two-phase write + submit
+  gap documented at `src/workspaces/steward/injector.ts:19-47`). Manual
+  supervisor tick at
   `src/webui/routes/workspaces.ts:871-906` advances completed, stuck, or timed-out
   wakes and writes cost state/audit log.
 - Scheduled steward wakes follow the same workspace-local files and PTY injector:

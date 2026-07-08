@@ -1,0 +1,4 @@
+# Campaign run artifacts + fetched/anonymized cell data are orchestrator-side
+# outputs, regenerated on demand — only the harness scripts are checked in.
+runs/
+cells/
