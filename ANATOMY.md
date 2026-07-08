@@ -19,10 +19,30 @@ state, or ownership.
 - Alice is the agent runtime under `src/`. Its composition root is
   `src/main.ts:76`, and its assembled `EngineContext` is `src/main.ts:364-376`.
   Start with [src/ANATOMY.md](src/ANATOMY.md) before changing Alice internals.
-  For the full workspace-agent support map (interactive PTY, manual wake for
-  live sessions, headless runs, CLI/MCP tools, schedule, Inbox, and UTA trading
-  surface), start with
-  [docs/openalice-agent-support.zh.md](docs/openalice-agent-support.zh.md).
+  For the full workspace-agent support map (interactive PTY, headless runs,
+  server-side wake input for live sessions, CLI/MCP tools, schedule, Inbox, and
+  UTA trading surface), start with
+  [docs/openalice-agent-support.zh.md](docs/openalice-agent-support.zh.md). For
+  the target trading-steward behavior inside a workspace (workspace-as-world,
+  persistent session, wake envelope, checklist, and decision ledger), start with
+  [docs/steward-workspace-behavior-contract.zh.md](docs/steward-workspace-behavior-contract.zh.md);
+  for the current minimal implementation design, continue to
+  [docs/steward-persistent-loop-implementation.zh.md](docs/steward-persistent-loop-implementation.zh.md).
+  Persistent sessions expose an explicit server-side PTY input seam for generic
+  live-session wake and steward wake injection; see
+  `src/workspaces/persistent-session.ts`, `src/workspaces/session-pool.ts`, and
+  `POST /api/workspaces/:id/sessions/:sid/wake`. The first manual
+  persistent-steward wake
+  path is `POST /api/workspaces/:id/steward/wakes`, implemented in
+  `src/webui/routes/workspaces.ts:744-935`, which acquires the account lock,
+  writes the workspace-local wake file, and injects a narrow `<STEWARD_WAKE>`
+  into the configured interactive session instead of dispatching a new headless
+  run. `POST /api/workspaces/:id/steward/supervisor/tick` advances ledger
+  completions, timeouts, stuck sessions, lock release, and cost state. Scheduled
+  issues with `kind: steward-wake` now route through the same persistent wake
+  seam from `src/workspaces/schedule/scanner.ts:203-220` into
+  `src/workspaces/service.ts:650-913`; ordinary scheduled issues still run
+  headless.
 
 - UTA is the co-located broker carrier under `services/uta/`. Its process entry
   is `services/uta/src/main.ts:40`, its account manager starts at
@@ -76,6 +96,13 @@ state, or ownership.
   Alice's audited workspace route), session records, live PTY activity
   timestamps, scrollback, headless tasks, and workspace repos. The default root
   is `src/workspaces/config.ts:107-109`.
+  Steward workspaces additionally carry their template-owned
+  `.alice/steward/` context/ledger scaffold inside the workspace repo; Alice's
+  steward file-store helpers under `src/workspaces/steward/` read/write that
+  workspace-local source of truth, and the manual wake API writes
+  `.alice/steward/wakes/*.json`, `.alice/steward/locks/*.json`,
+  `.alice/steward/state.json`, and `.alice/steward/supervisor.jsonl` while
+  reading `.alice/steward/ledger/decisions.jsonl`.
 
 - Secrets are not stored in plaintext data files after sealing. The machine key
   is outside portable `data/`, at `src/core/sealing.ts:49-50`.

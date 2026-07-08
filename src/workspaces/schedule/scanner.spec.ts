@@ -69,6 +69,12 @@ interface IssueSpec {
   status?: string
   priority?: string
   agent?: string
+  kind?: 'headless' | 'steward-wake'
+  accountId?: string
+  authzLevel?: string
+  expectedDecision?: string
+  wakeReason?: string
+  deadlineMs?: number
   body?: string
 }
 
@@ -79,6 +85,12 @@ function issueMd(spec: IssueSpec): string {
   if (spec.priority) lines.push(`priority: ${spec.priority}`)
   if (spec.what) lines.push(`what: ${spec.what}`)
   if (spec.agent) lines.push(`agent: ${spec.agent}`)
+  if (spec.kind) lines.push(`kind: ${spec.kind}`)
+  if (spec.accountId) lines.push(`accountId: ${spec.accountId}`)
+  if (spec.authzLevel) lines.push(`authzLevel: ${spec.authzLevel}`)
+  if (spec.expectedDecision) lines.push(`expectedDecision: ${spec.expectedDecision}`)
+  if (spec.wakeReason) lines.push(`wakeReason: ${spec.wakeReason}`)
+  if (spec.deadlineMs) lines.push(`deadlineMs: ${spec.deadlineMs}`)
   if (spec.when) {
     const w = spec.when
     const inner =
@@ -115,6 +127,7 @@ function scannerFor(
     markers?: MarkerStore
     now?: number
     adapter?: CliAdapter
+    dispatchStewardWake?: any
   } = {},
 ) {
   const dispatch = opts.dispatch ?? vi.fn(async () => ({ taskId: 'run-1' }))
@@ -123,6 +136,7 @@ function scannerFor(
     registry: { list: () => workspaces } as unknown as WorkspaceRegistry,
     resolveAdapter: () => opts.adapter ?? headlessAdapter,
     dispatch,
+    ...(opts.dispatchStewardWake ? { dispatchStewardWake: opts.dispatchStewardWake } : {}),
     markers,
     logger: noopLogger,
     now: () => opts.now ?? NOW,
@@ -161,6 +175,41 @@ describe('ScheduleScanner', () => {
     expect(dispatch).toHaveBeenCalledTimes(1)
     expect(dispatch).toHaveBeenCalledWith(ws, headlessAdapter, 'go', expect.any(Number), 'sched')
     expect(scanner.snapshot()!.workspaces[0].tasks.map((t) => t.id)).toEqual(['sched'])
+  })
+
+  it('routes steward-wake scheduled issues through persistent wake dispatch, not headless', async () => {
+    const ws = await makeWs('w1', [{
+      id: 'steward-aapl',
+      title: 'AAPL steward observe',
+      when: { kind: 'every', every: '30m' },
+      what: 'observe AAPL',
+      agent: 'codex',
+      kind: 'steward-wake',
+      accountId: 'mock-simulator-1',
+      authzLevel: 'paper',
+      expectedDecision: 'no_trade',
+      wakeReason: 'scheduled_observe',
+      deadlineMs: 120000,
+    }])
+    const dispatchStewardWake = vi.fn(async () => ({ wakeId: 'wake-1' }))
+    const { scanner, dispatch, markers } = scannerFor([ws], { dispatchStewardWake })
+
+    await scanner.scan()
+
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(dispatchStewardWake).toHaveBeenCalledWith(ws, expect.objectContaining({
+      issueId: 'steward-aapl',
+      wakeId: `${new Date(NOW).toISOString()}:steward-aapl`,
+      reason: 'scheduled_observe',
+      accountId: 'mock-simulator-1',
+      authzLevel: 'paper',
+      expectedDecision: 'no_trade',
+      humanRequest: 'observe AAPL',
+      deadlineMs: 120000,
+      agent: 'codex',
+      nowMs: NOW,
+    }))
+    expect(markers.get('w1', 'steward-aapl')).toBe(NOW)
   })
 
   it('falls back to title+body for the fire prompt when `what` is absent', async () => {

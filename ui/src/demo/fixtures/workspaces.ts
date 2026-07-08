@@ -133,7 +133,18 @@ export const chatTemplate: TemplateInfo = {
   hasReadme: false,
 }
 
-export const demoTemplates: TemplateInfo[] = [chatTemplate]
+export const stewardTemplate: TemplateInfo = {
+  name: 'steward',
+  displayName: 'Steward',
+  description:
+    'Persistent trading steward workspace - a narrow, structured trading-agent environment for wake envelopes, UTA checklist decisions, and auditable decision ledgers.',
+  groupOrder: 15,
+  defaultAgents: ['codex'],
+  version: '0.1.0',
+  hasReadme: true,
+}
+
+export const demoTemplates: TemplateInfo[] = [chatTemplate, stewardTemplate]
 
 // Back-compat singleton for older callers (other fixture files reference
 // `demoTemplate` and we want a stable name). Points at the flagship.

@@ -2,17 +2,16 @@
  * ScheduleScanner - the dumb external scheduler for workspace self-declared
  * issues. Each tick it enumerates every workspace, reads that workspace's own
  * `.alice/issues/<id>.md` files live, and for every SCHEDULED + due issue (one
- * that carries a `when`) fires a headless run via the workspace's automation
- * interface. Issues without a `when` are pure board work items and are ignored
- * here. It interprets NOTHING about the work - the fire prompt (`what`, else
- * title+body) is handed straight to `dispatchHeadlessTask`.
+ * that carries a `when`) dispatches either a headless run (default) or a
+ * persistent steward wake (`kind: steward-wake`). Issues without a `when` are
+ * pure board work items and are ignored here. It interprets only the dispatch
+ * kind and routing fields; ordinary fire prompt content is still opaque.
  *
  * The ~1-min tick is the scheduler's OWN control loop (a plain timer), NOT a
  * scheduled task - infrastructure periodicity never enters the self-description
- * system. There is deliberately NO per-workspace lock: if a fire collides with a
- * still-running run or a live interactive session in the same checkout, the
- * coding agent absorbs it (it lives in multi-AI-on-one-repo all day). The only
- * bound is the global headless concurrency cap inside `dispatch`.
+ * system. Ordinary headless runs still rely only on the global headless
+ * concurrency cap. Steward wakes use their own per-account lock in
+ * `.alice/steward/locks`.
  *
  * Due-ness carries no external schedule state (see `fireBase`): from the last
  * fire, or a never-fired baseline — `every`/`at` from epoch (fire on first
@@ -31,6 +30,8 @@ import type { Logger } from '../logger.js'
 import type { WorkspaceMeta, WorkspaceRegistry } from '../workspace-registry.js'
 
 import { isFireable, issueFirePrompt, readWorkspaceIssues } from '../issues/declaration.js'
+import type { IssueRecord } from '../issues/declaration.js'
+import type { StewardExpectedDecision, StewardWakeEnvelope, StewardWakeReason } from '../steward/types.js'
 
 import {
   fireBase,
@@ -65,12 +66,31 @@ export interface ScheduleScannerDeps {
      *  issue); manual/external dispatch callers omit it. */
     issueId?: string,
   ) => Promise<{ taskId: string }>
+  dispatchStewardWake?: (
+    meta: WorkspaceMeta,
+    wake: ScheduleStewardWakeInput,
+  ) => Promise<{ wakeId: string }>
   markers: MarkerStore
   logger: Logger
   /** Injectable clock for tests. */
   now?: () => number
   /** Injectable tick interval for tests. */
   intervalMs?: number
+}
+
+export interface ScheduleStewardWakeInput {
+  readonly issueId: string
+  readonly wakeId: string
+  readonly reason: StewardWakeReason
+  readonly accountId: string
+  readonly authzLevel: StewardWakeEnvelope['authzLevel']
+  readonly expectedDecision: StewardExpectedDecision
+  readonly humanRequest: string
+  readonly deadlineMs?: number
+  readonly marketContext?: Record<string, unknown>
+  readonly riskContext?: Record<string, unknown>
+  readonly agent?: string
+  readonly nowMs: number
 }
 
 export class ScheduleScanner {
@@ -186,7 +206,12 @@ export class ScheduleScanner {
       if (!when) continue
       seen.add(this.deps.markers.key(ws.id, issue.id))
       if (isFireable(issue) && this.isDue(ws.id, issue.id, when, nowMs)) {
-        await this.fire(ws, issue.id, issueFirePrompt(issue), issue.agent, nowMs)
+        const prompt = issueFirePrompt(issue)
+        if (issue.kind === 'steward-wake') {
+          await this.fireStewardWake(ws, issue, prompt, nowMs)
+        } else {
+          await this.fire(ws, issue.id, prompt, issue.agent, nowMs)
+        }
       }
       // Read the marker AFTER any fire so last/next reflect a just-fired run.
       const last = this.deps.markers.get(ws.id, issue.id) ?? null
@@ -225,6 +250,51 @@ export class ScheduleScanner {
       this.deps.logger.info('schedule.fire_skipped', {
         wsId: ws.id,
         taskId,
+        reason: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  private async fireStewardWake(
+    ws: WorkspaceMeta,
+    issue: IssueRecord,
+    humanRequest: string,
+    nowMs: number,
+  ): Promise<void> {
+    if (!this.deps.dispatchStewardWake) {
+      this.deps.logger.warn('schedule.steward_wake_unavailable', { wsId: ws.id, taskId: issue.id })
+      return
+    }
+    if (!issue.accountId || !issue.authzLevel || !issue.expectedDecision) {
+      this.deps.logger.warn('schedule.steward_wake_invalid', { wsId: ws.id, taskId: issue.id })
+      return
+    }
+    const wakeId = `${new Date(nowMs).toISOString()}:${issue.id}`
+    try {
+      const result = await this.deps.dispatchStewardWake(ws, {
+        issueId: issue.id,
+        wakeId,
+        reason: issue.wakeReason ?? 'scheduled_observe',
+        accountId: issue.accountId,
+        authzLevel: issue.authzLevel,
+        expectedDecision: issue.expectedDecision,
+        humanRequest,
+        ...(issue.deadlineMs !== undefined ? { deadlineMs: issue.deadlineMs } : {}),
+        ...(issue.marketContext !== undefined ? { marketContext: issue.marketContext } : {}),
+        ...(issue.riskContext !== undefined ? { riskContext: issue.riskContext } : {}),
+        ...(issue.agent !== undefined ? { agent: issue.agent } : {}),
+        nowMs,
+      })
+      await this.deps.markers.set(ws.id, issue.id, nowMs)
+      this.deps.logger.info('schedule.steward_wake_fired', {
+        wsId: ws.id,
+        taskId: issue.id,
+        wakeId: result.wakeId,
+      })
+    } catch (err) {
+      this.deps.logger.info('schedule.steward_wake_skipped', {
+        wsId: ws.id,
+        taskId: issue.id,
         reason: err instanceof Error ? err.message : String(err),
       })
     }

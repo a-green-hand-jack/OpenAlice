@@ -8,7 +8,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,9 @@ const CHAT_FILES = join(CHAT_DIR, 'files');
 const CHAT_BOOTSTRAP = join(CHAT_DIR, 'bootstrap.mjs');
 const AQ_DIR = join(HERE, 'templates', 'auto-quant');
 const AQ_BOOTSTRAP = join(AQ_DIR, 'bootstrap.mjs');
+const STEWARD_DIR = join(HERE, 'templates', 'steward');
+const STEWARD_FILES = join(STEWARD_DIR, 'files');
+const STEWARD_BOOTSTRAP = join(STEWARD_DIR, 'bootstrap.mjs');
 
 /**
  * Run a bootstrap.mjs exactly as the launcher's runScript does: on the bundled
@@ -80,6 +83,20 @@ function chatMeta(): TemplateMeta {
     injectTools: true,
     injectPersona: true,
     bundledSkills: ['scan-value-chain'],
+  };
+}
+
+function stewardMeta(): TemplateMeta {
+  return {
+    name: 'steward',
+    bootstrapScript: STEWARD_BOOTSTRAP,
+    filesDir: STEWARD_FILES,
+    templateDir: STEWARD_DIR,
+    version: '0.1.0',
+    defaultAgents: ['codex'],
+    injectTools: true,
+    injectPersona: true,
+    bundledSkills: [],
   };
 }
 
@@ -173,6 +190,61 @@ describe('chat workspace create — CLI-only injection (no MCP)', () => {
     expect(existsSync(join(dir, '.claude/skills/traderhub/SKILL.md'))).toBe(true);
     expect(existsSync(join(dir, '.claude/skills/scan-value-chain/SKILL.md'))).toBe(true);
     expect(existsSync(join(dir, '.pi/skills/alice-uta/SKILL.md'))).toBe(true);  // Pi discovers .pi/skills
+    expect((await run('git', ['-C', dir, 'status', '--porcelain'])).trim()).toBe('');
+  });
+});
+
+describe('steward workspace create: scaffold → manifest → commit', () => {
+  it('yields the steward file layout and versioned context manifest in the initial commit', async () => {
+    await runBootstrap(STEWARD_BOOTSTRAP, ['stewardtag', dir], { AQ_TEMPLATE_ROOT: STEWARD_DIR }, true);
+    await injectWorkspaceContext({ template: stewardMeta(), wsId: 'ws-steward-1', dir });
+    await commitInitial(dir, 'steward: stewardtag');
+
+    for (const rel of [
+      'README.md',
+      'AGENTS.md',
+      'CLAUDE.md',
+      '.alice/steward/README.md',
+      '.alice/steward/config.json',
+      '.alice/steward/context-manifest.json',
+      '.alice/steward/wakes/.gitkeep',
+      '.alice/steward/ledger/decisions.jsonl',
+      '.alice/steward/supervisor.jsonl',
+      '.agents/skills/alice-uta/SKILL.md',
+    ]) {
+      expect(existsSync(join(dir, rel)), rel).toBe(true);
+    }
+
+    const config = JSON.parse(await readFile(join(dir, '.alice/steward/config.json'), 'utf8')) as {
+      agent: string;
+      sessionId: string | null;
+      monthlyBudget: { modelUsd: number; serverUsd: number };
+    };
+    expect(config.agent).toBe('codex');
+    expect(config.sessionId).toBeNull();
+    expect(config.monthlyBudget).toEqual({ modelUsd: 200, serverUsd: 50 });
+
+    const manifest = JSON.parse(await readFile(join(dir, '.alice/steward/context-manifest.json'), 'utf8')) as {
+      template: { name: string; version: string };
+      coreAgent: { id: string; model: string | null };
+      wrapperPrompt: { path: string; sha256: string };
+      instructions: Array<{ path: string }>;
+      skills: Array<{ name: string }>;
+      schemas: { wake: number; decisionLedger: number };
+    };
+    expect(manifest.template).toEqual({ name: 'steward', version: '0.1.0' });
+    expect(manifest.coreAgent).toEqual({ id: 'codex', model: null });
+    expect(manifest.wrapperPrompt.path).toBe('.alice/steward/README.md');
+    expect(manifest.instructions.map((r) => r.path)).toEqual(['AGENTS.md', 'CLAUDE.md']);
+    expect(manifest.skills.map((s) => s.name)).toContain('alice-uta');
+    expect(manifest.schemas).toEqual({ wake: 1, decisionLedger: 1 });
+
+    const excludes = await readFile(join(dir, '.git/info/exclude'), 'utf8');
+    expect(excludes).toContain('.alice/steward/state.json');
+    expect(excludes).toContain('.alice/steward/locks/');
+    expect(excludes).toContain('.alice/steward/supervisor-status.json');
+
+    expect((await run('git', ['-C', dir, 'log', '--pretty=%s'])).trim()).toBe('steward: stewardtag');
     expect((await run('git', ['-C', dir, 'status', '--porcelain'])).trim()).toBe('');
   });
 });

@@ -26,7 +26,25 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   session identity, manual wake input for live sessions, scrollback, headless
   runs, schedules, and issue files.
   The behavior/support map is
-  [../docs/openalice-agent-support.zh.md](../docs/openalice-agent-support.zh.md).
+  [../docs/openalice-agent-support.zh.md](../docs/openalice-agent-support.zh.md);
+  the target trading-steward workspace behavior contract is
+  [../docs/steward-workspace-behavior-contract.zh.md](../docs/steward-workspace-behavior-contract.zh.md);
+  the current minimal persistent-steward implementation design is
+  [../docs/steward-persistent-loop-implementation.zh.md](../docs/steward-persistent-loop-implementation.zh.md).
+  The first persistent steward scaffold lives in
+  `src/workspaces/templates/steward/`; its context manifest is written by
+  `src/workspaces/context-injector.ts:91-127` after instructions and skills land.
+  Steward wake/ledger schemas and workspace-local file stores live in
+  `src/workspaces/steward/`; the v1 wake injector formats the
+  `<STEWARD_WAKE>` message at `src/workspaces/steward/injector.ts:5-28`.
+  Per-account wake locks are in `src/workspaces/steward/lock-store.ts:25-88`;
+  supervisor tick and cost state are in
+  `src/workspaces/steward/supervisor.ts:37-161` and
+  `src/workspaces/steward/cost.ts:14-57`. Scheduled steward wake routing starts
+  at `src/workspaces/issues/declaration.ts:84-117`, branches in
+  `src/workspaces/schedule/scanner.ts:203-220` and
+  `src/workspaces/schedule/scanner.ts:259-301`, then lands in
+  `src/workspaces/service.ts:650-913`.
   Open `src/workspaces/service.ts:94-104`, `src/workspaces/session-pool.ts:72-84`,
   `src/workspaces/template-registry.ts:106-111`, and
   `src/workspaces/adapters/claude.ts:41-65`.
@@ -42,7 +60,8 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   workspace WebSocket/IPCs. `WebPlugin` starts at `src/webui/plugin.ts:73-94`;
   core API routes are `src/webui/plugin.ts:221-245`; workspace routes are
   `src/webui/plugin.ts:250-263`; workspace `authzLevel` changes live at
-  `src/webui/routes/workspaces.ts:468-500`; account `maxAuthzLevel` changes are
+  `src/webui/routes/workspaces.ts:712-742`; manual steward wake routes live at
+  `src/webui/routes/workspaces.ts:744-935`; account `maxAuthzLevel` changes are
   audited in `src/webui/routes/trading-config.ts:197-207`; trading proxy is
   `src/webui/routes/trading-proxy.ts:32-41`; event ingest's external/internal
   token gate is `src/webui/routes/events.ts:42-60`.
@@ -76,11 +95,25 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   `src/core/workspace-tool-center.ts:290-455`,
   `src/server/mcp.ts:172-181`, and `src/server/cli.ts:192-201`.
 - `workspaces/` computes adapter commands, then `SessionPool` owns live PTYs
-  and the manual wake seam that writes to an already-running PTY without
+  and the server-side input seams that write to an already-running PTY without
   spawning a new headless process:
-  `src/workspaces/service.ts:165-174` -> `src/workspaces/service.ts:923-967`
-  -> `src/workspaces/session-pool.ts:155-191` ->
-  `src/workspaces/persistent-session.ts:312-334`.
+  `src/workspaces/service.ts:94-104` -> `src/workspaces/session-pool.ts:72-84`
+  -> `src/workspaces/persistent-session.ts:128-150`. Generic/manual wake goes
+  through `WorkspaceService.wakeSession()` -> `SessionPool.sendInput()`, while
+  steward-controlled wake injection goes through `SessionPool.writeToSession()`;
+  both land in `PersistentSession.writeInput()`, not fabricated WebSocket frames.
+- Manual steward wake dispatch is workspace-scoped: `src/webui/routes/workspaces.ts:744-935`
+  acquires `.alice/steward/locks/*.json`, writes `.alice/steward/wakes/*.json`,
+  reuses or resumes the configured interactive session via
+  `src/webui/routes/workspaces.ts:352-507`, then calls
+  `src/workspaces/steward/injector.ts:19-28`. Manual supervisor tick at
+  `src/webui/routes/workspaces.ts:871-906` advances completed, stuck, or timed-out
+  wakes and writes cost state/audit log.
+- Scheduled steward wakes follow the same workspace-local files and PTY injector:
+  issue frontmatter declares `kind: steward-wake`, scanner routes it away from
+  headless at `src/workspaces/schedule/scanner.ts:203-220`, and the service
+  dispatch seam at `src/workspaces/service.ts:650-913` creates the wake, lock,
+  session, and injection.
 - Alice talks to UTA through `@traderalice/uta-protocol`: `src/main.ts:15-16`,
   `src/services/uta-client/UTAManagerSDK.ts:21-30`, and
   `packages/uta-protocol/src/client/UTAClient.ts:48`.

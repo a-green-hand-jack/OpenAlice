@@ -7,6 +7,7 @@
  */
 
 import { Hono } from 'hono';
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join, resolve as resolvePath } from 'node:path';
 import { z } from 'zod';
@@ -23,7 +24,7 @@ const DEFAULT_WIRE_BY_AGENT: Record<string, WireShape> = {
   opencode: 'openai-chat',
   pi: 'openai-chat',
 };
-import { listDir, PathTraversal, readWorkspaceFile } from '../../workspaces/file-service.js';
+import { listDir, PathTraversal, readWorkspaceFile, writeWorkspaceFile } from '../../workspaces/file-service.js';
 import { gitLog, gitStatus } from '../../workspaces/git-service.js';
 import { logger as launcherLogger } from '../../workspaces/logger.js';
 import { readWorkspaceMetadata, workspaceMetadataSchema, writeWorkspaceMetadata } from '../../workspaces/workspace-metadata.js';
@@ -42,6 +43,17 @@ import {
 } from '../../workspaces/agent-credential-readiness.js';
 import { approverFromAliceRequest } from './approver-identity.js';
 import { isTerminalThemeVariant, type TerminalThemeVariant } from '../../workspaces/terminal-theme.js';
+import {
+  createStewardLedgerStore,
+  createStewardLockStore,
+  createStewardSupervisor,
+  createStewardWakeStore,
+  injectStewardWake,
+  StewardLockConflictError,
+  stewardExpectedDecisionSchema,
+  stewardWakeReasonSchema,
+  type StewardWakeRecord,
+} from '../../workspaces/steward/index.js';
 
 // The spawn body's `resume` value is an AGENT-side session id, whose shape is
 // adapter-native: uuid for claude/codex/pi, `ses_<base62>` for opencode. This
@@ -141,6 +153,27 @@ const authzLevelBodySchema = z.object({
   authzLevel: z.enum(AUTHZ_LEVELS),
 });
 
+const stewardWakeBodySchema = z.object({
+  wakeId: z.string().min(1).optional(),
+  reason: stewardWakeReasonSchema,
+  accountId: z.string().min(1),
+  authzLevel: z.enum(AUTHZ_LEVELS),
+  deadline: z.string().min(1).optional(),
+  deadlineMs: z.number().int().positive().max(60 * 60 * 1000).optional(),
+  marketContext: z.record(z.string(), z.unknown()).optional(),
+  riskContext: z.record(z.string(), z.unknown()).optional(),
+  expectedDecision: stewardExpectedDecisionSchema,
+  humanRequest: z.string().optional(),
+  session: z.object({
+    mode: z.literal('reuse_or_spawn').optional(),
+    agent: z.string().min(1).optional(),
+  }).optional(),
+}).passthrough();
+
+const stewardSupervisorTickBodySchema = z.object({
+  now: z.string().min(1).optional(),
+}).passthrough();
+
 function parseBlindAllowBarSources(raw: unknown): { ok: true; sources?: readonly string[] } | { ok: false; message: string } {
   if (raw === undefined) return { ok: true };
   if (!Array.isArray(raw)) return { ok: false, message: 'blindAllowBarSources must be an array of strings' };
@@ -168,6 +201,10 @@ interface SpawnedSessionBody {
 
 type SpawnSessionResult =
   | { readonly ok: true; readonly session: SpawnedSessionBody }
+  | { readonly ok: false; readonly status: number; readonly body: { error: string; message?: string } };
+
+type StewardSessionSelection =
+  | { readonly ok: true; readonly sessionId: string; readonly agent: string; readonly reused: boolean; readonly resumed: boolean }
   | { readonly ok: false; readonly status: number; readonly body: { error: string; message?: string } };
 
 export function createWorkspaceRoutes(
@@ -302,6 +339,178 @@ export function createWorkspaceRoutes(
       await svc.sessionRegistry.remove(id, recordId).catch(() => undefined);
       launcherLogger.error('workspace.session_spawn_failed', { id, err });
       return { ok: false, status: 500, body: { error: 'spawn_failed', message: (err as Error).message } };
+    }
+  }
+
+  async function readStewardConfig(meta: WorkspaceMeta): Promise<Record<string, unknown>> {
+    const raw = await readWorkspaceFile(meta.dir, '.alice/steward/config.json');
+    if (raw === null || raw.trim() === '') return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('.alice/steward/config.json must be an object');
+    }
+    return parsed as Record<string, unknown>;
+  }
+
+  function asRecord(value: unknown): Record<string, unknown> | undefined {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : undefined;
+  }
+
+  async function writeStewardSessionConfig(
+    meta: WorkspaceMeta,
+    current: Record<string, unknown>,
+    sessionId: string,
+    agent: string,
+  ): Promise<void> {
+    const next = {
+      ...current,
+      version: typeof current['version'] === 'number' ? current['version'] : 1,
+      agent,
+      sessionId,
+    };
+    await writeWorkspaceFile(meta.dir, '.alice/steward/config.json', `${JSON.stringify(next, null, 2)}\n`);
+  }
+
+  async function ensureStewardSession(
+    meta: WorkspaceMeta,
+    config: Record<string, unknown>,
+    requestedAgent: string | undefined,
+  ): Promise<StewardSessionSelection> {
+    const configuredSessionId = typeof config['sessionId'] === 'string' ? config['sessionId'] : null;
+    const configuredAgent = typeof config['agent'] === 'string' ? config['agent'] : undefined;
+    await svc.sessionRegistry.ensureLoaded(meta.id);
+    const configuredRecord = configuredSessionId
+      ? svc.sessionRegistry.get(meta.id, configuredSessionId)
+      : undefined;
+    const agent = requestedAgent ?? configuredRecord?.agent ?? configuredAgent ?? 'codex';
+    const canUseConfigured = configuredSessionId !== null &&
+      (requestedAgent === undefined || requestedAgent === configuredRecord?.agent || requestedAgent === configuredAgent);
+
+    if (configuredSessionId && canUseConfigured && svc.pool.get(configuredSessionId)) {
+      return { ok: true, sessionId: configuredSessionId, agent, reused: true, resumed: false };
+    }
+    if (configuredRecord && canUseConfigured) {
+      return resumeStewardSession(meta, configuredRecord);
+    }
+    if (!meta.agents.includes(agent)) {
+      return {
+        ok: false,
+        status: 400,
+        body: { error: 'agent_not_enabled', message: `workspace does not enable agent: ${agent}` },
+      };
+    }
+    const spawned = await spawnInteractiveSession(meta, { agentId: agent });
+    if (!spawned.ok) return spawned;
+    await writeStewardSessionConfig(meta, config, spawned.session.sessionId, spawned.session.agent);
+    return {
+      ok: true,
+      sessionId: spawned.session.sessionId,
+      agent: spawned.session.agent,
+      reused: false,
+      resumed: false,
+    };
+  }
+
+  async function resumeStewardSession(meta: WorkspaceMeta, record: SessionRecord): Promise<StewardSessionSelection> {
+    const adapter = svc.adapters.get(record.agent);
+    if (!adapter) {
+      return {
+        ok: false,
+        status: 500,
+        body: { error: 'unknown_agent', message: `record references unknown adapter: ${record.agent}` },
+      };
+    }
+    if (!meta.agents.includes(record.agent)) {
+      return {
+        ok: false,
+        status: 400,
+        body: { error: 'agent_not_enabled', message: `workspace does not enable agent: ${record.agent}` },
+      };
+    }
+    try {
+      await ensureAgentCredentialReady({
+        meta,
+        agentId: adapter.id,
+        adapter,
+        logger: launcherLogger,
+      });
+    } catch (err) {
+      if (err instanceof AgentCredentialError) {
+        return { ok: false, status: 400, body: err.toBody() };
+      }
+      launcherLogger.warn('agent_cred.ensure_failed_on_steward_resume', {
+        id: meta.id,
+        agent: adapter.id,
+        err,
+      });
+      return { ok: false, status: 500, body: { error: 'agent_credential_failed', message: (err as Error).message } };
+    }
+    try {
+      if (adapter.bootstrap) {
+        await adapter.bootstrap({
+          wsId: meta.id,
+          cwd: meta.dir,
+          launcherRepoRoot: svc.config.launcherRepoRoot,
+        });
+      }
+    } catch (err) {
+      launcherLogger.error('adapter.bootstrap_failed_on_steward_resume', {
+        id: meta.id,
+        agent: adapter.id,
+        err,
+      });
+      return { ok: false, status: 500, body: { error: 'bootstrap_failed', message: (err as Error).message } };
+    }
+    const resume = resumeFromRecord(record, adapter);
+    try {
+      const session = svc.pool.spawn(meta.id, {
+        ...(resume !== undefined ? { resume } : {}),
+        agentId: record.agent,
+        recordId: record.id,
+        recordName: record.name,
+      });
+      const earlyExit = await session.waitForFirstExit(800);
+      if (earlyExit) {
+        svc.pool.disposeToken(record.id, 'steward_resume_early_exit');
+        await svc.sessionRegistry
+          .update(meta.id, record.id, { state: 'paused', lastActiveAt: new Date().toISOString() })
+          .catch(() => undefined);
+        return {
+          ok: false,
+          status: 500,
+          body: {
+            error: 'spawn_died',
+            message: `agent exited within startup window (code=${earlyExit.code})`,
+          },
+        };
+      }
+      await svc.sessionRegistry
+        .update(meta.id, record.id, { state: 'running', lastActiveAt: new Date().toISOString() })
+        .catch((err) =>
+          launcherLogger.warn('session_registry.steward_resume_update_failed', {
+            id: meta.id,
+            sessionId: record.id,
+            err,
+          }),
+        );
+      launcherLogger.info('workspace.steward_session_resumed', {
+        id: meta.id,
+        sessionId: record.id,
+        name: session.name,
+        pid: session.pid,
+        agent: adapter.id,
+        resume: resume === undefined ? null : resume === 'last' ? 'last' : resume.sessionId,
+      });
+      return { ok: true, sessionId: session.recordId, agent: adapter.id, reused: true, resumed: true };
+    } catch (err) {
+      launcherLogger.error('workspace.steward_session_resume_failed', {
+        id: meta.id,
+        sessionId: record.id,
+        err,
+      });
+      return { ok: false, status: 500, body: { error: 'resume_failed', message: (err as Error).message } };
     }
   }
 
@@ -558,6 +767,199 @@ export function createWorkspaceRoutes(
     }
     launcherLogger.info('workspace.authz_level_saved', { id, from: changed.from, to: changed.to });
     return c.json({ workspace: await svc.publicMeta(changed.workspace) });
+  });
+
+  app.post('/:id/steward/wakes', async (c) => {
+    const id = c.req.param('id');
+    if (!validId(id)) return c.json({ error: 'not_found' }, 404);
+    const meta = svc.registry.get(id);
+    if (!meta) return c.json({ error: 'workspace_not_found' }, 404);
+
+    let body: z.infer<typeof stewardWakeBodySchema>;
+    try {
+      body = stewardWakeBodySchema.parse(await safeJson(c));
+    } catch (err) {
+      return c.json({
+        error: 'bad_request',
+        message: err instanceof z.ZodError
+          ? err.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')
+          : String(err),
+      }, 400);
+    }
+
+    let config: Record<string, unknown>;
+    try {
+      config = await readStewardConfig(meta);
+    } catch (err) {
+      return c.json({ error: 'invalid_steward_config', message: (err as Error).message }, 500);
+    }
+
+    const now = new Date();
+    const wakeId = body.wakeId ?? `${now.toISOString()}:${body.reason}:${randomUUID()}`;
+    const deadline = body.deadline ?? new Date(now.getTime() + (body.deadlineMs ?? 180_000)).toISOString();
+    const wakeStore = createStewardWakeStore(meta.dir);
+    const ledgerStore = createStewardLedgerStore(meta.dir);
+    const lockStore = createStewardLockStore(meta.dir);
+    const envelope = {
+      reason: body.reason,
+      accountId: body.accountId,
+      authzLevel: body.authzLevel,
+      expectedDecision: body.expectedDecision,
+      ...(body.marketContext !== undefined ? { marketContext: body.marketContext } : {}),
+      ...(body.riskContext !== undefined ? { riskContext: body.riskContext } : {}),
+      ...(body.humanRequest !== undefined ? { humanRequest: body.humanRequest } : {}),
+    };
+
+    if (await wakeStore.get(wakeId)) {
+      return c.json({ error: 'wake_exists', message: `steward wake already exists: ${wakeId}` }, 409);
+    }
+    let lockAcquired = false;
+    try {
+      await lockStore.acquire({
+        accountId: body.accountId,
+        wakeId,
+        now: now.toISOString(),
+        expiresAt: deadline,
+      });
+      lockAcquired = true;
+    } catch (err) {
+      if (err instanceof StewardLockConflictError) {
+        return c.json({
+          error: 'account_locked',
+          message: err.message,
+          lock: err.lock,
+        }, 409);
+      }
+      return c.json({ error: 'lock_failed', message: (err as Error).message }, 500);
+    }
+
+    let record: StewardWakeRecord;
+    try {
+      record = await wakeStore.create({
+        wakeId,
+        deadline,
+        envelope,
+        now: now.toISOString(),
+      });
+    } catch (err) {
+      const message = (err as Error).message;
+      if (lockAcquired) await lockStore.release(body.accountId, wakeId).catch(() => undefined);
+      return c.json({
+        error: message.includes('already exists') ? 'wake_exists' : 'wake_create_failed',
+        message,
+      }, message.includes('already exists') ? 409 : 500);
+    }
+
+    const selected = await ensureStewardSession(meta, config, body.session?.agent);
+    if (!selected.ok) {
+      await wakeStore.updateStatus(wakeId, 'error', {
+        now: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        error: selected.body.message ?? selected.body.error,
+      }).catch(() => undefined);
+      if (lockAcquired) await lockStore.release(body.accountId, wakeId).catch(() => undefined);
+      return c.json(selected.body, selected.status as 400 | 500);
+    }
+
+    const injected = injectStewardWake({
+      pool: svc.pool,
+      sessionId: selected.sessionId,
+      record,
+    });
+    if (!injected) {
+      const failed = await wakeStore.updateStatus(wakeId, 'error', {
+        now: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        sessionId: selected.sessionId,
+        error: `session not running: ${selected.sessionId}`,
+      });
+      if (lockAcquired) await lockStore.release(body.accountId, wakeId).catch(() => undefined);
+      return c.json({ error: 'inject_failed', wake: failed }, 500);
+    }
+
+    const injectedAt = new Date().toISOString();
+    const updated = await wakeStore.updateStatus(wakeId, 'injected', {
+      now: injectedAt,
+      injectedAt,
+      sessionId: selected.sessionId,
+    });
+    const ledgerEntry = await ledgerStore.findByWakeId(wakeId).catch(() => null);
+    return c.json({
+      wake: updated,
+      ledgerEntry,
+      session: {
+        sessionId: selected.sessionId,
+        agent: selected.agent,
+        reused: selected.reused,
+        resumed: selected.resumed,
+      },
+    }, 202);
+  });
+
+  app.post('/:id/steward/supervisor/tick', async (c) => {
+    const id = c.req.param('id');
+    if (!validId(id)) return c.json({ error: 'not_found' }, 404);
+    const meta = svc.registry.get(id);
+    if (!meta) return c.json({ error: 'workspace_not_found' }, 404);
+
+    let body: z.infer<typeof stewardSupervisorTickBodySchema>;
+    try {
+      body = stewardSupervisorTickBodySchema.parse(await safeJson(c));
+    } catch (err) {
+      return c.json({
+        error: 'bad_request',
+        message: err instanceof z.ZodError
+          ? err.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')
+          : String(err),
+      }, 400);
+    }
+
+    let config: Record<string, unknown>;
+    try {
+      config = await readStewardConfig(meta);
+    } catch (err) {
+      return c.json({ error: 'invalid_steward_config', message: (err as Error).message }, 500);
+    }
+
+    const supervisor = createStewardSupervisor(meta.dir);
+    const result = await supervisor.tick({
+      ...(body.now !== undefined ? { now: body.now } : {}),
+      isSessionRunning: (sessionId) => svc.pool.get(sessionId) !== undefined,
+      config: {
+        monthlyBudget: asRecord(config['monthlyBudget']),
+        costPolicy: asRecord(config['costPolicy']),
+      },
+    });
+    return c.json(result);
+  });
+
+  app.get('/:id/steward/wakes/:wakeId', async (c) => {
+    const id = c.req.param('id');
+    if (!validId(id)) return c.json({ error: 'not_found' }, 404);
+    const meta = svc.registry.get(id);
+    if (!meta) return c.json({ error: 'workspace_not_found' }, 404);
+    const wakeId = decodeURIComponent(c.req.param('wakeId'));
+    const wakeStore = createStewardWakeStore(meta.dir);
+    const ledgerStore = createStewardLedgerStore(meta.dir);
+    const wake = await wakeStore.get(wakeId);
+    if (!wake) return c.json({ error: 'wake_not_found' }, 404);
+    const ledgerEntry = await ledgerStore.findByWakeId(wakeId).catch(() => null);
+    return c.json({ wake, ledgerEntry });
+  });
+
+  app.get('/:id/steward/ledger', async (c) => {
+    const id = c.req.param('id');
+    if (!validId(id)) return c.json({ error: 'not_found' }, 404);
+    const meta = svc.registry.get(id);
+    if (!meta) return c.json({ error: 'workspace_not_found' }, 404);
+    const rawLimit = c.req.query('limit');
+    const limit = rawLimit === undefined ? 100 : Number.parseInt(rawLimit, 10);
+    if (!Number.isFinite(limit) || limit <= 0) {
+      return c.json({ error: 'bad_request', message: 'limit must be a positive integer' }, 400);
+    }
+    const ledgerStore = createStewardLedgerStore(meta.dir);
+    const entries = await ledgerStore.read({ limit });
+    return c.json({ entries });
   });
 
   // ── single workspace (DELETE + git/files sub-resources) ──────────────────

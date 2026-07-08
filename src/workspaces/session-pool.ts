@@ -7,6 +7,7 @@ import {
   type SessionAttachResult,
   type SessionControllerClaim,
   type PersistentSessionOptions,
+  type SessionWriteInputOptions,
 } from './persistent-session.js';
 import type { TranscriptWatcher } from './transcript-watcher.js';
 import type { TerminalThemeVariant } from './terminal-theme.js';
@@ -156,7 +157,7 @@ export class SessionPool {
   sendInput(recordId: string, input: string | Buffer): SessionInputResult | undefined {
     const session = this.sessions.get(recordId);
     if (!session) return undefined;
-    session.writeInput(input);
+    session.writeInput(input, { source: 'operator' });
     return {
       id: recordId,
       wsId: session.wsId,
@@ -164,6 +165,17 @@ export class SessionPool {
       lastOutputAt: session.lastOutputAt,
       lastActivityAt: session.lastActivityAt,
     };
+  }
+
+  writeToSession(
+    recordId: string,
+    input: string | Buffer,
+    opts: SessionWriteInputOptions,
+  ): boolean {
+    const session = this.sessions.get(recordId);
+    if (!session) return false;
+    session.writeInput(input, opts);
+    return true;
   }
 
   /** All live sessions belonging to a workspace, oldest-spawned first. */

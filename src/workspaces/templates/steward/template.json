@@ -1,0 +1,8 @@
+{
+  "displayName": "Steward",
+  "groupOrder": 15,
+  "description": "Persistent trading steward workspace - a narrow, structured trading-agent environment for wake envelopes, UTA checklist decisions, and auditable decision ledgers.",
+  "defaultAgents": ["codex"],
+  "injectTools": true,
+  "injectPersona": true
+}
