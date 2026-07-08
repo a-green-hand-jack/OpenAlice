@@ -1,5 +1,8 @@
 # Steward Workspace 行为契约
 
+> 版本：v0.3（2026-07-08）——吸收 maintainer 第二轮批注：明确现阶段先做单体
+> persistent steward 的最小闭环，不展开复杂编排；把每次完成的原因/证据纳入
+> ledger；把 token、服务器和交易成本作为一开始就要记录的成本边界。
 > 版本：v0.2（2026-07-08）——吸收 maintainer 批注：补术语约定、版本化输入、
 > decision point 定义、per-wake / whole-run 完成边界、外部监督设备与
 > trading-agent input/output 轨迹管理。
@@ -37,6 +40,17 @@
 6. **steward**：本文中的目标 trading-agent 角色。它像一个长期值守的交易台成员：
    持续存在、被事件唤醒、按固定检查表行动、记录每次输入/输出/决策，而不是像
    code-agent 一样把每次 wake 当作新的源码任务。
+
+### 0.1 现阶段范围
+
+trading-agent 未来可以是很复杂的系统：hook、skill、custom sub-agent、loop、workflow、
+tools、multi-agent 编排等。这些设计空间登记在
+[steward-agent-working-modes.zh.md](steward-agent-working-modes.zh.md)。
+
+但本文当前只收敛**单体 persistent steward 的最小可行闭环**：一个 core-agent，被
+trading-agent wrapper 包装，在一个 workspace session 里持续工作，被 wake envelope
+唤醒，跑固定 UTA checklist，写 decision ledger，并由外部 supervisor 监控。先把这个
+基本形态做对，再讨论更复杂的编排。
 
 ## 1. 一句话
 
@@ -153,6 +167,10 @@ persistent steward 不是没有 system prompt / skills。相反，它的 context
 因此 `decision ledger marker` 不是整个 steward 生命周期的结束，只是一次 wake 的
 可观测完成信号。
 
+每次写出完成 marker 时，trading-agent 也必须说明**为什么它认为本次 wake 已完成**：
+是因为已完成 checklist 后判定 `no_trade`，还是已经生成 staged proposal，还是遇到
+明确阻塞/错误。这个完成理由和证据必须进入 decision ledger，而不是只留在屏幕文本里。
+
 ### 3.4 外部监督设备
 
 persistent steward 需要一个在 core-agent 外部的 supervisor / watchdog。它不替 agent
@@ -163,6 +181,20 @@ persistent steward 需要一个在 core-agent 外部的 supervisor / watchdog。
 - 在假死、超时或无 ledger marker 时标记 `stuck` / `timeout`，并按策略唤醒、重试、
   暂停或推 Inbox 给 jieke。
 - 维护 per-workspace / per-account lock，避免两个 wake 同时管理同一账户风险。
+
+### 3.5 成本边界
+
+成本不是事后优化项，必须从第一天进入记录与评估。否则交易收益可能被 agent
+推理成本、基础设施成本或交易摩擦吞掉。
+
+初始预算假设：
+
+- Codex / core-agent 交易推理 token 成本：约 `200 USD / month`。
+- 服务器 / sandbox / 托管资源租赁成本：约 `50 USD / month`。
+- 交易成本：从一开始记录手续费、佣金、交易所费用、滑点和借贷/融资等可得摩擦。
+
+supervisor 和 ledger 都要保留成本字段。拿不到精确值时可以填 `null` 或估算字段，但
+schema 不能缺失；后续收益实验必须能同时回答 PnL 和 net-after-cost PnL。
 
 ## 4. Wake envelope
 
@@ -227,9 +259,9 @@ runId / wakeId
 | 版本 | core-agent/model、trading-agent prompt、workspace instruction/skills、wake schema、ledger schema |
 | 输入 | wake envelope、market/account/risk snapshot refs、历史 ledger refs、human/user request |
 | 过程 | UTA checklist 结果、关键工具调用 refs、错误/重试/超时 |
-| 输出 | `no_trade` / `propose_trade` / `blocked`、thesis、invalidation、actions、pendingHash |
+| 输出 | `no_trade` / `propose_trade` / `blocked`、thesis、invalidation、actions、pendingHash、completion reason |
 | 结果 | push/filled/rejected/risk transition/outcome refs；若无交易，也记录 `no_trade` 的理由 |
-| 成本 | latency、model/token/cost；拿不到 token 时也要留空字段，不能丢 schema |
+| 成本 | latency、model/token/cost、server cost、trading fees/commission/slippage；拿不到精确值时也要留空字段，不能丢 schema |
 
 这些轨迹属于 supervisor 和 ledger 的共同职责：ledger 给出交易决策真相，supervisor
 给出运行与成本真相。
@@ -246,6 +278,10 @@ decision ledger。最小字段：
   "accountId": "...",
   "decision": "no_trade | propose_trade | blocked",
   "status": "done | blocked | error",
+  "completion": {
+    "reason": "why the agent believes this wake is complete",
+    "evidenceRefs": ["checklist:risk", "tool:quote", "ledger:previous"]
+  },
   "checklist": {
     "account": "ok",
     "positions": "ok",
@@ -261,13 +297,22 @@ decision ledger。最小字段：
   "cost": {
     "model": "if available",
     "inputTokens": null,
-    "outputTokens": null
+    "outputTokens": null,
+    "modelCostUsd": null,
+    "allocatedServerCostUsd": null,
+    "tradingFeesUsd": null,
+    "estimatedSlippageUsd": null,
+    "totalEstimatedCostUsd": null
   }
 }
 ```
 
 `no_trade` 是正式决策，不是空结果。没有 thesis、entry signal、invalidation、risk budget
 时，正确输出就是 `no_trade` 并写明原因。
+
+`completion.reason` 是本轮完成判定的最短解释；`completion.evidenceRefs` 指向它依据的
+checklist 项、工具结果、ledger 记录或 staged commit。supervisor 可以用它判断 agent
+是不是只写了 marker，还是确实完成了本次 wake 的闭环。
 
 如果超时没有 ledger marker，外部 supervisor 应把 wake 标成 `stuck` 或 `timeout`，而不是
 从 Codex/Cli 屏幕文本里猜结论。
