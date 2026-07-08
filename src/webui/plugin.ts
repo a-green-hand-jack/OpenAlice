@@ -280,7 +280,10 @@ export class WebPlugin implements Plugin {
     })
     this.workspacesIpc = attachWorkspacesIpc(this.workspaceService)
     if (this.workspaceServiceRef) this.workspaceServiceRef.current = this.workspaceService
-    app.route('/api/workspaces', createWorkspaceRoutes(this.workspaceService, { authzProducer: this.authzProducer }))
+    app.route('/api/workspaces', createWorkspaceRoutes(this.workspaceService, {
+      authzProducer: this.authzProducer,
+      inboxStore: ctx.inboxStore,
+    }))
     app.route('/api/headless', createHeadlessRoutes(this.workspaceService))
     app.route('/api/schedule', createScheduleRoutes(this.workspaceService))
     app.route('/api/issues', createIssuesRoutes(this.workspaceService))

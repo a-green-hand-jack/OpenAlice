@@ -13,6 +13,7 @@ import { join, resolve as resolvePath } from 'node:path';
 import { z } from 'zod';
 import { AUTHZ_LEVELS } from '@traderalice/uta-protocol';
 import type { ProducerHandle } from '../../core/producer.js';
+import type { IInboxStore } from '../../core/inbox-store.js';
 
 import { probeByWireShape } from '../../workspaces/agent-probe.js';
 import type { WireShape } from '../../ai-providers/preset-catalog.js';
@@ -181,7 +182,13 @@ type StewardSessionSelection =
 
 export function createWorkspaceRoutes(
   svc: WorkspaceService,
-  opts?: { authzProducer?: ProducerHandle<readonly ['authz.level-changed']> },
+  opts?: {
+    authzProducer?: ProducerHandle<readonly ['authz.level-changed']>;
+    /** Push surface for proactive notifications (e.g. a steward wake going
+     *  `stuck`). Optional so callers that don't need push (tests, satellite
+     *  embedders) can omit it — the route simply skips the push. */
+    inboxStore?: IInboxStore;
+  },
 ): Hono {
   const app = new Hono();
 
@@ -902,6 +909,34 @@ export function createWorkspaceRoutes(
         costPolicy: asRecord(config['costPolicy']),
       },
     });
+
+    // Proactive push: a wake going `stuck` (session not running / repeated
+    // respawn) is exactly the kind of event a human should be notified about
+    // rather than having to poll GET /:id/steward/wakes/:wakeId or read the
+    // supervisor log file. Every other transition (done/blocked/error/
+    // timeout) stays log-only — narrower scope per the plan (docs/
+    // steward-persistent-loop-implementation.zh.md §7).
+    const stuckTransitions = result.transitions.filter((t) => t.to === 'stuck');
+    if (stuckTransitions.length > 0 && opts?.inboxStore) {
+      const wakeStore = createStewardWakeStore(meta.dir);
+      for (const t of stuckTransitions) {
+        const wake = await wakeStore.get(t.wakeId).catch(() => null);
+        const detail = wake?.error ?? t.reason;
+        try {
+          await opts.inboxStore.append({
+            workspaceId: id,
+            comments: `Steward wake \`${t.wakeId}\` is stuck: ${detail}.`,
+          });
+        } catch (err) {
+          launcherLogger.error('steward supervisor: inbox push for stuck wake failed', {
+            workspaceId: id,
+            wakeId: t.wakeId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
     return c.json(result);
   });
 
