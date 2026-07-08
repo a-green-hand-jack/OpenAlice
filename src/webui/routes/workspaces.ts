@@ -45,8 +45,11 @@ import { approverFromAliceRequest } from './approver-identity.js';
 import { isTerminalThemeVariant, type TerminalThemeVariant } from '../../workspaces/terminal-theme.js';
 import {
   createStewardLedgerStore,
+  createStewardLockStore,
+  createStewardSupervisor,
   createStewardWakeStore,
   injectStewardWake,
+  StewardLockConflictError,
   stewardExpectedDecisionSchema,
   stewardWakeReasonSchema,
   type StewardWakeRecord,
@@ -137,6 +140,10 @@ const stewardWakeBodySchema = z.object({
     mode: z.literal('reuse_or_spawn').optional(),
     agent: z.string().min(1).optional(),
   }).optional(),
+}).passthrough();
+
+const stewardSupervisorTickBodySchema = z.object({
+  now: z.string().min(1).optional(),
 }).passthrough();
 
 function parseBlindAllowBarSources(raw: unknown): { ok: true; sources?: readonly string[] } | { ok: false; message: string } {
@@ -315,6 +322,12 @@ export function createWorkspaceRoutes(
       throw new Error('.alice/steward/config.json must be an object');
     }
     return parsed as Record<string, unknown>;
+  }
+
+  function asRecord(value: unknown): Record<string, unknown> | undefined {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : undefined;
   }
 
   async function writeStewardSessionConfig(
@@ -758,6 +771,7 @@ export function createWorkspaceRoutes(
     const deadline = body.deadline ?? new Date(now.getTime() + (body.deadlineMs ?? 180_000)).toISOString();
     const wakeStore = createStewardWakeStore(meta.dir);
     const ledgerStore = createStewardLedgerStore(meta.dir);
+    const lockStore = createStewardLockStore(meta.dir);
     const envelope = {
       reason: body.reason,
       accountId: body.accountId,
@@ -767,6 +781,29 @@ export function createWorkspaceRoutes(
       ...(body.riskContext !== undefined ? { riskContext: body.riskContext } : {}),
       ...(body.humanRequest !== undefined ? { humanRequest: body.humanRequest } : {}),
     };
+
+    if (await wakeStore.get(wakeId)) {
+      return c.json({ error: 'wake_exists', message: `steward wake already exists: ${wakeId}` }, 409);
+    }
+    let lockAcquired = false;
+    try {
+      await lockStore.acquire({
+        accountId: body.accountId,
+        wakeId,
+        now: now.toISOString(),
+        expiresAt: deadline,
+      });
+      lockAcquired = true;
+    } catch (err) {
+      if (err instanceof StewardLockConflictError) {
+        return c.json({
+          error: 'account_locked',
+          message: err.message,
+          lock: err.lock,
+        }, 409);
+      }
+      return c.json({ error: 'lock_failed', message: (err as Error).message }, 500);
+    }
 
     let record: StewardWakeRecord;
     try {
@@ -778,6 +815,7 @@ export function createWorkspaceRoutes(
       });
     } catch (err) {
       const message = (err as Error).message;
+      if (lockAcquired) await lockStore.release(body.accountId, wakeId).catch(() => undefined);
       return c.json({
         error: message.includes('already exists') ? 'wake_exists' : 'wake_create_failed',
         message,
@@ -791,6 +829,7 @@ export function createWorkspaceRoutes(
         completedAt: new Date().toISOString(),
         error: selected.body.message ?? selected.body.error,
       }).catch(() => undefined);
+      if (lockAcquired) await lockStore.release(body.accountId, wakeId).catch(() => undefined);
       return c.json(selected.body, selected.status as 400 | 500);
     }
 
@@ -806,6 +845,7 @@ export function createWorkspaceRoutes(
         sessionId: selected.sessionId,
         error: `session not running: ${selected.sessionId}`,
       });
+      if (lockAcquired) await lockStore.release(body.accountId, wakeId).catch(() => undefined);
       return c.json({ error: 'inject_failed', wake: failed }, 500);
     }
 
@@ -826,6 +866,43 @@ export function createWorkspaceRoutes(
         resumed: selected.resumed,
       },
     }, 202);
+  });
+
+  app.post('/:id/steward/supervisor/tick', async (c) => {
+    const id = c.req.param('id');
+    if (!validId(id)) return c.json({ error: 'not_found' }, 404);
+    const meta = svc.registry.get(id);
+    if (!meta) return c.json({ error: 'workspace_not_found' }, 404);
+
+    let body: z.infer<typeof stewardSupervisorTickBodySchema>;
+    try {
+      body = stewardSupervisorTickBodySchema.parse(await safeJson(c));
+    } catch (err) {
+      return c.json({
+        error: 'bad_request',
+        message: err instanceof z.ZodError
+          ? err.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')
+          : String(err),
+      }, 400);
+    }
+
+    let config: Record<string, unknown>;
+    try {
+      config = await readStewardConfig(meta);
+    } catch (err) {
+      return c.json({ error: 'invalid_steward_config', message: (err as Error).message }, 500);
+    }
+
+    const supervisor = createStewardSupervisor(meta.dir);
+    const result = await supervisor.tick({
+      ...(body.now !== undefined ? { now: body.now } : {}),
+      isSessionRunning: (sessionId) => svc.pool.get(sessionId) !== undefined,
+      config: {
+        monthlyBudget: asRecord(config['monthlyBudget']),
+        costPolicy: asRecord(config['costPolicy']),
+      },
+    });
+    return c.json(result);
   });
 
   app.get('/:id/steward/wakes/:wakeId', async (c) => {

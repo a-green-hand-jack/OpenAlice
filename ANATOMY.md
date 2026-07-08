@@ -31,9 +31,11 @@ state, or ownership.
   steward wake injection; see `src/workspaces/persistent-session.ts` and
   `src/workspaces/session-pool.ts`. The first manual persistent-steward wake
   path is `POST /api/workspaces/:id/steward/wakes`, implemented in
-  `src/webui/routes/workspaces.ts:731-858`, which writes the workspace-local wake
-  file and injects a narrow `<STEWARD_WAKE>` into the configured interactive
-  session instead of dispatching a new headless run.
+  `src/webui/routes/workspaces.ts:744-935`, which acquires the account lock,
+  writes the workspace-local wake file, and injects a narrow `<STEWARD_WAKE>`
+  into the configured interactive session instead of dispatching a new headless
+  run. `POST /api/workspaces/:id/steward/supervisor/tick` advances ledger
+  completions, timeouts, stuck sessions, lock release, and cost state.
 
 - UTA is the co-located broker carrier under `services/uta/`. Its process entry
   is `services/uta/src/main.ts:40`, its account manager starts at
@@ -89,7 +91,9 @@ state, or ownership.
   `.alice/steward/` context/ledger scaffold inside the workspace repo; Alice's
   steward file-store helpers under `src/workspaces/steward/` read/write that
   workspace-local source of truth, and the manual wake API writes
-  `.alice/steward/wakes/*.json` plus reads `.alice/steward/ledger/decisions.jsonl`.
+  `.alice/steward/wakes/*.json`, `.alice/steward/locks/*.json`,
+  `.alice/steward/state.json`, and `.alice/steward/supervisor.jsonl` while
+  reading `.alice/steward/ledger/decisions.jsonl`.
   The default root is `src/workspaces/config.ts:107-109`.
 
 - Secrets are not stored in plaintext data files after sealing. The machine key
