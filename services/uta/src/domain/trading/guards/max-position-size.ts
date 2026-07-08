@@ -7,9 +7,19 @@ const DEFAULT_MAX_PERCENT = 25
 export class MaxPositionSizeGuard implements OperationGuard {
   readonly name = 'max-position-size'
   private maxPercent: number
+  // Single-order cap (docs/steward-p3-campaign.zh.md §4.7 hard guards): a
+  // separate, optional ceiling on how much equity ONE order may add, checked
+  // independently of the aggregate post-fill position cap below — a single
+  // outsized paper order can breach this even while the resulting position
+  // stays under maxPercentOfEquity (e.g. a large order into a previously
+  // small/empty position).
+  private maxOrderPercent?: number
 
   constructor(options: Record<string, unknown>) {
     this.maxPercent = Number(options.maxPercentOfEquity ?? DEFAULT_MAX_PERCENT)
+    this.maxOrderPercent = options.maxOrderPercentOfEquity == null
+      ? undefined
+      : Number(options.maxOrderPercentOfEquity)
   }
 
   check(ctx: GuardContext): string | null {
@@ -43,9 +53,20 @@ export class MaxPositionSizeGuard implements OperationGuard {
     const projectedValue = currentValue.plus(addedValue)
     const netLiq = new Decimal(account.netLiquidation)
     const percent = netLiq.gt(0) ? projectedValue.div(netLiq).mul(100) : new Decimal(0)
+    const orderPercent = netLiq.gt(0) ? addedValue.div(netLiq).mul(100) : new Decimal(0)
     const metrics = {
       positionValuePct: percent.toNumber(),
       threshold: this.maxPercent,
+      ...(this.maxOrderPercent == null
+        ? {}
+        : { orderValuePct: orderPercent.toNumber(), orderThreshold: this.maxOrderPercent }),
+    }
+
+    if (this.maxOrderPercent != null && orderPercent.gt(this.maxOrderPercent)) {
+      return {
+        reason: `Order for ${symbol} would add ${orderPercent.toFixed(1)}% of equity in a single order (limit: ${this.maxOrderPercent}%)`,
+        metrics,
+      }
     }
 
     if (percent.gt(this.maxPercent)) {
