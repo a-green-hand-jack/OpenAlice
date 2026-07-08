@@ -46,7 +46,10 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   `src/workspaces/service.ts:650-913`.
   Open `src/workspaces/service.ts:94-104`, `src/workspaces/session-pool.ts:72-84`,
   `src/workspaces/template-registry.ts:106-111`, and
-  `src/workspaces/adapters/claude.ts:41-65`.
+  `src/workspaces/adapters/claude.ts:89-113` (shifted from `:41-65` by the
+  issue #92 permission-preseed block inserted above it — see
+  `src/workspaces/adapters/claude.ts:12-60` for the pre-approved-Bash-tools
+  rationale that now occupies the file's opening lines).
 - `services/` - Alice-owned cross-cutting clients: auth, UTA SDK wrappers, and
   UTA restart/health helpers. Anchors: `src/services/uta-client/UTAManagerSDK.ts:36-40`,
   `src/services/uta-supervisor/health.ts:22-36`,
