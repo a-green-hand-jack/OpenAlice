@@ -19,6 +19,7 @@ import {
 } from '../../core/workspace-tool-center.js';
 import type { ProducerHandle } from '../../core/producer.js';
 import { createStewardLedgerStore, DECISION_LEDGER_SCHEMA_VERSION } from '../../workspaces/steward/index.js';
+import { createMemoryInboxStore, type IInboxStore } from '../../core/inbox-store.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -139,7 +140,7 @@ async function patch(app: any, path: string, body?: unknown, headers?: Record<st
   return { status: res.status, body: json as any };
 }
 
-function buildSteward(opts: { dir: string }) {
+function buildSteward(opts: { dir: string; inboxStore?: IInboxStore }) {
   const meta = {
     id: 'ws-1',
     tag: 'steward-test',
@@ -213,7 +214,13 @@ function buildSteward(opts: { dir: string }) {
     config: { launcherRepoRoot: '/repo' },
     publicMeta: vi.fn(async (m: any) => m),
   } as unknown as WorkspaceService;
-  return { app: createWorkspaceRoutes(svc), pool, sessionRegistry, writtenInputs, live };
+  return {
+    app: createWorkspaceRoutes(svc, { inboxStore: opts.inboxStore }),
+    pool,
+    sessionRegistry,
+    writtenInputs,
+    live,
+  };
 }
 
 describe('PATCH /:id/metadata', () => {
@@ -601,6 +608,94 @@ describe('steward wake API', () => {
         expectedDecision: 'blocked',
       });
       expect(second.status).toBe(202);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('pushes exactly one Inbox entry for a wake that goes stuck, and none for a wake that completes via the ledger', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
+    try {
+      const inboxStore = createMemoryInboxStore();
+      const appendSpy = vi.spyOn(inboxStore, 'append');
+      const { app, live } = buildSteward({ dir, inboxStore });
+
+      // Wake #1 completes normally (ledger entry present) — not stuck, must
+      // not push to Inbox.
+      const done = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-done',
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+      expect(done.status).toBe(202);
+      const ledger = createStewardLedgerStore(dir);
+      await ledger.append({
+        version: DECISION_LEDGER_SCHEMA_VERSION,
+        wakeId: 'wake-done',
+        at: '2026-07-08T14:01:23.000Z',
+        accountId: 'mock-simulator-1',
+        decision: 'no_trade',
+        status: 'done',
+        completion: { reason: 'no signal', evidenceRefs: ['wake:wake-done'] },
+        checklist: {
+          account: 'ok',
+          positions: 'ok',
+          orders: 'ok',
+          risk: 'NORMAL',
+          market: 'open',
+          history: 'checked',
+        },
+        thesis: 'No entry signal.',
+        actions: [],
+        pendingHash: null,
+        invalidation: 'new signal',
+        cost: {
+          model: 'codex',
+          inputTokens: null,
+          outputTokens: null,
+          modelCostUsd: null,
+          allocatedServerCostUsd: null,
+          tradingFeesUsd: null,
+          estimatedSlippageUsd: null,
+          totalEstimatedCostUsd: null,
+        },
+      });
+
+      // Wake #2 gets injected into a session that then "disappears" (removed
+      // from the live pool) — the liveness check should mark it stuck.
+      const stuck = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-stuck',
+        reason: 'market_event',
+        accountId: 'mock-simulator-2',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+      expect(stuck.status).toBe(202);
+      const stuckSessionId = stuck.body.session.sessionId as string;
+      live.delete(stuckSessionId);
+
+      const tick = await post(app, '/ws-1/steward/supervisor/tick', {
+        now: '2026-07-08T14:01:30.000Z',
+      });
+      expect(tick.status).toBe(200);
+      const byWakeId = Object.fromEntries(
+        tick.body.transitions.map((t: { wakeId: string }) => [t.wakeId, t]),
+      );
+      expect(byWakeId['wake-done']).toMatchObject({ to: 'done', reason: 'ledger:done' });
+      expect(byWakeId['wake-stuck']).toMatchObject({ to: 'stuck', reason: 'session_not_running' });
+
+      // Exactly one Inbox push — for the stuck wake only.
+      expect(appendSpy).toHaveBeenCalledTimes(1);
+      const [pushed] = appendSpy.mock.calls[0]!;
+      expect(pushed.workspaceId).toBe('ws-1');
+      expect(pushed.comments).toContain('wake-stuck');
+      expect(pushed.comments).toContain(stuckSessionId);
+      expect(pushed.comments).not.toContain('wake-done');
+
+      const history = await inboxStore.read({ workspaceId: 'ws-1' });
+      expect(history.entries).toHaveLength(1);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
