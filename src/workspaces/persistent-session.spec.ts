@@ -17,7 +17,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as pty from 'node-pty';
 
 import { PersistentSession, type PersistentSessionOptions } from './persistent-session.js';
+import type { CliAdapter } from './cli-adapter.js';
 import type { Logger } from './logger.js';
+import { SessionPool } from './session-pool.js';
 
 vi.mock('node-pty', () => ({ spawn: vi.fn() }));
 
@@ -66,6 +68,20 @@ const silentLogger: Logger = {
   event: () => {},
   child: () => silentLogger,
 };
+
+function makeSpyLogger(): { logger: Logger; info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> } {
+  const info = vi.fn();
+  const warn = vi.fn();
+  const logger: Logger = {
+    debug: () => {},
+    info,
+    warn,
+    error: () => {},
+    event: () => {},
+    child: () => logger,
+  };
+  return { logger, info, warn };
+}
 
 function makeOptions(over: Partial<PersistentSessionOptions> = {}): PersistentSessionOptions {
   return {
@@ -168,6 +184,29 @@ describe('PersistentSession backpressure / socket-drop deadlock', () => {
 
     session.dispose('test');
   });
+
+  it('writes server-side input to the PTY through the public seam', () => {
+    const { logger, info } = makeSpyLogger();
+    const session = new PersistentSession(makeOptions({ logger }));
+
+    session.writeInput('wake-message\n', { source: 'steward-supervisor' });
+    const input = Buffer.from('operator bytes\n', 'utf8');
+    session.writeInput(input, { source: 'operator' });
+
+    expect(term.write).toHaveBeenCalledTimes(2);
+    expect(term.write).toHaveBeenNthCalledWith(1, 'wake-message\n');
+    expect(term.write).toHaveBeenNthCalledWith(2, input);
+    expect(info).toHaveBeenCalledWith('session.write_input', {
+      source: 'steward-supervisor',
+      bytes: Buffer.byteLength('wake-message\n', 'utf8'),
+    });
+    expect(info).toHaveBeenCalledWith('session.write_input', {
+      source: 'operator',
+      bytes: input.length,
+    });
+
+    session.dispose('test');
+  });
 });
 
 describe('PersistentSession controller lease', () => {
@@ -230,5 +269,45 @@ describe('PersistentSession controller lease', () => {
     expect(ws2.close).not.toHaveBeenCalled();
 
     session.dispose('test');
+  });
+});
+
+describe('SessionPool server-side input seam', () => {
+  let term: ReturnType<typeof makeFakeTerm>;
+
+  beforeEach(() => {
+    term = makeFakeTerm();
+    mockSpawn.mockReturnValue(term as unknown as pty.IPty);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('writes to an existing persistent session and returns false for a missing one', () => {
+    const adapter: CliAdapter = {
+      id: 'codex',
+      displayName: 'Codex',
+      capabilities: {
+        parallelPerCwd: true,
+        resumeLast: true,
+        resumeById: true,
+        transcriptDiscovery: 'none',
+      },
+      composeCommand: (base) => base,
+    };
+    const { wsId: _wsId, recordId: _recordId, name: _name, onDisposed: _onDisposed, ...opts } = makeOptions();
+    const pool = new SessionPool(
+      () => ({ opts, adapter }),
+      silentLogger,
+    );
+
+    pool.spawn('ws-1', { recordId: 'rec-1', recordName: 'x1' });
+
+    expect(pool.writeToSession('rec-1', 'wake\n', { source: 'steward-supervisor' })).toBe(true);
+    expect(term.write).toHaveBeenCalledWith('wake\n');
+    expect(pool.writeToSession('missing', 'wake\n', { source: 'steward-supervisor' })).toBe(false);
+
+    pool.disposeAll('test');
   });
 });

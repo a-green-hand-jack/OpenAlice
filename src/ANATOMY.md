@@ -85,7 +85,9 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   `src/server/mcp.ts:172-181`, and `src/server/cli.ts:192-201`.
 - `workspaces/` computes adapter commands, then `SessionPool` owns live PTYs:
   `src/workspaces/service.ts:94-104` -> `src/workspaces/session-pool.ts:72-84`
-  -> `src/workspaces/persistent-session.ts:128-150`.
+  -> `src/workspaces/persistent-session.ts:128-150`. Server-side PTY input for
+  future steward wakes goes through `SessionPool.writeToSession()` and
+  `PersistentSession.writeInput()`, not through fabricated WebSocket frames.
 - Alice talks to UTA through `@traderalice/uta-protocol`: `src/main.ts:15-16`,
   `src/services/uta-client/UTAManagerSDK.ts:21-30`, and
   `packages/uta-protocol/src/client/UTAClient.ts:48`.
