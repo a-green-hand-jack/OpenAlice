@@ -8,7 +8,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -242,9 +242,22 @@ describe('steward workspace create: scaffold → manifest → commit', () => {
     const excludes = await readFile(join(dir, '.git/info/exclude'), 'utf8');
     expect(excludes).toContain('.alice/steward/state.json');
     expect(excludes).toContain('.alice/steward/locks/');
-    expect(excludes).toContain('.alice/steward/supervisor-status.json');
+    expect(excludes).toContain('.alice/steward/supervisor.jsonl');
 
     expect((await run('git', ['-C', dir, 'log', '--pretty=%s'])).trim()).toBe('steward: stewardtag');
     expect((await run('git', ['-C', dir, 'status', '--porcelain'])).trim()).toBe('');
+
+    // regression (#87): the exclude entry must match the file the runtime
+    // actually appends to on every supervisor tick (appendSupervisorEvent in
+    // src/workspaces/steward/supervisor.ts writes to this exact path). Mimic
+    // a tick's append here and prove it stays invisible to git status — the
+    // whole point of the exclude per docs/steward-persistent-loop-implementation.zh.md §4.5.
+    await appendFile(
+      join(dir, '.alice/steward/supervisor.jsonl'),
+      `${JSON.stringify({ at: '2026-01-01T00:00:00.000Z', type: 'cost_summary' })}\n`,
+    );
+    const statusAfterTick = await run('git', ['-C', dir, 'status', '--porcelain']);
+    expect(statusAfterTick).not.toContain('supervisor.jsonl');
+    expect(statusAfterTick.trim()).toBe('');
   });
 });
