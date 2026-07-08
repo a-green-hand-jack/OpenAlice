@@ -162,6 +162,42 @@ describe('MaxPositionSizeGuard', () => {
     })
     expect(guard.check(ctx)).toBeNull()
   })
+
+  // ---- Single-order equity cap (P3-campaign hard guard §4.7) ----
+
+  it('rejects a single order exceeding the single-order equity cap even while the aggregate cap is satisfied', () => {
+    const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 50, maxOrderPercentOfEquity: 10 })
+    const ctx = makeContext({
+      operation: makePlaceOrderOp({ cashQty: 15_000 }),
+      account: { netLiquidation: '100000' },
+    })
+
+    const result = guard.check(ctx)
+    expect(result).not.toBeNull()
+    expect(result).toContain('single order')
+    expect(result).toContain('15.0%')
+    expect(result).toContain('limit: 10%')
+  })
+
+  it('allows a single order within the single-order equity cap (positive control)', () => {
+    const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 50, maxOrderPercentOfEquity: 25 })
+    const ctx = makeContext({
+      operation: makePlaceOrderOp({ cashQty: 10_000 }),
+      account: { netLiquidation: '100000' },
+    })
+
+    expect(guard.check(ctx)).toBeNull()
+  })
+
+  it('does not apply a single-order cap when maxOrderPercentOfEquity is not configured', () => {
+    const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 50 })
+    const ctx = makeContext({
+      operation: makePlaceOrderOp({ cashQty: 40_000 }),
+      account: { netLiquidation: '100000' },
+    })
+
+    expect(guard.check(ctx)).toBeNull()
+  })
 })
 
 // ==================== CooldownGuard ====================

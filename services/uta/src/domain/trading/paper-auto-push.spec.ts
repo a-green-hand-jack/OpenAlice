@@ -62,6 +62,7 @@ function stageAndCommitBuy(uta: UnifiedTradingAccount, message = 'paper auto-pus
     action: 'BUY',
     orderType: 'MKT',
     totalQuantity: '1',
+    stopLoss: { price: '150' },
   })
   return uta.commit(message).hash
 }
@@ -186,6 +187,7 @@ describe('paper auto-push', () => {
       action: 'BUY',
       orderType: 'MKT',
       cashQty: '1000000',
+      stopLoss: { price: '150' },
     })
     const hash = uta.commit('oversized paper proposal').hash
     broker.resetCalls()
@@ -210,6 +212,123 @@ describe('paper auto-push', () => {
       expect.objectContaining({ guard: 'max-position-size', verdict: 'reject' }),
     ])
     expect(sink.events.some((e) => e.type === 'trade.executed')).toBe(false)
+  })
+
+  it('requires a tight protective stop before paper auto-push', async () => {
+    const { uta, broker, sink } = createUTA()
+    const hash = stageAndCommitBuy(uta, 'protected paper buy')
+
+    // Positive control: a well-formed order (attached stopLoss, within the
+    // 8% cap) auto-pushes normally.
+    const protectedResult = await tryAutoPushPaper({ uta, ...PAPER_INPUT })
+    expect(protectedResult.status).toBe('pushed')
+
+    const { uta: noStopUta, broker: noStopBroker } = createUTA()
+    noStopUta.stagePlaceOrder({
+      aliceId: 'mock-paper|AAPL',
+      action: 'BUY',
+      orderType: 'MKT',
+      totalQuantity: '1',
+    })
+    const noStopHash = noStopUta.commit('unprotected paper buy').hash
+
+    const noStop = await tryAutoPushPaper({ uta: noStopUta, ...PAPER_INPUT })
+
+    expect(noStop).toMatchObject({
+      status: 'skipped',
+      reason: 'paper_policy_denied',
+      pendingHash: noStopHash,
+      policyViolations: [
+        expect.objectContaining({ code: 'missing_stop_loss', symbol: 'AAPL' }),
+      ],
+    })
+    expect(noStopBroker.callCount('placeOrder')).toBe(0)
+    expect(noStopUta.status().pendingHash).toBe(noStopHash)
+
+    const { uta: wideStopUta, broker: wideStopBroker } = createUTA()
+    wideStopUta.stagePlaceOrder({
+      aliceId: 'mock-paper|AAPL',
+      action: 'BUY',
+      orderType: 'MKT',
+      totalQuantity: '1',
+      stopLoss: { price: '100' },
+    })
+    const wideStopHash = wideStopUta.commit('too-wide paper buy').hash
+
+    const wideStop = await tryAutoPushPaper({ uta: wideStopUta, ...PAPER_INPUT })
+
+    expect(wideStop).toMatchObject({
+      status: 'skipped',
+      reason: 'paper_policy_denied',
+      pendingHash: wideStopHash,
+      policyViolations: [
+        expect.objectContaining({ code: 'stop_loss_too_wide', symbol: 'AAPL' }),
+      ],
+    })
+    expect(wideStopBroker.callCount('placeOrder')).toBe(0)
+
+    expect(broker.callCount('placeOrder')).toBe(1)
+    expect(uta.status().pendingHash).toBeNull()
+    expect(sink.events.find((e) => e.type === 'trade.pushed')?.payload.id).toBe(hash)
+  })
+
+  it('does not auto-push paper adds to a losing position', async () => {
+    const { uta, broker } = createUTA()
+    broker.setPositions([
+      makePosition({
+        contract: makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' }),
+        quantity: new Decimal(10),
+        avgCost: '150',
+        marketPrice: '140',
+      }),
+    ])
+    uta.stagePlaceOrder({
+      aliceId: 'mock-paper|AAPL',
+      action: 'BUY',
+      orderType: 'MKT',
+      totalQuantity: '1',
+      stopLoss: { price: '130' },
+    })
+    const hash = uta.commit('add to loser').hash
+
+    const result = await tryAutoPushPaper({ uta, ...PAPER_INPUT })
+
+    expect(result).toMatchObject({
+      status: 'skipped',
+      reason: 'paper_policy_denied',
+      pendingHash: hash,
+      policyViolations: [
+        expect.objectContaining({ code: 'adding_to_losing_position', symbol: 'AAPL' }),
+      ],
+    })
+    expect(broker.callCount('placeOrder')).toBe(0)
+    expect(uta.status().pendingHash).toBe(hash)
+  })
+
+  it('allows risk-reducing sells without requiring an entry stop', async () => {
+    const { uta, broker } = createUTA()
+    broker.setPositions([
+      makePosition({
+        contract: makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' }),
+        quantity: new Decimal(10),
+        avgCost: '150',
+        marketPrice: '140',
+      }),
+    ])
+    uta.stagePlaceOrder({
+      aliceId: 'mock-paper|AAPL',
+      action: 'SELL',
+      orderType: 'MKT',
+      totalQuantity: '2',
+    })
+    const hash = uta.commit('trim losing position').hash
+
+    const result = await tryAutoPushPaper({ uta, ...PAPER_INPUT })
+
+    expect(result.status).toBe('pushed')
+    expect(broker.callCount('placeOrder')).toBe(1)
+    expect(uta.status().pendingHash).toBeNull()
+    expect(uta.show(hash)?.results[0]).toMatchObject({ status: 'filled' })
   })
 
   it('auto-pushes a commit exactly once across concurrent rescan and simulated restart', async () => {
