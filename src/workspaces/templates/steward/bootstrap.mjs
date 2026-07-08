@@ -70,7 +70,7 @@ setupGitExcludes(
   outDir,
   '.alice/steward/state.json',
   '.alice/steward/locks/',
-  '.alice/steward/supervisor-status.json',
+  '.alice/steward/supervisor.jsonl',
 )
 
 const stewardRoot = join(outDir, '.alice', 'steward')
