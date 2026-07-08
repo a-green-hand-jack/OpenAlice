@@ -109,7 +109,11 @@ When a steward wake arrives:
    Reasoning, Participation Bias, and Risk Discipline above:
    `no_trade`, `propose_trade`, or `blocked`.
 5. Append exactly one JSON object as a single line to
-   `.alice/steward/ledger/decisions.jsonl`.
+   `.alice/steward/ledger/decisions.jsonl` using the Write or Edit tool —
+   not a Bash command. A Bash heredoc containing JSON (e.g.
+   `cat >> decisions.jsonl <<'EOF' ... EOF`) can trip an interactive
+   security prompt with no one to answer it during an unattended wake;
+   Write/Edit does not.
 6. Stop the wake after the ledger entry. The ledger marker is the completion
    boundary for one wake.
 

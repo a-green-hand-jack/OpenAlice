@@ -21,7 +21,7 @@
 | --- | --- | --- | --- | --- | --- |
 | v1 (pilot) | 4-cell 中性 steward 试点 | 已归档（见 §6 摘要） | `campaign/pilot.mjs` `stewardPrompt`（orchestrator 侧） | 已归档 | 中性框架；仅裸日收盘价；"conservative by default" → 极度保守（H1 仅吃 7–16% buy-hold，H2 决定性通过） |
 | **v2** | 双目标 + 盲但富信息 | **本文件 §5** | `campaign/prompt-v2.mjs` `stewardPrompt` | **已批准 2026-07-06；已验证 2026-07-07** | benchmark-aware 双目标；富信息（OHLCV+量+自算指标）；盲化反作弊；paste / tool-native 双模式 |
-| **v3** | steward **模板**唤醒指令实质内容（issue #98） | **`src/workspaces/templates/steward/files/instruction.md`**（仓库内提示词面，见 §3；文件本身即运行副本，无需另存比对拷贝） | 同左（in-repo 模板文件，wake 时逐字读取） | **已实现（本次 PR，2026-07-08）；H1/H2 campaign 复测 pending** | 首次把 v2 substance 移植进**真正被持久化唤醒机制使用**的模板（此前 v2 只活在 orchestrator 侧 `stress.mjs`，checked-in `instruction.md` 从未获得过它）；协议骨架（世界边界/唤醒循环 6 步/ledger JSON 契约）逐字保留；新增 dual mandate + evidence-first + risk discipline + campaign §4.7 认可的「反过度参与」方向；stop-loss 风险上限收紧至 ~8%、禁止摊薄亏损仓，与 #97 硬 guards 语义对齐（软镜像，不替代）。逐组件解剖见 §7 |
+| **v3** | steward **模板**唤醒指令实质内容（issue #98） | **`src/workspaces/templates/steward/files/instruction.md`**（仓库内提示词面，见 §3；文件本身即运行副本，无需另存比对拷贝） | 同左（in-repo 模板文件，wake 时逐字读取） | **已实现（本次 PR，2026-07-08）；H1/H2 campaign 复测 pending** | 首次把 v2 substance 移植进**真正被持久化唤醒机制使用**的模板（此前 v2 只活在 orchestrator 侧 `stress.mjs`，checked-in `instruction.md` 从未获得过它）；协议骨架（世界边界/唤醒循环 6 步/ledger JSON 契约）逐字保留，唯一例外是 Wake Loop 第 5 步补了一句工具选择澄清（用 Write/Edit 工具写 ledger，不用 Bash heredoc——issue #101 campaign harness 现场发现 heredoc 会撞上 Claude Code 的"expansion obfuscation"分类器卡死无人值守 wake，配合 #92 的裸 Write/Edit 授权一起解决，步骤数和 ledger JSON 契约本身不变）；新增 dual mandate + evidence-first + risk discipline + campaign §4.7 认可的「反过度参与」方向；stop-loss 风险上限收紧至 ~8%、禁止摊薄亏损仓，与 #97 硬 guards 语义对齐（软镜像，不替代）。逐组件解剖见 §7 |
 
 > **v2 验证结果（2026-07-07，paste 模式，3 个真实牛市匿名窗口）**：H1 = NVDA 42% / TSLA 65% / AMD 43%（均 ~50%），maxDD 全 0%。对比 pilot（v1）H1 仅 7-16%——**v2 把牛市参与度提升 3-5×，同时保住 H2 纪律（回撤 0%）**。即「行情好时参与、行情差时仍不冒大险」。12-cell（含 bear/chop）将复核 v2 是否破坏 H2。
 
@@ -108,7 +108,7 @@ THESIS: <your read of the market> | ACTION: <what you did + current stance/size>
 
 ## 7. v3 逐组件解剖（steward 模板，issue #98 新增）
 
-v3 是首次把 v2 的实验性 substance 移植进**真正被持久化唤醒机制使用**的仓库内模板——此前 `instruction.md` 只有裸协议（世界边界 + 唤醒循环 6 步 + ledger JSON 契约），没有 v2 的任何推理/风控内容。协议骨架本身**逐字保留**（World Boundary、Wake Loop 的 6 步、Decision Ledger Shape 的 JSON 契约不变，`stewardDecisionLedgerEntrySchema` 未改一个字段）；以下是新增的实质组件。
+v3 是首次把 v2 的实验性 substance 移植进**真正被持久化唤醒机制使用**的仓库内模板——此前 `instruction.md` 只有裸协议（世界边界 + 唤醒循环 6 步 + ledger JSON 契约），没有 v2 的任何推理/风控内容。协议骨架本身**逐字保留**（World Boundary、Wake Loop 的 6 步、Decision Ledger Shape 的 JSON 契约不变，`stewardDecisionLedgerEntrySchema` 未改一个字段——唯一改动是 Wake Loop 第 5 步补了"用 Write/Edit 工具、不用 Bash heredoc"的工具选择澄清，见上方状态栏说明，不算协议实质变化）；以下是新增的实质组件。
 
 每段标注：**[组件]** 意图 / 所控行为 / 相对旧 `instruction.md` 的变更 / 关联不变量。
 
