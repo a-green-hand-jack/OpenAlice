@@ -31,8 +31,14 @@ const read = (rel: string): Promise<string> => readFile(join(dir, rel), 'utf8');
 describe('claudeAdapter AI-config', () => {
   // Project-scoped `.mcp.json` servers park at "Pending approval" until the
   // user approves — and each workspace dir is a fresh project key, so every
-  // spawn carries the auto-trust setting (see AUTOTRUST_SETTINGS in claude.ts).
-  const SETTINGS_FLAG = ['--settings', '{"enableAllProjectMcpServers":true}'];
+  // spawn carries the auto-trust setting (see AUTOTRUST_SETTINGS in
+  // claude.ts). It also carries a `permissions.allow` Bash pre-seed for the
+  // CLI tools every `injectTools` template teaches via skills (issue #92) —
+  // see `claude-permission-preseed.spec.ts` for the dedicated coverage.
+  const SETTINGS_FLAG = [
+    '--settings',
+    '{"enableAllProjectMcpServers":true,"permissions":{"allow":["Bash(alice *)","Bash(alice-analysis *)","Bash(alice-uta *)","Bash(alice-workspace *)","Bash(traderhub *)"]}}',
+  ];
 
   it('composeCommand: fresh spawn injects the MCP auto-trust settings', () => {
     expect(claudeAdapter.composeCommand(['claude'], { cwd: dir, env: {} })).toEqual([
@@ -293,7 +299,7 @@ describe('composeHeadlessCommand (one-shot headless argv, prompt placed per-CLI)
     expect(claudeAdapter.composeHeadlessCommand!(['claude'], ctx(), 'do x')).toEqual([
       'claude',
       '--settings',
-      '{"enableAllProjectMcpServers":true}',
+      '{"enableAllProjectMcpServers":true,"permissions":{"allow":["Bash(alice *)","Bash(alice-analysis *)","Bash(alice-uta *)","Bash(alice-workspace *)","Bash(traderhub *)"]}}',
       '-p',
       '--output-format',
       'stream-json',
