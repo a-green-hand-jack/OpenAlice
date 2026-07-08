@@ -27,6 +27,9 @@ state, or ownership.
   [docs/steward-workspace-behavior-contract.zh.md](docs/steward-workspace-behavior-contract.zh.md);
   for the current minimal implementation design, continue to
   [docs/steward-persistent-loop-implementation.zh.md](docs/steward-persistent-loop-implementation.zh.md).
+  Persistent sessions expose an explicit server-side PTY input seam for future
+  steward wake injection; see `src/workspaces/persistent-session.ts` and
+  `src/workspaces/session-pool.ts`.
 
 - UTA is the co-located broker carrier under `services/uta/`. Its process entry
   is `services/uta/src/main.ts:40`, its account manager starts at

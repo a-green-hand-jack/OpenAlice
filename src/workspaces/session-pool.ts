@@ -7,6 +7,7 @@ import {
   type SessionAttachResult,
   type SessionControllerClaim,
   type PersistentSessionOptions,
+  type SessionWriteInputOptions,
 } from './persistent-session.js';
 import type { TranscriptWatcher } from './transcript-watcher.js';
 import type { TerminalThemeVariant } from './terminal-theme.js';
@@ -139,6 +140,17 @@ export class SessionPool {
 
   get(recordId: string): PersistentSession | undefined {
     return this.sessions.get(recordId);
+  }
+
+  writeToSession(
+    recordId: string,
+    input: string | Buffer,
+    opts: SessionWriteInputOptions,
+  ): boolean {
+    const session = this.sessions.get(recordId);
+    if (!session) return false;
+    session.writeInput(input, opts);
+    return true;
   }
 
   /** All live sessions belonging to a workspace, oldest-spawned first. */

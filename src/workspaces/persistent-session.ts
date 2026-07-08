@@ -52,6 +52,10 @@ export type SessionAttachResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: 'locked'; readonly owner: SessionControllerOwner };
 
+export interface SessionWriteInputOptions {
+  readonly source: 'steward-supervisor' | 'operator';
+}
+
 const MAX_DIM = 1000;
 const CURSOR_TICK_MS = 2000;
 const CURSOR_BYTES_INTERVAL = 64 * 1024;
@@ -298,6 +302,14 @@ export class PersistentSession {
     this.log.info('session.agent_id_detected', { agentSessionId: id });
   }
 
+  /**
+   * Server-side write seam for non-WebSocket controllers. Future steward wake
+   * injection uses this instead of pretending to be a browser frame.
+   */
+  writeInput(input: string | Buffer, opts: SessionWriteInputOptions): void {
+    this.writeTermInput(input, opts.source);
+  }
+
   /** Swap in `ws` as the attached client. A controller claim makes ownership
    *  explicit: a second controller is rejected unless it deliberately takes
    *  over. This is the shared rule for browser, Electron IPC, future IM bridges,
@@ -501,14 +513,10 @@ export class PersistentSession {
     if (isBinary) {
       const buf = toBuffer(raw);
       if (!buf) return;
-      try {
-        // Browser stdin arrives as UTF-8 bytes. Keep this edge byte-faithful:
-        // converting through string corrupts arbitrary terminal sequences and
-        // makes CJK/IME behavior depend on JS decoding instead of the PTY.
-        this.term.write(buf as unknown as string);
-      } catch (err) {
-        this.log.warn('session.write_error', { err });
-      }
+      // Browser stdin arrives as UTF-8 bytes. Keep this edge byte-faithful:
+      // converting through string corrupts arbitrary terminal sequences and
+      // makes CJK/IME behavior depend on JS decoding instead of the PTY.
+      this.writeTermInput(buf, 'websocket');
       return;
     }
 
@@ -526,6 +534,23 @@ export class PersistentSession {
       this.resize(parsed.cols, parsed.rows);
     }
     // `attach` mid-stream is ignored — the initial attach already happened.
+  }
+
+  private writeTermInput(
+    input: string | Buffer,
+    source: SessionWriteInputOptions['source'] | 'websocket',
+  ): void {
+    if (this.disposed) {
+      this.log.warn('session.write_input_disposed', { source });
+      return;
+    }
+    const bytes = Buffer.isBuffer(input) ? input.length : Buffer.byteLength(input, 'utf8');
+    try {
+      this.term.write(input as unknown as string);
+      this.log.info('session.write_input', { source, bytes });
+    } catch (err) {
+      this.log.warn('session.write_error', { source, err });
+    }
   }
 
   private wireWs(ws: WebSocket): void {
