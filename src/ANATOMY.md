@@ -34,7 +34,8 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   `src/workspaces/templates/steward/`; its context manifest is written by
   `src/workspaces/context-injector.ts:91-127` after instructions and skills land.
   Steward wake/ledger schemas and workspace-local file stores live in
-  `src/workspaces/steward/`.
+  `src/workspaces/steward/`; the v1 wake injector formats the
+  `<STEWARD_WAKE>` message at `src/workspaces/steward/injector.ts:5-28`.
   Open `src/workspaces/service.ts:94-104`, `src/workspaces/session-pool.ts:72-84`,
   `src/workspaces/template-registry.ts:106-111`, and
   `src/workspaces/adapters/claude.ts:41-65`.
@@ -50,7 +51,8 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   workspace WebSocket/IPCs. `WebPlugin` starts at `src/webui/plugin.ts:73-94`;
   core API routes are `src/webui/plugin.ts:221-245`; workspace routes are
   `src/webui/plugin.ts:250-263`; workspace `authzLevel` changes live at
-  `src/webui/routes/workspaces.ts:468-500`; account `maxAuthzLevel` changes are
+  `src/webui/routes/workspaces.ts:699-729`; manual steward wake routes live at
+  `src/webui/routes/workspaces.ts:731-858`; account `maxAuthzLevel` changes are
   audited in `src/webui/routes/trading-config.ts:197-207`; trading proxy is
   `src/webui/routes/trading-proxy.ts:32-41`; event ingest's external/internal
   token gate is `src/webui/routes/events.ts:42-60`.
@@ -88,6 +90,10 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   -> `src/workspaces/persistent-session.ts:128-150`. Server-side PTY input for
   future steward wakes goes through `SessionPool.writeToSession()` and
   `PersistentSession.writeInput()`, not through fabricated WebSocket frames.
+- Manual steward wake dispatch is workspace-scoped: `src/webui/routes/workspaces.ts:731-858`
+  writes `.alice/steward/wakes/*.json`, reuses or resumes the configured
+  interactive session via `src/webui/routes/workspaces.ts:335-490`, then calls
+  `src/workspaces/steward/injector.ts:19-28`.
 - Alice talks to UTA through `@traderalice/uta-protocol`: `src/main.ts:15-16`,
   `src/services/uta-client/UTAManagerSDK.ts:21-30`, and
   `packages/uta-protocol/src/client/UTAClient.ts:48`.
