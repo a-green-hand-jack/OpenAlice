@@ -29,7 +29,11 @@ state, or ownership.
   [docs/steward-persistent-loop-implementation.zh.md](docs/steward-persistent-loop-implementation.zh.md).
   Persistent sessions expose an explicit server-side PTY input seam for future
   steward wake injection; see `src/workspaces/persistent-session.ts` and
-  `src/workspaces/session-pool.ts`.
+  `src/workspaces/session-pool.ts`. The first manual persistent-steward wake
+  path is `POST /api/workspaces/:id/steward/wakes`, implemented in
+  `src/webui/routes/workspaces.ts:731-858`, which writes the workspace-local wake
+  file and injects a narrow `<STEWARD_WAKE>` into the configured interactive
+  session instead of dispatching a new headless run.
 
 - UTA is the co-located broker carrier under `services/uta/`. Its process entry
   is `services/uta/src/main.ts:40`, its account manager starts at
@@ -84,8 +88,9 @@ state, or ownership.
   and workspace repos. Steward workspaces additionally carry their template-owned
   `.alice/steward/` context/ledger scaffold inside the workspace repo; Alice's
   steward file-store helpers under `src/workspaces/steward/` read/write that
-  workspace-local source of truth. The default root is
-  `src/workspaces/config.ts:107-109`.
+  workspace-local source of truth, and the manual wake API writes
+  `.alice/steward/wakes/*.json` plus reads `.alice/steward/ledger/decisions.jsonl`.
+  The default root is `src/workspaces/config.ts:107-109`.
 
 - Secrets are not stored in plaintext data files after sealing. The machine key
   is outside portable `data/`, at `src/core/sealing.ts:49-50`.

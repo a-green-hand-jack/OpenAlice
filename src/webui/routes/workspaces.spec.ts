@@ -4,7 +4,7 @@
  * (no real spawn). Modeled on trading-config.spec's harness.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +18,7 @@ import {
   resolveWorkspaceToolAuthzLevel,
 } from '../../core/workspace-tool-center.js';
 import type { ProducerHandle } from '../../core/producer.js';
+import { createStewardLedgerStore, DECISION_LEDGER_SCHEMA_VERSION } from '../../workspaces/steward/index.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -122,6 +123,12 @@ async function post(app: any, path: string, body?: unknown) {
   return { status: res.status, body: json as any };
 }
 
+async function get(app: any, path: string) {
+  const res = await app.request(path);
+  const json = await res.json().catch(() => null);
+  return { status: res.status, body: json as any };
+}
+
 async function patch(app: any, path: string, body?: unknown, headers?: Record<string, string>) {
   const res = await app.request(path, {
     method: 'PATCH',
@@ -130,6 +137,83 @@ async function patch(app: any, path: string, body?: unknown, headers?: Record<st
   });
   const json = await res.json().catch(() => null);
   return { status: res.status, body: json as any };
+}
+
+function buildSteward(opts: { dir: string }) {
+  const meta = {
+    id: 'ws-1',
+    tag: 'steward-test',
+    dir: opts.dir,
+    agents: ['codex'],
+    template: 'steward',
+  };
+  const adapter = {
+    id: 'codex',
+    displayName: 'Codex',
+    namePrefix: 'x',
+    capabilities: { parallelPerCwd: true, resumeLast: true, resumeById: true, transcriptDiscovery: 'none' },
+    composeCommand: (base: readonly string[]) => base,
+    bootstrap: vi.fn(async () => {}),
+  };
+  const records = new Map<string, any>();
+  const live = new Map<string, any>();
+  const writtenInputs: Array<{ sessionId: string; input: string | Buffer; opts: unknown }> = [];
+  let nextName = 1;
+  const sessionRegistry = {
+    ensureLoaded: vi.fn(async () => {}),
+    findById: (id: string) => records.get(id),
+    nextName: () => `x${nextName++}`,
+    create: vi.fn(async (record: any) => {
+      records.set(record.id, record);
+    }),
+    get: (_wsId: string, id: string) => records.get(id),
+    update: vi.fn(async (_wsId: string, id: string, patch: any) => {
+      const record = records.get(id);
+      if (record) Object.assign(record, patch);
+      return record;
+    }),
+    remove: vi.fn(async (_wsId: string, id: string) => {
+      const record = records.get(id);
+      records.delete(id);
+      return record;
+    }),
+  };
+  const pool = {
+    get: (id: string) => live.get(id),
+    spawn: vi.fn((_wsId: string, ctx: any) => {
+      const session = {
+        recordId: ctx.recordId,
+        wsId: 'ws-1',
+        name: ctx.recordName,
+        pid: 4321,
+        agentSessionId: null,
+        startedAt: 1,
+        waitForFirstExit: vi.fn(async () => null),
+      };
+      live.set(ctx.recordId, session);
+      return session;
+    }),
+    disposeToken: vi.fn((sessionId: string) => live.delete(sessionId)),
+    writeToSession: vi.fn((sessionId: string, input: string | Buffer, writeOpts: unknown) => {
+      if (!live.has(sessionId)) return false;
+      writtenInputs.push({ sessionId, input, opts: writeOpts });
+      return true;
+    }),
+    liveSessionsFor: () => [],
+  };
+  const svc = {
+    registry: {
+      get: (id: string) => (id === 'ws-1' ? meta : undefined),
+      list: () => [meta],
+    },
+    sessionRegistry,
+    pool,
+    adapters: { get: (id: string) => (id === 'codex' ? adapter : undefined) },
+    resolveAdapter: () => adapter,
+    config: { launcherRepoRoot: '/repo' },
+    publicMeta: vi.fn(async (m: any) => m),
+  } as unknown as WorkspaceService;
+  return { app: createWorkspaceRoutes(svc), pool, sessionRegistry, writtenInputs, live };
 }
 
 describe('PATCH /:id/metadata', () => {
@@ -244,6 +328,202 @@ describe('PATCH /:id/authz-level', () => {
     expect(authzProducer.emit).not.toHaveBeenCalled()
   })
 })
+
+describe('steward wake API', () => {
+  it('creates a wake file, spawns a Codex session, injects the wake, and records session config', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
+    try {
+      const { app, pool, writtenInputs } = buildSteward({ dir });
+
+      const r = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake:1',
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+        deadline: '2026-07-08T14:03:00.000Z',
+        marketContext: { symbols: ['AAPL'] },
+        riskContext: { riskState: 'NORMAL' },
+      });
+
+      expect(r.status).toBe(202);
+      expect(r.body.wake).toMatchObject({
+        wakeId: 'wake:1',
+        status: 'injected',
+        deadline: '2026-07-08T14:03:00.000Z',
+        envelope: {
+          reason: 'scheduled_observe',
+          accountId: 'mock-simulator-1',
+          authzLevel: 'paper',
+          expectedDecision: 'no_trade',
+        },
+      });
+      expect(r.body.session).toMatchObject({ agent: 'codex', reused: false });
+      expect(pool.spawn).toHaveBeenCalledOnce();
+      expect(writtenInputs).toHaveLength(1);
+      expect(String(writtenInputs[0]?.input)).toContain('<STEWARD_WAKE id="wake:1"');
+      expect(String(writtenInputs[0]?.input)).toContain('.alice/steward/wakes/wake%3A1.json');
+      expect(writtenInputs[0]?.opts).toEqual({ source: 'steward-supervisor' });
+
+      const config = JSON.parse(await readFile(join(dir, '.alice/steward/config.json'), 'utf8')) as {
+        agent: string;
+        sessionId: string;
+      };
+      expect(config.agent).toBe('codex');
+      expect(config.sessionId).toBe(r.body.session.sessionId);
+
+      const stored = JSON.parse(await readFile(join(dir, '.alice/steward/wakes/wake%3A1.json'), 'utf8')) as {
+        status: string;
+        sessionId: string;
+      };
+      expect(stored.status).toBe('injected');
+      expect(stored.sessionId).toBe(r.body.session.sessionId);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reuses a configured live steward session instead of spawning', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
+    try {
+      await mkdir(join(dir, '.alice', 'steward'), { recursive: true });
+      await writeFile(
+        join(dir, '.alice/steward/config.json'),
+        JSON.stringify({ version: 1, agent: 'codex', sessionId: 'configured-session' }, null, 2) + '\n',
+        'utf8',
+      );
+      const { app, pool, writtenInputs, live } = buildSteward({ dir });
+      live.set('configured-session', { recordId: 'configured-session' });
+
+      const r = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-reuse',
+        reason: 'user_request',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'read_only',
+        expectedDecision: 'blocked',
+      });
+
+      expect(r.status).toBe(202);
+      expect(r.body.session).toEqual({
+        sessionId: 'configured-session',
+        agent: 'codex',
+        reused: true,
+        resumed: false,
+      });
+      expect(pool.spawn).not.toHaveBeenCalled();
+      expect(writtenInputs[0]?.sessionId).toBe('configured-session');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('resumes a configured paused steward session before injecting the wake', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
+    try {
+      await mkdir(join(dir, '.alice', 'steward'), { recursive: true });
+      await writeFile(
+        join(dir, '.alice/steward/config.json'),
+        JSON.stringify({ version: 1, agent: 'codex', sessionId: 'paused-session' }, null, 2) + '\n',
+        'utf8',
+      );
+      const { app, pool, sessionRegistry, writtenInputs } = buildSteward({ dir });
+      await sessionRegistry.create({
+        id: 'paused-session',
+        wsId: 'ws-1',
+        agent: 'codex',
+        name: 'x1',
+        createdAt: '2026-07-08T14:00:00.000Z',
+        lastActiveAt: '2026-07-08T14:00:00.000Z',
+        state: 'paused',
+      });
+      vi.mocked(sessionRegistry.create).mockClear();
+
+      const r = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-resume',
+        reason: 'supervisor_recovery',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'blocked',
+      });
+
+      expect(r.status).toBe(202);
+      expect(r.body.session).toEqual({
+        sessionId: 'paused-session',
+        agent: 'codex',
+        reused: true,
+        resumed: true,
+      });
+      expect(sessionRegistry.create).not.toHaveBeenCalled();
+      expect(pool.spawn).toHaveBeenCalledWith('ws-1', expect.objectContaining({
+        agentId: 'codex',
+        recordId: 'paused-session',
+        recordName: 'x1',
+        resume: 'last',
+      }));
+      expect(writtenInputs[0]?.sessionId).toBe('paused-session');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reads wake status and decision ledger entries', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
+    try {
+      const { app } = buildSteward({ dir });
+      await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-ledger',
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+      const ledger = createStewardLedgerStore(dir);
+      await ledger.append({
+        version: DECISION_LEDGER_SCHEMA_VERSION,
+        wakeId: 'wake-ledger',
+        at: '2026-07-08T14:01:23.000Z',
+        accountId: 'mock-simulator-1',
+        decision: 'no_trade',
+        status: 'done',
+        completion: { reason: 'no signal', evidenceRefs: ['wake:wake-ledger'] },
+        checklist: {
+          account: 'ok',
+          positions: 'ok',
+          orders: 'ok',
+          risk: 'NORMAL',
+          market: 'open',
+          history: 'checked',
+        },
+        thesis: 'No entry signal.',
+        actions: [],
+        pendingHash: null,
+        invalidation: 'new signal',
+        cost: {
+          model: 'codex',
+          inputTokens: null,
+          outputTokens: null,
+          modelCostUsd: null,
+          allocatedServerCostUsd: null,
+          tradingFeesUsd: null,
+          estimatedSlippageUsd: null,
+          totalEstimatedCostUsd: null,
+        },
+      });
+
+      const wake = await get(app, `/ws-1/steward/wakes/${encodeURIComponent('wake-ledger')}`);
+      expect(wake.status).toBe(200);
+      expect(wake.body.wake.status).toBe('injected');
+      expect(wake.body.ledgerEntry.decision).toBe('no_trade');
+
+      const listed = await get(app, '/ws-1/steward/ledger?limit=1');
+      expect(listed.status).toBe(200);
+      expect(listed.body.entries).toHaveLength(1);
+      expect(listed.body.entries[0].wakeId).toBe('wake-ledger');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('POST /', () => {
   it('accepts blind mode fields and returns the registry/public metadata round-trip', async () => {
