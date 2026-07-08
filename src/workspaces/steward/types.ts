@@ -3,6 +3,8 @@ import { z } from 'zod';
 
 export const WAKE_SCHEMA_VERSION = 1;
 export const DECISION_LEDGER_SCHEMA_VERSION = 1;
+export const STEWARD_LOCK_SCHEMA_VERSION = 1;
+export const STEWARD_STATE_SCHEMA_VERSION = 1;
 
 export const stewardWakeReasonSchema = z.enum([
   'scheduled_observe',
@@ -81,6 +83,18 @@ export const stewardCostSchema = z.object({
 }).passthrough();
 export type StewardCost = z.infer<typeof stewardCostSchema>;
 
+export const stewardCostSummarySchema = z.object({
+  entries: z.number().int().nonnegative(),
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  modelCostUsd: z.number().nonnegative(),
+  allocatedServerCostUsd: z.number().nonnegative(),
+  tradingFeesUsd: z.number().nonnegative(),
+  estimatedSlippageUsd: z.number().nonnegative(),
+  totalEstimatedCostUsd: z.number().nonnegative(),
+}).passthrough();
+export type StewardCostSummary = z.infer<typeof stewardCostSummarySchema>;
+
 export const stewardChecklistSchema = z.object({
   account: z.string().min(1),
   positions: z.string().min(1),
@@ -115,10 +129,35 @@ export const stewardDecisionLedgerEntrySchema = z.object({
 }).passthrough();
 export type StewardDecisionLedgerEntry = z.infer<typeof stewardDecisionLedgerEntrySchema>;
 
+export const stewardLockRecordSchema = z.object({
+  version: z.literal(STEWARD_LOCK_SCHEMA_VERSION),
+  accountId: z.string().min(1),
+  wakeId: z.string().min(1),
+  acquiredAt: z.string().min(1),
+  expiresAt: z.string().min(1),
+}).passthrough();
+export type StewardLockRecord = z.infer<typeof stewardLockRecordSchema>;
+
+export const stewardStateSchema = z.object({
+  version: z.literal(STEWARD_STATE_SCHEMA_VERSION),
+  updatedAt: z.string().min(1),
+  cost: stewardCostSummarySchema,
+  warnings: z.array(z.string()),
+}).passthrough();
+export type StewardState = z.infer<typeof stewardStateSchema>;
+
 export function parseStewardWakeRecord(value: unknown): StewardWakeRecord {
   return stewardWakeRecordSchema.parse(value);
 }
 
 export function parseStewardDecisionLedgerEntry(value: unknown): StewardDecisionLedgerEntry {
   return stewardDecisionLedgerEntrySchema.parse(value);
+}
+
+export function parseStewardLockRecord(value: unknown): StewardLockRecord {
+  return stewardLockRecordSchema.parse(value);
+}
+
+export function parseStewardState(value: unknown): StewardState {
+  return stewardStateSchema.parse(value);
 }

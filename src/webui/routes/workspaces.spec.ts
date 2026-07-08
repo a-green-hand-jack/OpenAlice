@@ -523,6 +523,88 @@ describe('steward wake API', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('locks overlapping account wakes until supervisor completes the active wake', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
+    try {
+      const { app } = buildSteward({ dir });
+      const first = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-active',
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+      expect(first.status).toBe(202);
+
+      const blocked = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-overlap',
+        reason: 'market_event',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'blocked',
+      });
+      expect(blocked.status).toBe(409);
+      expect(blocked.body.error).toBe('account_locked');
+      expect(blocked.body.lock.wakeId).toBe('wake-active');
+
+      const ledger = createStewardLedgerStore(dir);
+      await ledger.append({
+        version: DECISION_LEDGER_SCHEMA_VERSION,
+        wakeId: 'wake-active',
+        at: '2026-07-08T14:01:23.000Z',
+        accountId: 'mock-simulator-1',
+        decision: 'no_trade',
+        status: 'done',
+        completion: { reason: 'no signal', evidenceRefs: ['wake:wake-active'] },
+        checklist: {
+          account: 'ok',
+          positions: 'ok',
+          orders: 'ok',
+          risk: 'NORMAL',
+          market: 'open',
+          history: 'checked',
+        },
+        thesis: 'No entry signal.',
+        actions: [],
+        pendingHash: null,
+        invalidation: 'new signal',
+        cost: {
+          model: 'codex',
+          inputTokens: 10,
+          outputTokens: 5,
+          modelCostUsd: 1,
+          allocatedServerCostUsd: 2,
+          tradingFeesUsd: 3,
+          estimatedSlippageUsd: 4,
+          totalEstimatedCostUsd: null,
+        },
+      });
+
+      const tick = await post(app, '/ws-1/steward/supervisor/tick', {
+        now: '2026-07-08T14:01:30.000Z',
+      });
+      expect(tick.status).toBe(200);
+      expect(tick.body.transitions).toEqual([{
+        wakeId: 'wake-active',
+        from: 'injected',
+        to: 'done',
+        reason: 'ledger:done',
+      }]);
+      expect(tick.body.cost.totalEstimatedCostUsd).toBe(10);
+
+      const second = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-overlap',
+        reason: 'market_event',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'blocked',
+      });
+      expect(second.status).toBe(202);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('POST /', () => {

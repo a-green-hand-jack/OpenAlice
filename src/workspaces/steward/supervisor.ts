@@ -1,0 +1,192 @@
+import { appendFile, mkdir, rename, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+
+import { buildStewardState, type StewardCostPolicyInput } from './cost.js';
+import { createStewardLedgerStore } from './ledger-store.js';
+import { createStewardLockStore } from './lock-store.js';
+import { stewardStatePath, stewardSupervisorLogPath } from './paths.js';
+import { createStewardWakeStore } from './wake-store.js';
+import type {
+  StewardCostSummary,
+  StewardState,
+  StewardWakeRecord,
+  StewardWakeStatus,
+} from './types.js';
+
+export interface StewardSupervisorTickOptions {
+  readonly now?: string;
+  readonly isSessionRunning?: (sessionId: string) => boolean;
+  readonly config?: StewardCostPolicyInput;
+}
+
+export interface StewardSupervisorTransition {
+  readonly wakeId: string;
+  readonly from: StewardWakeStatus;
+  readonly to: StewardWakeStatus;
+  readonly reason: string;
+}
+
+export interface StewardSupervisorTickResult {
+  readonly at: string;
+  readonly transitions: StewardSupervisorTransition[];
+  readonly activeWakeIds: string[];
+  readonly cost: StewardCostSummary;
+  readonly warnings: string[];
+}
+
+export class StewardSupervisor {
+  constructor(private readonly workspaceDir: string) {}
+
+  async tick(opts: StewardSupervisorTickOptions = {}): Promise<StewardSupervisorTickResult> {
+    const now = opts.now ?? new Date().toISOString();
+    const wakeStore = createStewardWakeStore(this.workspaceDir);
+    const ledgerStore = createStewardLedgerStore(this.workspaceDir);
+    const lockStore = createStewardLockStore(this.workspaceDir);
+    const transitions: StewardSupervisorTransition[] = [];
+    const wakes = await wakeStore.list();
+
+    for (const wake of wakes) {
+      if (isTerminal(wake.status)) {
+        await lockStore.release(wake.envelope.accountId, wake.wakeId);
+        continue;
+      }
+
+      const ledgerEntry = await ledgerStore.findByWakeId(wake.wakeId);
+      if (ledgerEntry) {
+        const nextStatus = ledgerEntry.status === 'done'
+          ? 'done'
+          : ledgerEntry.status === 'blocked'
+            ? 'blocked'
+            : 'error';
+        const updated = await wakeStore.updateStatus(wake.wakeId, nextStatus, {
+          now,
+          completedAt: ledgerEntry.at,
+          error: nextStatus === 'error' ? ledgerEntry.completion.reason : null,
+        });
+        await lockStore.release(updated.envelope.accountId, updated.wakeId);
+        transitions.push({
+          wakeId: updated.wakeId,
+          from: wake.status,
+          to: updated.status,
+          reason: `ledger:${ledgerEntry.status}`,
+        });
+        await appendSupervisorEvent(this.workspaceDir, {
+          at: now,
+          type: 'wake_completed',
+          wakeId: updated.wakeId,
+          from: wake.status,
+          to: updated.status,
+          ledgerAt: ledgerEntry.at,
+          decision: ledgerEntry.decision,
+        });
+        continue;
+      }
+
+      if (Date.parse(wake.deadline) <= Date.parse(now)) {
+        const updated = await wakeStore.updateStatus(wake.wakeId, 'timeout', {
+          now,
+          completedAt: now,
+          error: `deadline expired at ${wake.deadline}`,
+        });
+        await lockStore.release(updated.envelope.accountId, updated.wakeId);
+        transitions.push({
+          wakeId: updated.wakeId,
+          from: wake.status,
+          to: updated.status,
+          reason: 'deadline_expired',
+        });
+        await appendSupervisorEvent(this.workspaceDir, {
+          at: now,
+          type: 'wake_timeout',
+          wakeId: updated.wakeId,
+          from: wake.status,
+          to: updated.status,
+          deadline: wake.deadline,
+        });
+        continue;
+      }
+
+      if (
+        wake.status === 'injected' &&
+        wake.sessionId &&
+        opts.isSessionRunning &&
+        !opts.isSessionRunning(wake.sessionId)
+      ) {
+        const updated = await wakeStore.updateStatus(wake.wakeId, 'stuck', {
+          now,
+          completedAt: now,
+          error: `session not running: ${wake.sessionId}`,
+        });
+        await lockStore.release(updated.envelope.accountId, updated.wakeId);
+        transitions.push({
+          wakeId: updated.wakeId,
+          from: wake.status,
+          to: updated.status,
+          reason: 'session_not_running',
+        });
+        await appendSupervisorEvent(this.workspaceDir, {
+          at: now,
+          type: 'wake_stuck',
+          wakeId: updated.wakeId,
+          from: wake.status,
+          to: updated.status,
+          sessionId: wake.sessionId,
+        });
+      }
+    }
+
+    const state = await writeCostState(this.workspaceDir, opts.config, now);
+    await appendSupervisorEvent(this.workspaceDir, {
+      at: now,
+      type: 'cost_summary',
+      cost: state.cost,
+      warnings: state.warnings,
+    });
+
+    const activeWakeIds = (await wakeStore.list())
+      .filter((wake) => !isTerminal(wake.status))
+      .map((wake) => wake.wakeId);
+
+    return {
+      at: now,
+      transitions,
+      activeWakeIds,
+      cost: state.cost,
+      warnings: state.warnings,
+    };
+  }
+}
+
+export function createStewardSupervisor(workspaceDir: string): StewardSupervisor {
+  return new StewardSupervisor(workspaceDir);
+}
+
+async function writeCostState(
+  workspaceDir: string,
+  config: StewardCostPolicyInput | undefined,
+  now: string,
+): Promise<StewardState> {
+  const ledgerStore = createStewardLedgerStore(workspaceDir);
+  const entries = await ledgerStore.read();
+  const state = buildStewardState({ entries, config, now });
+  await writeJsonAtomic(stewardStatePath(workspaceDir), state);
+  return state;
+}
+
+async function appendSupervisorEvent(workspaceDir: string, event: Record<string, unknown>): Promise<void> {
+  const path = stewardSupervisorLogPath(workspaceDir);
+  await mkdir(dirname(path), { recursive: true });
+  await appendFile(path, `${JSON.stringify(event)}\n`, 'utf8');
+}
+
+async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  await rename(tmp, path);
+}
+
+function isTerminal(status: StewardWakeRecord['status']): boolean {
+  return status === 'done' || status === 'blocked' || status === 'error' ||
+    status === 'stuck' || status === 'timeout';
+}
