@@ -35,7 +35,11 @@ state, or ownership.
   writes the workspace-local wake file, and injects a narrow `<STEWARD_WAKE>`
   into the configured interactive session instead of dispatching a new headless
   run. `POST /api/workspaces/:id/steward/supervisor/tick` advances ledger
-  completions, timeouts, stuck sessions, lock release, and cost state.
+  completions, timeouts, stuck sessions, lock release, and cost state. Scheduled
+  issues with `kind: steward-wake` now route through the same persistent wake
+  seam from `src/workspaces/schedule/scanner.ts:203-220` into
+  `src/workspaces/service.ts:650-913`; ordinary scheduled issues still run
+  headless.
 
 - UTA is the co-located broker carrier under `services/uta/`. Its process entry
   is `services/uta/src/main.ts:40`, its account manager starts at

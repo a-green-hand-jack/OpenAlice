@@ -10,6 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
 import { cliBinPath } from '@/core/paths.js';
@@ -29,6 +30,7 @@ import { runHeadlessProbe, type HeadlessProbeResult } from './probe.js';
 import { runHeadlessTask, type HeadlessTaskResult } from './headless-task.js';
 import { ScheduleMarkerStore } from './schedule/marker-store.js';
 import { ScheduleScanner, DEFAULT_INTERVAL_MS } from './schedule/scanner.js';
+import type { ScheduleStewardWakeInput } from './schedule/scanner.js';
 import {
   readWorkspaceIssues,
   snapshotScheduledIssue,
@@ -71,9 +73,16 @@ import { readReadmeVersion, TemplateRegistry } from './template-registry.js';
 import { readWorkspaceMetadata } from './workspace-metadata.js';
 import { TranscriptWatcher } from './transcript-watcher.js';
 import { detectAgentBinary, runtimeInstallOverride, type AgentAvailability } from './agent-detect.js';
+import { generatePetnameId } from './petname-id.js';
 import { resolveLaunchCommand } from './win-command.js';
 import { WorkspaceCreator } from './workspace-creator.js';
 import { WorkspaceRegistry, type WorkspaceMeta } from './workspace-registry.js';
+import {
+  createStewardLockStore,
+  createStewardWakeStore,
+  injectStewardWake,
+  StewardLockConflictError,
+} from './steward/index.js';
 
 /**
  * The fully-resolved spawn plan for a (workspace, adapter, resume-intent)
@@ -638,6 +647,249 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     return { taskId: rec.taskId };
   };
 
+  const dispatchStewardWakeMethod = async (
+    ws: WorkspaceMeta,
+    wake: ScheduleStewardWakeInput,
+  ): Promise<{ wakeId: string }> => {
+    const now = new Date(wake.nowMs).toISOString();
+    const deadline = new Date(wake.nowMs + (wake.deadlineMs ?? 180_000)).toISOString();
+    const wakeStore = createStewardWakeStore(ws.dir);
+    const lockStore = createStewardLockStore(ws.dir);
+    const config = await readStewardConfig(ws);
+
+    if (await wakeStore.get(wake.wakeId)) {
+      throw new Error(`steward wake already exists: ${wake.wakeId}`);
+    }
+    try {
+      await lockStore.acquire({
+        accountId: wake.accountId,
+        wakeId: wake.wakeId,
+        now,
+        expiresAt: deadline,
+      });
+    } catch (err) {
+      if (err instanceof StewardLockConflictError) throw err;
+      throw new Error(`steward lock failed: ${(err as Error).message}`);
+    }
+
+    let created = false;
+    try {
+      const record = await wakeStore.create({
+        wakeId: wake.wakeId,
+        deadline,
+        envelope: {
+          reason: wake.reason,
+          accountId: wake.accountId,
+          authzLevel: wake.authzLevel,
+          expectedDecision: wake.expectedDecision,
+          humanRequest: wake.humanRequest,
+          ...(wake.marketContext !== undefined ? { marketContext: wake.marketContext } : {}),
+          ...(wake.riskContext !== undefined ? { riskContext: wake.riskContext } : {}),
+        },
+        now,
+      });
+      created = true;
+      const selected = await ensureStewardScheduleSession(ws, config, wake.agent);
+      const injected = injectStewardWake({
+        pool,
+        sessionId: selected.sessionId,
+        record,
+      });
+      if (!injected) {
+        const message = `session not running: ${selected.sessionId}`;
+        await wakeStore.updateStatus(wake.wakeId, 'error', {
+          now: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+          sessionId: selected.sessionId,
+          error: message,
+        }).catch(() => undefined);
+        throw new Error(message);
+      }
+      const injectedAt = new Date().toISOString();
+      await wakeStore.updateStatus(wake.wakeId, 'injected', {
+        now: injectedAt,
+        injectedAt,
+        sessionId: selected.sessionId,
+      });
+      launcherLogger.info('schedule.steward_wake_injected', {
+        wsId: ws.id,
+        issueId: wake.issueId,
+        wakeId: wake.wakeId,
+        sessionId: selected.sessionId,
+        reused: selected.reused,
+        resumed: selected.resumed,
+      });
+      return { wakeId: wake.wakeId };
+    } catch (err) {
+      if (created) {
+        await wakeStore.updateStatus(wake.wakeId, 'error', {
+          now: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+          error: err instanceof Error ? err.message : String(err),
+        }).catch(() => undefined);
+      }
+      await lockStore.release(wake.accountId, wake.wakeId).catch(() => undefined);
+      throw err;
+    }
+  };
+
+  async function readStewardConfig(ws: WorkspaceMeta): Promise<Record<string, unknown>> {
+    try {
+      const raw = await readFile(join(ws.dir, '.alice', 'steward', 'config.json'), 'utf8');
+      if (raw.trim() === '') return {};
+      const parsed = JSON.parse(raw) as unknown;
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new Error('.alice/steward/config.json must be an object');
+      }
+      return parsed as Record<string, unknown>;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
+      throw err;
+    }
+  }
+
+  async function writeStewardSessionConfig(
+    ws: WorkspaceMeta,
+    current: Record<string, unknown>,
+    sessionId: string,
+    agent: string,
+  ): Promise<void> {
+    const path = join(ws.dir, '.alice', 'steward', 'config.json');
+    await mkdir(join(ws.dir, '.alice', 'steward'), { recursive: true });
+    await writeFile(path, `${JSON.stringify({
+      ...current,
+      version: typeof current['version'] === 'number' ? current['version'] : 1,
+      agent,
+      sessionId,
+    }, null, 2)}\n`, 'utf8');
+  }
+
+  async function ensureStewardScheduleSession(
+    ws: WorkspaceMeta,
+    config: Record<string, unknown>,
+    requestedAgent: string | undefined,
+  ): Promise<{ sessionId: string; agent: string; reused: boolean; resumed: boolean }> {
+    const configuredSessionId = typeof config['sessionId'] === 'string' ? config['sessionId'] : null;
+    const configuredAgent = typeof config['agent'] === 'string' ? config['agent'] : undefined;
+    await sessionRegistry.ensureLoaded(ws.id);
+    const configuredRecord = configuredSessionId
+      ? sessionRegistry.get(ws.id, configuredSessionId)
+      : undefined;
+    const agent = requestedAgent ?? configuredRecord?.agent ?? configuredAgent ?? 'codex';
+    const canUseConfigured = configuredSessionId !== null &&
+      (requestedAgent === undefined || requestedAgent === configuredRecord?.agent || requestedAgent === configuredAgent);
+
+    if (configuredSessionId && canUseConfigured && pool.get(configuredSessionId)) {
+      return { sessionId: configuredSessionId, agent, reused: true, resumed: false };
+    }
+    if (configuredRecord && canUseConfigured) {
+      return resumeStewardScheduleSession(ws, configuredRecord);
+    }
+    if (!ws.agents.includes(agent)) {
+      throw new Error(`workspace does not enable agent: ${agent}`);
+    }
+    const spawned = await spawnStewardScheduleSession(ws, agent);
+    await writeStewardSessionConfig(ws, config, spawned.sessionId, spawned.agent);
+    return spawned;
+  }
+
+  async function spawnStewardScheduleSession(
+    ws: WorkspaceMeta,
+    agentId: string,
+  ): Promise<{ sessionId: string; agent: string; reused: false; resumed: false }> {
+    const adapter = resolveAdapter(ws, agentId);
+    await ensureAgentCredentialReady({
+      meta: ws,
+      agentId: adapter.id,
+      adapter,
+      logger: launcherLogger,
+    });
+    if (adapter.bootstrap) {
+      await adapter.bootstrap({ wsId: ws.id, cwd: ws.dir, launcherRepoRoot: config.launcherRepoRoot });
+    }
+    await sessionRegistry.ensureLoaded(ws.id);
+    const prefix = adapter.namePrefix ?? adapter.id[0] ?? 's';
+    const recordId = generatePetnameId(adapter.id, {
+      fallbackPrefix: 'session',
+      isTaken: (candidate) =>
+        sessionRegistry.findById(candidate) !== undefined ||
+        pool.get(candidate) !== undefined,
+    });
+    const recordName = sessionRegistry.nextName(ws.id, adapter.id, prefix);
+    const nowIso = new Date().toISOString();
+    const record: SessionRecord = {
+      id: recordId,
+      wsId: ws.id,
+      agent: adapter.id,
+      name: recordName,
+      createdAt: nowIso,
+      lastActiveAt: nowIso,
+      state: 'running',
+    };
+    await sessionRegistry.create(record);
+    try {
+      const session = pool.spawn(ws.id, {
+        agentId: adapter.id,
+        recordId,
+        recordName,
+      });
+      launcherLogger.info('workspace.steward_session_spawned', {
+        id: ws.id,
+        sessionId: session.recordId,
+        name: session.name,
+        pid: session.pid,
+        agent: adapter.id,
+      });
+      return { sessionId: session.recordId, agent: adapter.id, reused: false, resumed: false };
+    } catch (err) {
+      await sessionRegistry.remove(ws.id, recordId).catch(() => undefined);
+      throw err;
+    }
+  }
+
+  async function resumeStewardScheduleSession(
+    ws: WorkspaceMeta,
+    record: SessionRecord,
+  ): Promise<{ sessionId: string; agent: string; reused: true; resumed: true }> {
+    const adapter = adapters.get(record.agent);
+    if (!adapter) throw new Error(`record references unknown adapter: ${record.agent}`);
+    if (!ws.agents.includes(record.agent)) throw new Error(`workspace does not enable agent: ${record.agent}`);
+    await ensureAgentCredentialReady({
+      meta: ws,
+      agentId: adapter.id,
+      adapter,
+      logger: launcherLogger,
+    });
+    if (adapter.bootstrap) {
+      await adapter.bootstrap({ wsId: ws.id, cwd: ws.dir, launcherRepoRoot: config.launcherRepoRoot });
+    }
+    const resume = resumeFromRecord(record, adapter);
+    const session = pool.spawn(ws.id, {
+      ...(resume !== undefined ? { resume } : {}),
+      agentId: record.agent,
+      recordId: record.id,
+      recordName: record.name,
+    });
+    const earlyExit = await session.waitForFirstExit(800);
+    if (earlyExit) {
+      pool.disposeToken(record.id, 'steward_schedule_resume_early_exit');
+      await sessionRegistry
+        .update(ws.id, record.id, { state: 'paused', lastActiveAt: new Date().toISOString() })
+        .catch(() => undefined);
+      throw new Error(`agent exited within startup window (code=${earlyExit.code})`);
+    }
+    await sessionRegistry
+      .update(ws.id, record.id, { state: 'running', lastActiveAt: new Date().toISOString() })
+      .catch((err) =>
+        launcherLogger.warn('session_registry.steward_schedule_resume_update_failed', {
+          id: ws.id,
+          sessionId: record.id,
+          err,
+        }),
+      );
+    return { sessionId: session.recordId, agent: adapter.id, reused: true, resumed: true };
+  }
+
   // ── Workspace self-scheduling. Scan each workspace's own `.alice/issues/*.md`
   // files and fire due SCHEDULED issues as headless runs through the SAME dispatch
   // primitive (issues without a `when` are pure board items, ignored here). The
@@ -655,6 +907,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       agentId ?? await resolveIssueDefaultAgentId(ws),
     ),
     dispatch: dispatchHeadlessTaskMethod,
+    dispatchStewardWake: dispatchStewardWakeMethod,
     markers: scheduleMarkers,
     logger: launcherLogger.child({ scope: 'schedule' }),
   });
