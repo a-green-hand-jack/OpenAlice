@@ -102,7 +102,11 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   acquires `.alice/steward/locks/*.json`, writes `.alice/steward/wakes/*.json`,
   reuses or resumes the configured interactive session via
   `src/webui/routes/workspaces.ts:352-507`, then calls
-  `src/workspaces/steward/injector.ts:19-28`. Manual supervisor tick at
+  `src/workspaces/steward/injector.ts:50-65` (shifted from `:19-28`, and now
+  async: issue #91 found the message write landing in one PTY burst never
+  actually submits in an interactive TUI — see the two-phase write + submit
+  gap documented at `src/workspaces/steward/injector.ts:19-47`). Manual
+  supervisor tick at
   `src/webui/routes/workspaces.ts:871-906` advances completed, stuck, or timed-out
   wakes and writes cost state/audit log.
 - Scheduled steward wakes follow the same workspace-local files and PTY injector:
