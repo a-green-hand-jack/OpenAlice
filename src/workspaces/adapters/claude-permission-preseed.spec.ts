@@ -45,6 +45,12 @@ describe('claude adapter — permission pre-seed (issue #92)', () => {
     );
   });
 
+  it('composeCommand carries bare Write/Edit grants (maintainer-approved, unblocks the ledger-write step a Bash rule cannot cover)', () => {
+    const settings = settingsArg(claudeAdapter.composeCommand(['claude'], ctx()));
+    const permissions = settings['permissions'] as { allow: string[] };
+    expect(permissions.allow).toEqual(expect.arrayContaining(['Write', 'Edit']));
+  });
+
   it('composeHeadlessCommand carries the same allow list', () => {
     expect(claudeAdapter.composeHeadlessCommand).toBeDefined();
     const argv = claudeAdapter.composeHeadlessCommand!(['claude'], ctx(), 'run the checklist');

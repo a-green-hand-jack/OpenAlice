@@ -42,15 +42,34 @@ const CLAUDE_SETTINGS_PATH = '.claude/settings.local.json';
  * only two `injectTools` templates) already teach these same binaries
  * unconditionally.
  *
- * NOT covered by this list: the separate "Contains brace with quote
- * character (expansion obfuscation)" prompt seen when a heredoc body embeds
- * JSON (e.g. a `cat >> ledger.jsonl <<'EOF' ... EOF` ledger write). That is a
- * static too-complex/unparseable classification Claude Code applies before
- * any `permissions.allow` rule is even consulted — verified empirically that
- * it still fires with a matching `Bash(cat *)` allow rule in place. See the
- * PR description for what does and doesn't route around it.
+ * A Bash allow rule cannot cover everything: a heredoc body that embeds JSON
+ * (e.g. `cat >> ledger.jsonl <<'EOF' ... EOF`, the steward's original
+ * ledger-write pattern) trips a SEPARATE "Contains brace with quote
+ * character (expansion obfuscation)" prompt — a static too-complex/
+ * unparseable classification Claude Code applies before any
+ * `permissions.allow` Bash rule is even consulted (verified empirically: it
+ * still fires with a matching `Bash(cat *)` rule in place). Confirmed live
+ * 2026-07-08 running a real steward campaign cell (issue #101): this
+ * stalled an unattended wake at the ledger-write step with no one to answer
+ * the prompt.
+ *
+ * The only path that fully clears it: skip Bash for that step entirely and
+ * use Claude Code's native `Write`/`Edit` tool instead, pre-approved via the
+ * bare tool names below (no path-scoped form like `Write(decisions.jsonl)`
+ * or `Write(**)` worked in this Claude Code version — only the bare name
+ * does). This is a materially broader grant than the Bash rules above: it
+ * waives confirmation for the FIRST write/edit of any file in the session,
+ * not just the ledger — a deliberate, maintainer-approved tradeoff (2026-07-
+ * 09) specifically to unblock unattended steward campaign runs, not a
+ * default this adapter would pick unprompted. `docs/steward-persistent-loop-
+ * implementation.zh.md` §13 records the decision. This alone does not fix
+ * anything by itself — the steward's ledger-write instructions (see the
+ * `steward` template's `instruction.md`, issue #98) must actually tell the
+ * agent to use the Write/Edit tool for this step rather than a Bash
+ * heredoc, or the permission grant sits unused.
  */
 const PRETRUSTED_BASH_TOOLS = ['alice', 'alice-analysis', 'alice-uta', 'alice-workspace', 'traderhub'];
+const PRETRUSTED_FILE_TOOLS = ['Write', 'Edit'];
 
 /**
  * Claude Code can park project-scoped MCP servers at "⏸ Pending approval" when
@@ -62,7 +81,10 @@ const PRETRUSTED_BASH_TOOLS = ['alice', 'alice-analysis', 'alice-uta', 'alice-wo
 const AUTOTRUST_SETTINGS = JSON.stringify({
   enableAllProjectMcpServers: true,
   permissions: {
-    allow: PRETRUSTED_BASH_TOOLS.map((bin) => `Bash(${bin} *)`),
+    allow: [
+      ...PRETRUSTED_BASH_TOOLS.map((bin) => `Bash(${bin} *)`),
+      ...PRETRUSTED_FILE_TOOLS,
+    ],
   },
 });
 
