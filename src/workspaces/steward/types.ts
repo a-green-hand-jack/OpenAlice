@@ -71,15 +71,26 @@ export const stewardCompletionSchema = z.object({
 }).passthrough();
 export type StewardCompletion = z.infer<typeof stewardCompletionSchema>;
 
+// A smaller/cheaper steward model (observed: claude-haiku-4-5-20251001) has
+// been seen writing these numeric fields as JSON strings (e.g. `"0"` instead
+// of `0`). z.coerce.number() tolerates that ("0" -> 0, "12.5" -> 12.5) while
+// still rejecting genuinely non-numeric strings ("abc" -> fails). Composed
+// with plain `.nullable()` this still round-trips a real `null` as `null`
+// (verified against this repo's zod@4.3.6: `.nullable()` short-circuits on
+// `null` input before the coerce step runs, so null is never coerced to 0) —
+// no `z.union([z.null(), ...])` workaround needed. Applied to every numeric
+// field here, including the integer token counts, since the same
+// stringify-everything failure mode is just as plausible for those as it was
+// for the USD cost fields actually observed.
 export const stewardCostSchema = z.object({
   model: z.string().min(1).nullable(),
-  inputTokens: z.number().int().nonnegative().nullable(),
-  outputTokens: z.number().int().nonnegative().nullable(),
-  modelCostUsd: z.number().nonnegative().nullable(),
-  allocatedServerCostUsd: z.number().nonnegative().nullable(),
-  tradingFeesUsd: z.number().nonnegative().nullable(),
-  estimatedSlippageUsd: z.number().nonnegative().nullable(),
-  totalEstimatedCostUsd: z.number().nonnegative().nullable(),
+  inputTokens: z.coerce.number().int().nonnegative().nullable(),
+  outputTokens: z.coerce.number().int().nonnegative().nullable(),
+  modelCostUsd: z.coerce.number().nonnegative().nullable(),
+  allocatedServerCostUsd: z.coerce.number().nonnegative().nullable(),
+  tradingFeesUsd: z.coerce.number().nonnegative().nullable(),
+  estimatedSlippageUsd: z.coerce.number().nonnegative().nullable(),
+  totalEstimatedCostUsd: z.coerce.number().nonnegative().nullable(),
 }).passthrough();
 export type StewardCost = z.infer<typeof stewardCostSchema>;
 

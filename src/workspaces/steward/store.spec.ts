@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -11,6 +11,7 @@ import {
   createStewardSupervisor,
   createStewardWakeStore,
   DECISION_LEDGER_SCHEMA_VERSION,
+  parseStewardDecisionLedgerEntry,
   StewardLockConflictError,
   stewardStatePath,
   stewardSupervisorLogPath,
@@ -195,13 +196,89 @@ describe('StewardLedgerStore', () => {
     await expect(store.append(missingCostField as unknown as StewardDecisionLedgerEntry)).rejects.toThrow();
   });
 
-  it('surfaces invalid persisted ledger lines with line numbers', async () => {
+  it('coerces numeric-string cost fields to actual numbers (a smaller model\'s observed mistake)', async () => {
     const store = createStewardLedgerStore(dir);
-    await store.append(ledgerEntry({ wakeId: 'wake-1' }));
-    await rm(store.path(), { force: true });
-    await writeFile(store.path(), `${JSON.stringify(ledgerEntry({ wakeId: 'wake-1' }))}\n{"bad":true}\n`, 'utf8');
+    // A well-formed entry, but with every numeric `cost` field written as a
+    // JSON string -- exactly what a claude-haiku-4-5-20251001 steward session
+    // was observed producing live. Built as a plain object (not the typed
+    // `ledgerEntry()` helper) since the whole point is that these fields are
+    // NOT the number type the schema declares.
+    const rawEntry = {
+      ...ledgerEntry({ wakeId: 'wake-str-cost' }),
+      cost: {
+        model: 'claude-haiku-4-5-20251001',
+        inputTokens: '120',
+        outputTokens: '45',
+        modelCostUsd: '0.01',
+        allocatedServerCostUsd: '0',
+        tradingFeesUsd: '0',
+        estimatedSlippageUsd: '0',
+        totalEstimatedCostUsd: '0',
+      },
+    };
 
-    await expect(store.read()).rejects.toThrow(/invalid steward decision ledger line 2/);
+    await mkdir(dirname(store.path()), { recursive: true });
+    await writeFile(store.path(), `${JSON.stringify(rawEntry)}\n`, 'utf8');
+
+    const entries = await store.read();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].cost.tradingFeesUsd).toBe(0);
+    expect(typeof entries[0].cost.tradingFeesUsd).toBe('number');
+    expect(entries[0].cost.estimatedSlippageUsd).toBe(0);
+    expect(typeof entries[0].cost.estimatedSlippageUsd).toBe('number');
+    expect(entries[0].cost.totalEstimatedCostUsd).toBe(0);
+    expect(entries[0].cost.modelCostUsd).toBeCloseTo(0.01);
+    expect(typeof entries[0].cost.modelCostUsd).toBe('number');
+    expect(entries[0].cost.inputTokens).toBe(120);
+    expect(typeof entries[0].cost.inputTokens).toBe('number');
+    expect(entries[0].cost.outputTokens).toBe(45);
+    expect(typeof entries[0].cost.outputTokens).toBe('number');
+
+    // parseStewardDecisionLedgerEntry (also used directly by `append`) applies
+    // the same coercion independent of the store's read-from-disk path, and a
+    // real `null` cost value must still parse as `null`, not get coerced to 0.
+    const parsedDirectly = parseStewardDecisionLedgerEntry(rawEntry);
+    expect(parsedDirectly.cost.tradingFeesUsd).toBe(0);
+    expect(typeof parsedDirectly.cost.tradingFeesUsd).toBe('number');
+    const withNullCost = parseStewardDecisionLedgerEntry({
+      ...rawEntry,
+      cost: { ...rawEntry.cost, tradingFeesUsd: null },
+    });
+    expect(withNullCost.cost.tradingFeesUsd).toBeNull();
+  });
+
+  it('skips a genuinely malformed ledger line without throwing, and still returns every other valid entry', async () => {
+    const store = createStewardLedgerStore(dir);
+    const good1 = ledgerEntry({ wakeId: 'wake-good-1', at: '2026-07-08T14:01:00.000Z' });
+    const good2 = ledgerEntry({ wakeId: 'wake-good-2', at: '2026-07-08T14:02:00.000Z' });
+    const missingDecision = { ...ledgerEntry({ wakeId: 'wake-missing-decision' }) } as Record<string, unknown>;
+    delete missingDecision.decision;
+
+    await mkdir(dirname(store.path()), { recursive: true });
+    await writeFile(
+      store.path(),
+      [
+        JSON.stringify(good1),
+        'not valid json at all',
+        JSON.stringify(missingDecision),
+        JSON.stringify(good2),
+      ].join('\n') + '\n',
+      'utf8',
+    );
+
+    const entries = await store.read();
+    expect(entries.map((e) => e.wakeId)).toEqual(['wake-good-1', 'wake-good-2']);
+
+    const diagnostics = await store.readDiagnostics();
+    expect(diagnostics.entries.map((e) => e.wakeId)).toEqual(['wake-good-1', 'wake-good-2']);
+    expect(diagnostics.invalid).toHaveLength(2);
+    expect(diagnostics.invalid[0].line).toBe(2);
+    expect(diagnostics.invalid[1].line).toBe(3);
+
+    // findByWakeId, built on read(), sees neither the invalid-JSON line nor
+    // the missing-field line as a match -- it doesn't throw either.
+    expect(await store.findByWakeId('wake-missing-decision')).toBeNull();
+    expect((await store.findByWakeId('wake-good-2'))?.wakeId).toBe('wake-good-2');
   });
 });
 
@@ -301,6 +378,88 @@ describe('StewardSupervisor', () => {
     const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
     expect(log).toContain('"type":"wake_completed"');
     expect(log).toContain('"type":"cost_summary"');
+  });
+
+  it('reconciles a good wake even when another wake\'s ledger line is malformed', async () => {
+    const wakeStore = createStewardWakeStore(dir);
+    const lockStore = createStewardLockStore(dir);
+    const ledgerStore = createStewardLedgerStore(dir);
+    const badEnvelope: StewardWakeEnvelope = { ...envelope, accountId: 'mock-simulator-2' };
+
+    // wake-good: a normal wake with a well-formed ledger entry -> should
+    // reconcile to 'done' same as any other tick.
+    await wakeStore.create({
+      wakeId: 'wake-good',
+      deadline: '2026-07-08T14:03:00.000Z',
+      envelope,
+      now: '2026-07-08T14:00:00.000Z',
+    });
+    await wakeStore.updateStatus('wake-good', 'injected', {
+      now: '2026-07-08T14:00:05.000Z',
+      injectedAt: '2026-07-08T14:00:05.000Z',
+      sessionId: 'session-good',
+    });
+    await lockStore.acquire({
+      accountId: envelope.accountId,
+      wakeId: 'wake-good',
+      now: '2026-07-08T14:00:00.000Z',
+      expiresAt: '2026-07-08T14:03:00.000Z',
+    });
+
+    // wake-bad: a DIFFERENT wake (different account) whose ledger line is
+    // genuinely malformed (missing `decision`) -- must not block wake-good's
+    // reconciliation in the same tick.
+    await wakeStore.create({
+      wakeId: 'wake-bad',
+      deadline: '2026-07-08T14:03:00.000Z',
+      envelope: badEnvelope,
+      now: '2026-07-08T14:00:00.000Z',
+    });
+    await wakeStore.updateStatus('wake-bad', 'injected', {
+      now: '2026-07-08T14:00:05.000Z',
+      injectedAt: '2026-07-08T14:00:05.000Z',
+      sessionId: 'session-bad',
+    });
+    await lockStore.acquire({
+      accountId: 'mock-simulator-2',
+      wakeId: 'wake-bad',
+      now: '2026-07-08T14:00:00.000Z',
+      expiresAt: '2026-07-08T14:03:00.000Z',
+    });
+
+    const goodEntry = ledgerEntry({ wakeId: 'wake-good', at: '2026-07-08T14:01:00.000Z' });
+    const badEntry = {
+      ...ledgerEntry({ wakeId: 'wake-bad', at: '2026-07-08T14:01:05.000Z' }),
+    } as Record<string, unknown>;
+    delete badEntry.decision;
+
+    await mkdir(dirname(ledgerStore.path()), { recursive: true });
+    await writeFile(
+      ledgerStore.path(),
+      `${JSON.stringify(goodEntry)}\n${JSON.stringify(badEntry)}\n`,
+      'utf8',
+    );
+
+    const result = await createStewardSupervisor(dir).tick({
+      now: '2026-07-08T14:01:30.000Z',
+      isSessionRunning: () => true,
+    });
+
+    expect(result.transitions).toContainEqual({
+      wakeId: 'wake-good',
+      from: 'injected',
+      to: 'done',
+      reason: 'ledger:done',
+    });
+    expect((await wakeStore.get('wake-good'))?.status).toBe('done');
+    expect(await lockStore.get(envelope.accountId)).toBeNull();
+
+    // wake-bad has no PARSEABLE ledger entry this tick (its line was skipped,
+    // not thrown), so the supervisor simply falls through to its
+    // deadline/liveness checks same as "no entry yet" -- it does NOT crash the
+    // whole tick, and wake-good still reconciled above.
+    expect((await wakeStore.get('wake-bad'))?.status).toBe('injected');
+    expect(await lockStore.get('mock-simulator-2')).not.toBeNull();
   });
 
   it('marks injected wakes stuck when the session is gone before deadline', async () => {
