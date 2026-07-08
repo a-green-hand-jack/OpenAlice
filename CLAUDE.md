@@ -112,6 +112,14 @@ wiring. When working on one of these, read its guide first:
   where they live. Rules that matter: demo accounts only, never trust the
   ledger over the venue, leave accounts flat, one regression spec per fix.
 
+- **Steward workspace behavior** —
+  [docs/steward-workspace-behavior-contract.zh.md](docs/steward-workspace-behavior-contract.zh.md).
+  Read before changing steward templates, prompt/skills, wake/session behavior,
+  trading-agent loops, or docs that describe how the agent should act inside a
+  workspace. The target behavior is a persistent workspace steward that treats
+  structured workspace context as its world, not a fresh coding-agent run over
+  the OpenAlice source tree.
+
 ## Surfacing future work — Linear, not TODO.md
 
 When a session notices something worth fixing later but **out of scope

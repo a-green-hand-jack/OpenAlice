@@ -1,11 +1,17 @@
 # Event System Guide
 
-Alice's async lifecycle runs on a typed pub-sub bus. Cron timers, connector
-gateways, and external webhooks emit events; Listeners react to them and may
-emit downstream events. **Read this before adding a new event type, Listener,
-or Producer** — the system has a small amount of structure that's easy to
-miss, and skipping steps silently works in dev but breaks in subtle ways
-(missing validation, invisible in the Flow graph, forgery via webhook, etc.).
+> Status: current for the typed EventLog / ListenerRegistry / webhook ingest
+> layer. The old ConnectorCenter, task-router listener, cron engine, and
+> in-process AgentWork consumer are retired; do not use this page to recreate
+> the legacy chat path.
+
+Alice's async lifecycle runs on a typed pub-sub bus. Webhook ingest, UTA
+trade/risk lifecycle notifications, authz route changes, and other local
+producers emit events; Listeners react to them and may emit downstream events.
+**Read this before adding a new event type, Listener, or Producer** — the
+system has a small amount of structure that's easy to miss, and skipping steps
+silently works in dev but breaks in subtle ways (missing validation, invisible
+in the Flow graph, forgery via webhook, etc.).
 
 If the Flow tab on `/automation` is live, it's the best visual reference for
 what's already there.
@@ -20,15 +26,12 @@ discriminated-union narrowing anywhere you hold an `EventLogEntry`.
 **Listener** — reactive. Subscribes to one or more event types (or `'*'` for
 all), runs a handler, optionally emits follow-up events. Owns its own
 lifecycle; registers with the [ListenerRegistry](../src/core/listener-registry.ts).
-Canonical example: [cron-router](../src/task/cron/listener.ts).
+Canonical example: [event-metrics](../src/task/metrics/listener.ts).
 
 **Producer (Pumper)** — pure event source. Only emits, never subscribes.
-Declared against the same registry. Canonical examples: [cron-engine](../src/task/cron/engine.ts)
-(timer), [webhook-ingest](../src/webui/plugin.ts) (HTTP),
-[connectors](../src/core/connector-center.ts) (shared across every connector
-plugin — Web chat, Telegram, future Discord/Slack/etc., all emit
-`message.received` / `message.sent` through ConnectorCenter's single
-`connectors` producer rather than declaring their own).
+Declared against the same registry. Canonical examples:
+[webhook-ingest](../src/webui/plugin.ts) (HTTP ingest for external and
+internal-token UTA events) and `authz-routes` in the same file.
 
 Listeners and Producers **share one name namespace** — a name cannot be both.
 The registry enforces this at declare time.
@@ -38,9 +41,9 @@ The registry enforces this at declare time.
 ```
             ┌─────────────┐
  Producers ─┤             │─ event-in  → Listener ─ event-out
-  (timers,  │  EventLog   │
-   HTTP,    │  (pub-sub)  │
-   sockets) │             │
+  (HTTP,    │  EventLog   │
+   UTA,     │  (pub-sub)  │
+   routes)  │             │
             └─────────────┘
 ```
 
@@ -69,8 +72,8 @@ The registry enforces this at declare time.
 | Producer types | [src/core/producer.ts](../src/core/producer.ts) |
 | Registry (register / declareProducer / start / stop) | [src/core/listener-registry.ts](../src/core/listener-registry.ts) |
 | EventLog itself | [src/core/event-log.ts](../src/core/event-log.ts) |
-| Reference Listener (subscribe → agent → emit done/error) | [src/task/task-router/listener.ts](../src/task/task-router/listener.ts) |
-| Reference Producer (timer) | [src/task/cron/engine.ts](../src/task/cron/engine.ts) |
+| Reference Listener | [src/task/metrics/listener.ts](../src/task/metrics/listener.ts) |
+| Reference Producer declarations | [src/webui/plugin.ts](../src/webui/plugin.ts) |
 | Webhook ingest gate | [src/webui/routes/events.ts](../src/webui/routes/events.ts) + [webhook-auth.ts](../src/webui/routes/webhook-auth.ts) |
 | Flow visualization | [ui/src/pages/AutomationFlowSection.tsx](../ui/src/pages/AutomationFlowSection.tsx) |
 | Webhook docs UI | [ui/src/pages/AutomationWebhookSection.tsx](../ui/src/pages/AutomationWebhookSection.tsx) |
@@ -136,7 +139,10 @@ target for any Listener's `subscribes` or `ctx.emit`.
 
 ## Recipe: add a new Listener
 
-Copy the task-router pattern ([task-router/listener.ts](../src/task/task-router/listener.ts)):
+Follow the lifecycle pattern in
+[event-metrics](../src/task/metrics/listener.ts): keep registration idempotent,
+own `start()` / `stop()`, and register against the shared `ListenerRegistry`.
+For a listener that emits follow-up events, the skeleton is:
 
 ```ts
 const MY_EMITS = ['my.done', 'my.error'] as const  // `as const` is load-bearing — TS needs the literal tuple
@@ -172,16 +178,16 @@ Wire in [main.ts](../src/main.ts): `const x = createMyListener({ registry: liste
 or register lazily after (the registry handles both, but the idiom is
 register-then-start).
 
-Write a spec file mirroring [task-router/listener.spec.ts](../src/task/task-router/listener.spec.ts):
-real `EventLog` + `ListenerRegistry`, mocked agentCenter / connectorCenter,
-append the subscribed event and assert downstream events appeared.
+Write a spec with a real `EventLog` + `ListenerRegistry`: start the listener,
+append the subscribed event, and assert downstream events appeared (or, for a
+pure observer like `event-metrics`, assert the observer state changed).
 
 ### Subscribe / emit grammar cheatsheet
 
 | Form | Meaning | Flow rendering |
 |---|---|---|
-| `subscribes: 'cron.fire'` | Single type | Concrete edge from left-column node |
-| `subscribes: ['cron.fire', 'agent.work.requested'] as const` | Enumerated tuple | N concrete edges |
+| `subscribes: 'trade.pushed'` | Single type | Concrete edge from left-column node |
+| `subscribes: ['trade.pushed', 'trade.rejected'] as const` | Enumerated tuple | N concrete edges |
 | `subscribes: '*'` | All events | Left-side aura (no edges) |
 | `emits` omitted | Emits nothing (ctx.emit is unusable) | No right-side edges |
 | `emits: ['my.done', 'my.error'] as const` | Enumerated tuple | N concrete edges |
@@ -207,16 +213,11 @@ await producer.emit('my.event', { ... })
 producer.dispose()  // call from the owning module's shutdown
 ```
 
-**Special case: adding a new Connector plugin.** If you're wiring a new
-Connector (Discord, Slack, IMAP, etc.), **do not** declare your own
-`message.received` / `message.sent` producer. That pump is owned by
-ConnectorCenter as a single shared `connectors` producer — your plugin
-calls `ctx.connectorCenter.emitMessageReceived(...)` /
-`ctx.connectorCenter.emitMessageSent(...)` at the points it observes
-incoming / outgoing messages. The `channel` field on the payload carries
-source attribution (`'web'` / `'telegram'` / ...). This keeps the Flow
-graph clean (one producer node, not one per connector) and means new
-connectors don't have to reinvent the lifecycle wiring each time.
+**Legacy connector note.** The old ConnectorCenter path is retired. Do not add
+new Discord/Slack/Telegram-style plugins by reviving `message.received` /
+`message.sent` producers. New agent-facing capability should normally be a
+workspace template, satellite repo, Inbox push flow, or a deliberately designed
+new route/producer pair.
 
 When choosing `emits`:
 
