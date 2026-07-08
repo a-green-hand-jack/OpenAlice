@@ -79,8 +79,10 @@ state, or ownership.
   registry (including launcher-owned workspace `authzLevel` changed through
   Alice's audited workspace route), session records, scrollback, headless tasks,
   and workspace repos. Steward workspaces additionally carry their template-owned
-  `.alice/steward/` context/ledger scaffold inside the workspace repo. The
-  default root is `src/workspaces/config.ts:107-109`.
+  `.alice/steward/` context/ledger scaffold inside the workspace repo; Alice's
+  steward file-store helpers under `src/workspaces/steward/` read/write that
+  workspace-local source of truth. The default root is
+  `src/workspaces/config.ts:107-109`.
 
 - Secrets are not stored in plaintext data files after sealing. The machine key
   is outside portable `data/`, at `src/core/sealing.ts:49-50`.
