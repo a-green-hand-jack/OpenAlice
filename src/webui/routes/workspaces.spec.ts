@@ -18,7 +18,11 @@ import {
   resolveWorkspaceToolAuthzLevel,
 } from '../../core/workspace-tool-center.js';
 import type { ProducerHandle } from '../../core/producer.js';
-import { createStewardLedgerStore, DECISION_LEDGER_SCHEMA_VERSION } from '../../workspaces/steward/index.js';
+import {
+  createStewardLedgerStore,
+  DECISION_LEDGER_SCHEMA_VERSION,
+  STEWARD_WAKE_SUBMIT_DELAY_MS,
+} from '../../workspaces/steward/index.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -137,6 +141,24 @@ async function patch(app: any, path: string, body?: unknown, headers?: Record<st
   });
   const json = await res.json().catch(() => null);
   return { status: res.status, body: json as any };
+}
+
+// Only for callers under fake timers whose POST is expected to reach
+// injectStewardWake (issue #91) and actually inject — i.e. NOT a 409/blocked
+// wake POST, which never schedules the submit-gap timer. `post()` alone
+// would hang under vi.useFakeTimers() until vitest's own real-time test
+// timeout, because the submit-gap `setTimeout` never gets a fake-clock
+// advance. `vi.waitFor` polls with REAL timers (documented vitest behavior,
+// unaffected by vi.useFakeTimers()) until the route handler's real async
+// prep work (wake/lock file writes, session spawn) has actually reached and
+// registered that timer, then a single fake-clock advance fires it.
+async function postWake(app: any, path: string, body?: unknown) {
+  const reqPromise = post(app, path, body);
+  await vi.waitFor(() => {
+    if (vi.getTimerCount() === 0) throw new Error('submit-gap timer not scheduled yet');
+  }, { timeout: 2000, interval: 5 });
+  await vi.advanceTimersByTimeAsync(STEWARD_WAKE_SUBMIT_DELAY_MS);
+  return reqPromise;
 }
 
 function buildSteward(opts: { dir: string }) {
@@ -330,12 +352,27 @@ describe('PATCH /:id/authz-level', () => {
 })
 
 describe('steward wake API', () => {
+  // injectStewardWake (issue #91) does a real two-phase write: message body,
+  // then — after STEWARD_WAKE_SUBMIT_DELAY_MS — a separate bare `\r`. Rather
+  // than actually burning that wall-clock delay per wake POST (as
+  // injector.spec.ts already shows), fake the clock for this describe block
+  // and advance it explicitly around each wake POST. Scoped to THIS describe
+  // only — vi.useRealTimers() in afterEach keeps it from leaking into
+  // sibling describes in this file.
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('creates a wake file, spawns a Codex session, injects the wake, and records session config', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
     try {
       const { app, pool, writtenInputs } = buildSteward({ dir });
 
-      const r = await post(app, '/ws-1/steward/wakes', {
+      const r = await postWake(app, '/ws-1/steward/wakes', {
         wakeId: 'wake:1',
         reason: 'scheduled_observe',
         accountId: 'mock-simulator-1',
@@ -360,10 +397,15 @@ describe('steward wake API', () => {
       });
       expect(r.body.session).toMatchObject({ agent: 'codex', reused: false });
       expect(pool.spawn).toHaveBeenCalledOnce();
-      expect(writtenInputs).toHaveLength(1);
+      // Two-phase submit (issue #91): message body write, then a separate
+      // bare `\r` write once the paste/submit gap has elapsed.
+      expect(writtenInputs).toHaveLength(2);
       expect(String(writtenInputs[0]?.input)).toContain('<STEWARD_WAKE id="wake:1"');
       expect(String(writtenInputs[0]?.input)).toContain('.alice/steward/wakes/wake%3A1.json');
       expect(writtenInputs[0]?.opts).toEqual({ source: 'steward-supervisor' });
+      expect(writtenInputs[1]?.input).toBe('\r');
+      expect(writtenInputs[1]?.sessionId).toBe(writtenInputs[0]?.sessionId);
+      expect(writtenInputs[1]?.opts).toEqual({ source: 'steward-supervisor' });
 
       const config = JSON.parse(await readFile(join(dir, '.alice/steward/config.json'), 'utf8')) as {
         agent: string;
@@ -395,7 +437,7 @@ describe('steward wake API', () => {
       const { app, pool, writtenInputs, live } = buildSteward({ dir });
       live.set('configured-session', { recordId: 'configured-session' });
 
-      const r = await post(app, '/ws-1/steward/wakes', {
+      const r = await postWake(app, '/ws-1/steward/wakes', {
         wakeId: 'wake-reuse',
         reason: 'user_request',
         accountId: 'mock-simulator-1',
@@ -438,7 +480,7 @@ describe('steward wake API', () => {
       });
       vi.mocked(sessionRegistry.create).mockClear();
 
-      const r = await post(app, '/ws-1/steward/wakes', {
+      const r = await postWake(app, '/ws-1/steward/wakes', {
         wakeId: 'wake-resume',
         reason: 'supervisor_recovery',
         accountId: 'mock-simulator-1',
@@ -470,7 +512,7 @@ describe('steward wake API', () => {
     const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
     try {
       const { app } = buildSteward({ dir });
-      await post(app, '/ws-1/steward/wakes', {
+      await postWake(app, '/ws-1/steward/wakes', {
         wakeId: 'wake-ledger',
         reason: 'scheduled_observe',
         accountId: 'mock-simulator-1',
@@ -528,7 +570,7 @@ describe('steward wake API', () => {
     const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
     try {
       const { app } = buildSteward({ dir });
-      const first = await post(app, '/ws-1/steward/wakes', {
+      const first = await postWake(app, '/ws-1/steward/wakes', {
         wakeId: 'wake-active',
         reason: 'scheduled_observe',
         accountId: 'mock-simulator-1',
@@ -593,7 +635,7 @@ describe('steward wake API', () => {
       }]);
       expect(tick.body.cost.totalEstimatedCostUsd).toBe(10);
 
-      const second = await post(app, '/ws-1/steward/wakes', {
+      const second = await postWake(app, '/ws-1/steward/wakes', {
         wakeId: 'wake-overlap',
         reason: 'market_event',
         accountId: 'mock-simulator-1',

@@ -833,7 +833,7 @@ export function createWorkspaceRoutes(
       return c.json(selected.body, selected.status as 400 | 500);
     }
 
-    const injected = injectStewardWake({
+    const injected = await injectStewardWake({
       pool: svc.pool,
       sessionId: selected.sessionId,
       record,

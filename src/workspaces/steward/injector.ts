@@ -16,16 +16,52 @@ export function formatStewardWakeMessage(record: StewardWakeRecord): string {
   ].join('\n');
 }
 
-export function injectStewardWake(input: {
+/**
+ * Paste/submit gap between the message-body write and the follow-up Enter.
+ *
+ * This is NOT just an Ink paste-debounce tuning knob — for a freshly
+ * spawned session (the common case: `ensureStewardSession` spawns, then
+ * immediately injects) the two writes race the CLI's own startup. If the
+ * body lands before the child has switched its tty into raw mode and
+ * started actually reading stdin, the OS pty layer has nowhere to deliver
+ * it yet; when the follow-up `\r` is written too soon after, both chunks
+ * get coalesced into the SAME read() once the app finally starts polling,
+ * and a multi-character read (body + `\r` together) is indistinguishable
+ * from a paste — the trailing `\r` is swallowed into it instead of being
+ * recognized as a standalone Enter keystroke. Only once the two writes
+ * land as genuinely separate reads does the lone `\r` register as Enter.
+ *
+ * Empirically measured against a live `claude` (Claude Code) session,
+ * repeated fresh-spawn trials writing the real multi-line wake body then
+ * a bare `\r` after N ms (see issue #91 investigation): 300ms and 1200ms
+ * reliably failed (message left sitting unsubmitted in the composer,
+ * confirmed via attached-terminal capture AND an empty
+ * `~/.claude/projects/.../*.jsonl` transcript — no turn ever started);
+ * 1500ms was flaky (1 pass / 1 fail across trials); 2000ms, 2500ms, and
+ * 3000ms passed consistently. 3000ms is chosen for margin over the
+ * observed ~2000ms threshold — this sandboxed test host runs the CLI
+ * alongside several other concurrent dev processes, so a production
+ * machine's startup-to-raw-mode time should usually be faster, not
+ * slower. The 25ms Codex gap from the superseded PR #72 is unrelated to
+ * this race (that route wrote AFTER an already-running Codex session).
+ */
+export const STEWARD_WAKE_SUBMIT_DELAY_MS = 3000;
+
+export async function injectStewardWake(input: {
   readonly pool: SessionPool;
   readonly sessionId: string;
   readonly record: StewardWakeRecord;
-}): boolean {
-  return input.pool.writeToSession(
+}): Promise<boolean> {
+  const wroteBody = input.pool.writeToSession(
     input.sessionId,
     formatStewardWakeMessage(input.record),
     { source: 'steward-supervisor' },
   );
+  if (!wroteBody) return false;
+
+  await new Promise((resolve) => setTimeout(resolve, STEWARD_WAKE_SUBMIT_DELAY_MS));
+
+  return input.pool.writeToSession(input.sessionId, '\r', { source: 'steward-supervisor' });
 }
 
 function escapeAttr(value: string): string {
