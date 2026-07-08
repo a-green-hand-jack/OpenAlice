@@ -31,7 +31,8 @@ state, or ownership.
   steward wake injection; see `src/workspaces/persistent-session.ts` and
   `src/workspaces/session-pool.ts`. The first manual persistent-steward wake
   path is `POST /api/workspaces/:id/steward/wakes`, implemented in
-  `src/webui/routes/workspaces.ts:744-935`, which acquires the account lock,
+  `src/webui/routes/workspaces.ts:751-970` (shifted from `:744-935` by issue
+  #88's stuck-wake Inbox push addition), which acquires the account lock,
   writes the workspace-local wake file, and injects a narrow `<STEWARD_WAKE>`
   into the configured interactive session instead of dispatching a new headless
   run. `POST /api/workspaces/:id/steward/supervisor/tick` advances ledger
