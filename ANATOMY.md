@@ -24,7 +24,9 @@ state, or ownership.
   [docs/openalice-agent-support.zh.md](docs/openalice-agent-support.zh.md). For
   the target trading-steward behavior inside a workspace (workspace-as-world,
   persistent session, wake envelope, checklist, and decision ledger), start with
-  [docs/steward-workspace-behavior-contract.zh.md](docs/steward-workspace-behavior-contract.zh.md).
+  [docs/steward-workspace-behavior-contract.zh.md](docs/steward-workspace-behavior-contract.zh.md);
+  for the current minimal implementation design, continue to
+  [docs/steward-persistent-loop-implementation.zh.md](docs/steward-persistent-loop-implementation.zh.md).
 
 - UTA is the co-located broker carrier under `services/uta/`. Its process entry
   is `services/uta/src/main.ts:40`, its account manager starts at
