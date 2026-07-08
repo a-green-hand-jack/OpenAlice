@@ -108,13 +108,22 @@ When a steward wake arrives:
 4. Decide exactly one outcome for this wake, using the Mandate, Evidence-First
    Reasoning, Participation Bias, and Risk Discipline above:
    `no_trade`, `propose_trade`, or `blocked`.
-5. Append exactly one JSON object as a single line to
+5. If the decision is `propose_trade`, act on it now, before writing the
+   ledger entry: place the order with the `alice-uta` CLI, attaching a
+   stopLoss per Risk Discipline (required for every risk-increasing
+   order), then commit it
+   (`alice-uta git commit --source <accountId> --message "..."`). A
+   `propose_trade` decision that never placed and committed an order is
+   not a valid outcome — record what you actually did in the ledger's
+   `actions` field and the resulting `pendingHash`, not just the
+   intention.
+6. Append exactly one JSON object as a single line to
    `.alice/steward/ledger/decisions.jsonl` using the Write or Edit tool —
    not a Bash command. A Bash heredoc containing JSON (e.g.
    `cat >> decisions.jsonl <<'EOF' ... EOF`) can trip an interactive
    security prompt with no one to answer it during an unattended wake;
    Write/Edit does not.
-6. Stop the wake after the ledger entry. The ledger marker is the completion
+7. Stop the wake after the ledger entry. The ledger marker is the completion
    boundary for one wake.
 
 If there is no wake envelope, do not explore the workspace as a coding task.
