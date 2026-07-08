@@ -30,6 +30,9 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   [../docs/steward-workspace-behavior-contract.zh.md](../docs/steward-workspace-behavior-contract.zh.md);
   the current minimal persistent-steward implementation design is
   [../docs/steward-persistent-loop-implementation.zh.md](../docs/steward-persistent-loop-implementation.zh.md).
+  The first persistent steward scaffold lives in
+  `src/workspaces/templates/steward/`; its context manifest is written by
+  `src/workspaces/context-injector.ts:91-127` after instructions and skills land.
   Open `src/workspaces/service.ts:94-104`, `src/workspaces/session-pool.ts:72-84`,
   `src/workspaces/template-registry.ts:106-111`, and
   `src/workspaces/adapters/claude.ts:41-65`.

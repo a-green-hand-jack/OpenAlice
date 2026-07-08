@@ -47,9 +47,14 @@ export const workspacesHandlers = [
   }),
 
   http.get('/api/workspaces/templates', () => HttpResponse.json({ templates: demoTemplates })),
-  http.get('/api/workspaces/templates/:name/readme', () =>
-    HttpResponse.text('', { status: 404 }),
-  ),
+  http.get('/api/workspaces/templates/:name/readme', ({ params }) => {
+    if (String(params.name) === 'steward') {
+      return HttpResponse.text(
+        '# Steward\n\nPersistent trading steward workspace for wake envelopes, UTA checklist decisions, and decision ledgers.',
+      )
+    }
+    return HttpResponse.text('', { status: 404 })
+  }),
 
   http.get('/api/workspaces/agents', () =>
     HttpResponse.json({

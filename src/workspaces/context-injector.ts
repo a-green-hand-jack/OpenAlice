@@ -11,8 +11,9 @@
  * owns the files, not bash.
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { cp, mkdir, readFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { dataPath, defaultPath } from '@/core/paths.js';
@@ -86,6 +87,10 @@ export async function injectWorkspaceContext(opts: {
       await cp(src, join(dir, '.pi/skills', name), { recursive: true });
     }
   }
+
+  if (template.name === 'steward') {
+    await writeStewardContextManifest({ template, dir });
+  }
 }
 
 /**
@@ -99,4 +104,67 @@ async function resolvePersona(): Promise<string | null> {
   const fallback = defaultPath('persona.default.md');
   if (existsSync(fallback)) return readFile(fallback, 'utf8');
   return null;
+}
+
+async function writeStewardContextManifest(opts: {
+  readonly template: TemplateMeta;
+  readonly dir: string;
+}): Promise<void> {
+  const { template, dir } = opts;
+  const manifest = {
+    version: 1,
+    template: { name: template.name, version: template.version },
+    coreAgent: { id: 'codex', model: null },
+    wrapperPrompt: await fileRef(dir, '.alice/steward/README.md'),
+    instructions: await existingFileRefs(dir, ['AGENTS.md', 'CLAUDE.md']),
+    skills: await skillRefs(dir),
+    schemas: {
+      wake: 1,
+      decisionLedger: 1,
+    },
+  };
+  await writeWorkspaceFile(
+    dir,
+    '.alice/steward/context-manifest.json',
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+}
+
+async function existingFileRefs(
+  dir: string,
+  relPaths: readonly string[],
+): Promise<Array<{ path: string; sha256: string }>> {
+  const refs: Array<{ path: string; sha256: string }> = [];
+  for (const relPath of relPaths) {
+    if (!existsSync(join(dir, relPath))) continue;
+    refs.push(await fileRef(dir, relPath));
+  }
+  return refs;
+}
+
+async function skillRefs(
+  dir: string,
+): Promise<Array<{ name: string; path: string; sha256: string }>> {
+  const skillsRoot = join(dir, '.agents', 'skills');
+  if (!existsSync(skillsRoot)) return [];
+  const names = (await readdir(skillsRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b));
+
+  const refs: Array<{ name: string; path: string; sha256: string }> = [];
+  for (const name of names) {
+    const relPath = `.agents/skills/${name}/SKILL.md`;
+    if (!existsSync(join(dir, relPath))) continue;
+    refs.push({ name, ...(await fileRef(dir, relPath)) });
+  }
+  return refs;
+}
+
+async function fileRef(dir: string, relPath: string): Promise<{ path: string; sha256: string }> {
+  const bytes = await readFile(join(dir, relPath));
+  return {
+    path: relPath,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+  };
 }

@@ -6,8 +6,9 @@
  * both discovery paths.
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +23,8 @@ import type { TemplateMeta } from './template-registry.js';
 // src/workspaces/ — this spec's directory.
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const CHAT_FILES = join(HERE, 'templates', 'chat', 'files');
+const STEWARD_DIR = join(HERE, 'templates', 'steward');
+const STEWARD_FILES = join(STEWARD_DIR, 'files');
 
 function makeTemplate(over: Partial<TemplateMeta>): TemplateMeta {
   return {
@@ -47,6 +50,8 @@ afterEach(async () => {
 });
 
 const read = (rel: string): Promise<string> => readFile(join(dir, rel), 'utf8');
+const sha256 = async (rel: string): Promise<string> =>
+  createHash('sha256').update(await readFile(join(dir, rel))).digest('hex');
 
 describe('injectWorkspaceContext — no MCP injection (CLI-only)', () => {
   it('never writes .mcp.json, even for a tool-bearing template', async () => {
@@ -132,5 +137,62 @@ describe('injectWorkspaceContext — skills', () => {
     expect(existsSync(join(dir, '.claude/skills/self-scheduling/SKILL.md'))).toBe(true);
     expect(existsSync(join(dir, '.agents/skills/self-scheduling/SKILL.md'))).toBe(true);
     expect(existsSync(join(dir, '.pi/skills/self-scheduling/SKILL.md'))).toBe(true);
+  });
+});
+
+describe('injectWorkspaceContext — steward context manifest', () => {
+  it('writes a manifest that versions steward wrapper, instructions, skills, and schemas', async () => {
+    await mkdir(join(dir, '.alice', 'steward'), { recursive: true });
+    await writeFile(join(dir, '.alice', 'steward', 'README.md'), '# Steward Wrapper\n');
+
+    await injectWorkspaceContext({
+      template: makeTemplate({
+        name: 'steward',
+        version: '0.1.0',
+        filesDir: STEWARD_FILES,
+        templateDir: STEWARD_DIR,
+        injectPersona: true,
+        injectTools: true,
+      }),
+      wsId: 'ws-steward-1',
+      dir,
+    });
+
+    const raw = await read('.alice/steward/context-manifest.json');
+    const manifest = JSON.parse(raw) as {
+      version: number;
+      template: { name: string; version: string };
+      coreAgent: { id: string; model: string | null };
+      wrapperPrompt: { path: string; sha256: string };
+      instructions: Array<{ path: string; sha256: string }>;
+      skills: Array<{ name: string; path: string; sha256: string }>;
+      schemas: { wake: number; decisionLedger: number };
+    };
+
+    expect(manifest.version).toBe(1);
+    expect(manifest.template).toEqual({ name: 'steward', version: '0.1.0' });
+    expect(manifest.coreAgent).toEqual({ id: 'codex', model: null });
+    expect(manifest.wrapperPrompt).toEqual({
+      path: '.alice/steward/README.md',
+      sha256: await sha256('.alice/steward/README.md'),
+    });
+    expect(manifest.instructions).toEqual([
+      { path: 'AGENTS.md', sha256: await sha256('AGENTS.md') },
+      { path: 'CLAUDE.md', sha256: await sha256('CLAUDE.md') },
+    ]);
+    expect(manifest.skills.map((s) => s.name)).toEqual([
+      'alice',
+      'alice-analysis',
+      'alice-uta',
+      'alice-workspace',
+      'self-scheduling',
+      'traderhub',
+    ]);
+    expect(manifest.skills.find((s) => s.name === 'alice-uta')).toEqual({
+      name: 'alice-uta',
+      path: '.agents/skills/alice-uta/SKILL.md',
+      sha256: await sha256('.agents/skills/alice-uta/SKILL.md'),
+    });
+    expect(manifest.schemas).toEqual({ wake: 1, decisionLedger: 1 });
   });
 });
