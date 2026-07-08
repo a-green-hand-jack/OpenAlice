@@ -38,6 +38,11 @@ import { parse as parseYaml } from 'yaml'
 import { z } from 'zod'
 
 import type { Schedule } from '../../core/schedule-expr.js'
+import {
+  stewardAuthzLevelSchema,
+  stewardExpectedDecisionSchema,
+  stewardWakeReasonSchema,
+} from '../steward/types.js'
 
 /** Directory of per-issue markdown files, relative to a workspace's `dir`. */
 export const ISSUES_DIR_REL = join('.alice', 'issues')
@@ -88,6 +93,27 @@ export const issueFrontmatterSchema = z.object({
   what: z.string().min(1).optional(),
   /** Which agent runtime to run the scheduled fire with; omitted uses the issue default / workspace default / first runtime. */
   agent: z.string().min(1).optional(),
+  /** Optional scheduler dispatch kind. Omitted/headless keeps legacy behavior. */
+  kind: z.enum(['headless', 'steward-wake']).optional(),
+  /** Steward wake fields, required only when kind is steward-wake. */
+  accountId: z.string().min(1).optional(),
+  authzLevel: stewardAuthzLevelSchema.optional(),
+  expectedDecision: stewardExpectedDecisionSchema.optional(),
+  wakeReason: stewardWakeReasonSchema.optional(),
+  deadlineMs: z.number().int().positive().max(60 * 60 * 1000).optional(),
+  marketContext: z.record(z.string(), z.unknown()).optional(),
+  riskContext: z.record(z.string(), z.unknown()).optional(),
+}).superRefine((issue, ctx) => {
+  if (issue.kind !== 'steward-wake') return
+  for (const field of ['accountId', 'authzLevel', 'expectedDecision'] as const) {
+    if (issue[field] === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [field],
+        message: `${field} is required when kind is steward-wake`,
+      })
+    }
+  }
 })
 export type IssueFrontmatter = z.infer<typeof issueFrontmatterSchema>
 
