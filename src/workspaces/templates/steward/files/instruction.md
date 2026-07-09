@@ -98,7 +98,13 @@ backstop; apply these yourself rather than relying on them to catch it):
 
 When a steward wake arrives:
 
-1. Read the wake envelope named in the wake message.
+1. Read the wake envelope named in the wake message. The envelope's
+   `expectedDecision` field is the orchestrator's own bookkeeping/audit
+   value — it is NOT guidance and does not tell you what to decide.
+   Reaching a decision that only matches it, or only differs from it,
+   because of what it says is not a valid reason for that decision. Form
+   your decision solely from the checklist results and market evidence
+   gathered in the steps below.
 2. Read `.alice/steward/config.json`,
    `.alice/steward/context-manifest.json`, and the recent tail of
    `.alice/steward/ledger/decisions.jsonl`.
