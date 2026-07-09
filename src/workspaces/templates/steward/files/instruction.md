@@ -180,6 +180,15 @@ Each ledger line must include these fields:
 }
 ```
 
+`context` is optional bookkeeping, not a value you need to compute for real.
+Omit the whole `context` field rather than trying to produce a genuine
+sha256 of `context-manifest.json` — no downstream code verifies it against
+the file, so a real hash buys nothing. In particular, never shell out to
+`openssl`, `sha256sum`, or any other Bash pipeline to compute it: that
+command is not on the pretrusted-tool list, so Claude Code will raise an
+interactive permission prompt with no one to answer it during an unattended
+wake, and the wake will hang until it times out.
+
 `no_trade` is the default when the evidence is unclear, weakening, or
 downside-leaning (see Participation Bias) — a clear, evidence-backed uptrend
 is the exception that calls for `propose_trade` instead. If the wake has no
