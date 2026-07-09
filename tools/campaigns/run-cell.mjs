@@ -9,7 +9,7 @@
  *      so paper auto-push (P3-4a) executes the agent's commits;
  *   2. injects the anonymized daily series into the MockBroker so getQuote and
  *      the intra-week TP/SL protective-leg fills use it;
- *   3. creates a BLIND (#66) steward workspace running claude+haiku-4.5, with
+ *   3. creates a BLIND (#66) steward workspace running the selected agent/model, with
  *      the mock account whitelisted as the only allowed bar source, and lifts
  *      the workspace authz to `paper`;
  *   4. runs WEEKS weekly decision cycles: step the sim clock day-by-day through
@@ -30,6 +30,7 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
@@ -84,6 +85,16 @@ function parseArgs(argv) {
 
 const nowStamp = () => new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
 function log(msg) { process.stderr.write(`[${new Date().toISOString().slice(11, 19)}] ${msg}\n`); }
+function workspaceTag(runId) {
+  const hash = createHash('sha1').update(runId).digest('hex').slice(0, 6);
+  const stem = `campaign-${runId}`
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^[^a-z0-9]+/, 'c')
+    .slice(0, 26)
+    .replace(/[-_]+$/, '') || 'campaign';
+  return `${stem}-${hash}`;
+}
 
 async function resolveCookie(opts) {
   if (opts.cookie) return opts.cookie;
@@ -294,9 +305,9 @@ async function main() {
     });
     log(`injected ${series.length} daily bars for ${codename}`);
 
-    // ── blind steward workspace (claude + haiku) ─────────────────────────
+    // ── blind steward workspace ─────────────────────────────────────────
     const wsRes = await c.post('/api/workspaces', {
-      tag: `campaign-${runId}`.slice(0, 60),
+      tag: workspaceTag(runId),
       template: 'steward',
       agents: [opts.agent],
       blind: true,
@@ -336,7 +347,7 @@ async function main() {
 
       const marketContext = {
         instrument: codename,
-        assetClassHint: 'a single anonymized, high-volatility instrument',
+        assetClassHint: cell.assetClassHint ?? 'a single anonymized, high-volatility instrument',
         interval: '1d',
         priceBasis: 'day 0 close rebased to 100; day index is fictional (no real dates)',
         currentDay: lastDay.day,

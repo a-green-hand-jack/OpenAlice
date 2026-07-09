@@ -1,0 +1,117 @@
+{
+  "schema": "steward-campaign-cell-manifest/1",
+  "createdAt": "2026-07-09T00:00:00.000Z",
+  "notes": [
+    "Cells are anonymized real historical OHLCV windows.",
+    "The agent sees codename, rebased bars, fictional day index, and assetClassHint; _provenance is orchestrator audit only.",
+    "Use dev cells for tuning and holdout cells only after a candidate behavior change is frozen."
+  ],
+  "cells": [
+    {
+      "file": "bull-cx.json",
+      "split": "legacy",
+      "regime": "bull",
+      "marketBucket": "crypto-major",
+      "sourceSymbol": "BTCUSDT"
+    },
+    {
+      "file": "bear-eth.json",
+      "split": "legacy",
+      "regime": "bear",
+      "marketBucket": "crypto-major",
+      "sourceSymbol": "ETHUSDT"
+    },
+    {
+      "file": "bear-sol.json",
+      "split": "legacy",
+      "regime": "bear",
+      "marketBucket": "crypto-major",
+      "sourceSymbol": "SOLUSDT"
+    },
+    {
+      "file": "chop-cx.json",
+      "split": "legacy",
+      "regime": "chop",
+      "marketBucket": "crypto-major",
+      "sourceSymbol": "BTCUSDT"
+    },
+    {
+      "file": "dev-bull-nvda.json",
+      "split": "dev",
+      "regime": "bull",
+      "marketBucket": "us-single-name",
+      "sourceSymbol": "NVDA"
+    },
+    {
+      "file": "dev-bull-0700hk.json",
+      "split": "dev",
+      "regime": "bull",
+      "marketBucket": "hk-equity",
+      "sourceSymbol": "0700.HK"
+    },
+    {
+      "file": "dev-bear-tsla.json",
+      "split": "dev",
+      "regime": "bear",
+      "marketBucket": "us-single-name",
+      "sourceSymbol": "TSLA"
+    },
+    {
+      "file": "dev-chop-spy.json",
+      "split": "dev",
+      "regime": "chop",
+      "marketBucket": "us-etf",
+      "sourceSymbol": "SPY"
+    },
+    {
+      "file": "dev-chop-eurusd.json",
+      "split": "dev",
+      "regime": "chop",
+      "marketBucket": "fx",
+      "sourceSymbol": "EURUSD=X"
+    },
+    {
+      "file": "holdout-bull-amd.json",
+      "split": "holdout",
+      "regime": "bull",
+      "marketBucket": "us-single-name",
+      "sourceSymbol": "AMD"
+    },
+    {
+      "file": "holdout-bull-2330tw.json",
+      "split": "holdout",
+      "regime": "bull",
+      "marketBucket": "tw-equity",
+      "sourceSymbol": "2330.TW"
+    },
+    {
+      "file": "holdout-bear-tqqq.json",
+      "split": "holdout",
+      "regime": "bear",
+      "marketBucket": "us-etf",
+      "sourceSymbol": "TQQQ"
+    },
+    {
+      "file": "holdout-bear-crude.json",
+      "split": "holdout",
+      "regime": "bear",
+      "marketBucket": "commodity-proxy",
+      "sourceSymbol": "CL=F"
+    },
+    {
+      "file": "holdout-chop-gld.json",
+      "split": "holdout",
+      "regime": "chop",
+      "marketBucket": "commodity-proxy",
+      "sourceSymbol": "GLD"
+    },
+    {
+      "file": "holdout-chop-usdjpy.json",
+      "split": "holdout",
+      "regime": "chop",
+      "marketBucket": "fx",
+      "sourceSymbol": "USDJPY=X"
+    }
+  ]
+}
+
