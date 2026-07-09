@@ -80,6 +80,7 @@ import { WorkspaceRegistry, type WorkspaceMeta } from './workspace-registry.js';
 import {
   createStewardLockStore,
   createStewardWakeStore,
+  formatStewardWakeMessage,
   injectStewardWake,
   StewardLockConflictError,
   StewardSupervisorScanner,
@@ -690,8 +691,13 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
         now,
       });
       created = true;
-      const selected = await ensureStewardScheduleSession(ws, config, wake.agent);
-      const injected = await injectStewardWake({
+      const selected = await ensureStewardScheduleSession(
+        ws,
+        config,
+        wake.agent,
+        formatStewardWakeMessage(record),
+      );
+      const injected = selected.injectedByInitialPrompt || await injectStewardWake({
         pool,
         sessionId: selected.sessionId,
         record,
@@ -769,7 +775,14 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     ws: WorkspaceMeta,
     config: Record<string, unknown>,
     requestedAgent: string | undefined,
-  ): Promise<{ sessionId: string; agent: string; reused: boolean; resumed: boolean }> {
+    initialWakePrompt?: string,
+  ): Promise<{
+    sessionId: string;
+    agent: string;
+    reused: boolean;
+    resumed: boolean;
+    injectedByInitialPrompt: boolean;
+  }> {
     const configuredSessionId = typeof config['sessionId'] === 'string' ? config['sessionId'] : null;
     const configuredAgent = typeof config['agent'] === 'string' ? config['agent'] : undefined;
     await sessionRegistry.ensureLoaded(ws.id);
@@ -781,7 +794,13 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       (requestedAgent === undefined || requestedAgent === configuredRecord?.agent || requestedAgent === configuredAgent);
 
     if (configuredSessionId && canUseConfigured && pool.get(configuredSessionId)) {
-      return { sessionId: configuredSessionId, agent, reused: true, resumed: false };
+      return {
+        sessionId: configuredSessionId,
+        agent,
+        reused: true,
+        resumed: false,
+        injectedByInitialPrompt: false,
+      };
     }
     if (configuredRecord && canUseConfigured) {
       return resumeStewardScheduleSession(ws, configuredRecord);
@@ -789,7 +808,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     if (!ws.agents.includes(agent)) {
       throw new Error(`workspace does not enable agent: ${agent}`);
     }
-    const spawned = await spawnStewardScheduleSession(ws, agent);
+    const spawned = await spawnStewardScheduleSession(ws, agent, initialWakePrompt);
     await writeStewardSessionConfig(ws, config, spawned.sessionId, spawned.agent);
     return spawned;
   }
@@ -797,7 +816,14 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
   async function spawnStewardScheduleSession(
     ws: WorkspaceMeta,
     agentId: string,
-  ): Promise<{ sessionId: string; agent: string; reused: false; resumed: false }> {
+    initialWakePrompt?: string,
+  ): Promise<{
+    sessionId: string;
+    agent: string;
+    reused: false;
+    resumed: false;
+    injectedByInitialPrompt: boolean;
+  }> {
     const adapter = resolveAdapter(ws, agentId);
     await ensureAgentCredentialReady({
       meta: ws,
@@ -831,6 +857,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     try {
       const session = pool.spawn(ws.id, {
         agentId: adapter.id,
+        ...(initialWakePrompt !== undefined ? { initialPrompt: initialWakePrompt } : {}),
         recordId,
         recordName,
       });
@@ -841,7 +868,13 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
         pid: session.pid,
         agent: adapter.id,
       });
-      return { sessionId: session.recordId, agent: adapter.id, reused: false, resumed: false };
+      return {
+        sessionId: session.recordId,
+        agent: adapter.id,
+        reused: false,
+        resumed: false,
+        injectedByInitialPrompt: initialWakePrompt !== undefined,
+      };
     } catch (err) {
       await sessionRegistry.remove(ws.id, recordId).catch(() => undefined);
       throw err;
@@ -851,7 +884,13 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
   async function resumeStewardScheduleSession(
     ws: WorkspaceMeta,
     record: SessionRecord,
-  ): Promise<{ sessionId: string; agent: string; reused: true; resumed: true }> {
+  ): Promise<{
+    sessionId: string;
+    agent: string;
+    reused: true;
+    resumed: true;
+    injectedByInitialPrompt: false;
+  }> {
     const adapter = adapters.get(record.agent);
     if (!adapter) throw new Error(`record references unknown adapter: ${record.agent}`);
     if (!ws.agents.includes(record.agent)) throw new Error(`workspace does not enable agent: ${record.agent}`);
@@ -888,7 +927,13 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
           err,
         }),
       );
-    return { sessionId: session.recordId, agent: adapter.id, reused: true, resumed: true };
+    return {
+      sessionId: session.recordId,
+      agent: adapter.id,
+      reused: true,
+      resumed: true,
+      injectedByInitialPrompt: false,
+    };
   }
 
   // ── Workspace self-scheduling. Scan each workspace's own `.alice/issues/*.md`

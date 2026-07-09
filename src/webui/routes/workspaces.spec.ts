@@ -379,7 +379,7 @@ describe('steward wake API', () => {
     try {
       const { app, pool, writtenInputs } = buildSteward({ dir });
 
-      const r = await postWake(app, '/ws-1/steward/wakes', {
+      const r = await post(app, '/ws-1/steward/wakes', {
         wakeId: 'wake:1',
         reason: 'scheduled_observe',
         accountId: 'mock-simulator-1',
@@ -404,15 +404,13 @@ describe('steward wake API', () => {
       });
       expect(r.body.session).toMatchObject({ agent: 'codex', reused: false });
       expect(pool.spawn).toHaveBeenCalledOnce();
-      // Two-phase submit (issue #91): message body write, then a separate
-      // bare `\r` write once the paste/submit gap has elapsed.
-      expect(writtenInputs).toHaveLength(2);
-      expect(String(writtenInputs[0]?.input)).toContain('<STEWARD_WAKE id="wake:1"');
-      expect(String(writtenInputs[0]?.input)).toContain('.alice/steward/wakes/wake%3A1.json');
-      expect(writtenInputs[0]?.opts).toEqual({ source: 'steward-supervisor' });
-      expect(writtenInputs[1]?.input).toBe('\r');
-      expect(writtenInputs[1]?.sessionId).toBe(writtenInputs[0]?.sessionId);
-      expect(writtenInputs[1]?.opts).toEqual({ source: 'steward-supervisor' });
+      // Fresh Codex steward sessions receive the wake as the native initial
+      // prompt. This avoids racing PTY paste against the Codex TUI startup.
+      expect(writtenInputs).toHaveLength(0);
+      expect(pool.spawn).toHaveBeenCalledWith('ws-1', expect.objectContaining({
+        agentId: 'codex',
+        initialPrompt: expect.stringContaining('<STEWARD_WAKE id="wake:1"'),
+      }));
 
       const config = JSON.parse(await readFile(join(dir, '.alice/steward/config.json'), 'utf8')) as {
         agent: string;
@@ -519,7 +517,7 @@ describe('steward wake API', () => {
     const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
     try {
       const { app } = buildSteward({ dir });
-      await postWake(app, '/ws-1/steward/wakes', {
+      await post(app, '/ws-1/steward/wakes', {
         wakeId: 'wake-ledger',
         reason: 'scheduled_observe',
         accountId: 'mock-simulator-1',
@@ -577,7 +575,7 @@ describe('steward wake API', () => {
     const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
     try {
       const { app } = buildSteward({ dir });
-      const first = await postWake(app, '/ws-1/steward/wakes', {
+      const first = await post(app, '/ws-1/steward/wakes', {
         wakeId: 'wake-active',
         reason: 'scheduled_observe',
         accountId: 'mock-simulator-1',
@@ -664,7 +662,7 @@ describe('steward wake API', () => {
 
       // Wake #1 completes normally (ledger entry present) — not stuck, must
       // not push to Inbox.
-      const done = await postWake(app, '/ws-1/steward/wakes', {
+      const done = await post(app, '/ws-1/steward/wakes', {
         wakeId: 'wake-done',
         reason: 'scheduled_observe',
         accountId: 'mock-simulator-1',

@@ -47,7 +47,8 @@ function parseArgs(argv) {
   const out = {
     base: process.env.OPENALICE_BASE_URL ?? 'http://127.0.0.1:49631',
     log: '/tmp/issue99-dev.log',
-    agent: 'claude',
+    agent: 'codex',
+    model: null,
     maxDdPct: 10,
     maxPosPct: 60,
     weeks: WEEKS,
@@ -66,6 +67,7 @@ function parseArgs(argv) {
     else if (a === '--log') out.log = next();
     else if (a === '--run-id') out.runId = next();
     else if (a === '--agent') out.agent = next();
+    else if (a === '--model') out.model = next();
     else if (a === '--weeks') out.weeks = Number(next());
     else if (a === '--max-dd-pct') out.maxDdPct = Number(next());
     else if (a === '--max-pos-pct') out.maxPosPct = Number(next());
@@ -127,22 +129,43 @@ async function waitStable(c, id, { need = 4, gapMs = 1500, preSleepMs = 4000 } =
 }
 
 async function netLiquidation(c, id) {
-  await c.post(`/api/trading/uta/${id}/sync`, { delayMs: 150 }).catch(() => undefined);
-  const acct = await c.get(`/api/trading/uta/${id}/account`);
+  const acct = await getAccountWithRestartTolerance(c, id);
   const nl = Number(acct.netLiquidation ?? acct.netLiquidationValue ?? acct.equity);
   return Number.isFinite(nl) ? nl : NaN;
 }
 
+async function getAccountWithRestartTolerance(c, id, timeoutMs = 90_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = '';
+  while (Date.now() < deadline) {
+    await c.post(`/api/trading/uta/${id}/sync`, { delayMs: 150 }).catch(() => undefined);
+    try {
+      return await c.get(`/api/trading/uta/${id}/account`, 5_000);
+    } catch (err) {
+      last = err.message;
+      await sleep(2000);
+    }
+  }
+  throw new Error(`account ${id} unavailable while reading equity: ${last}`);
+}
+
 async function positionQty(c, id) {
-  try {
-    const body = await c.get(`/api/trading/uta/${id}/positions`);
-    const arr = Array.isArray(body) ? body : body?.positions ?? [];
-    return arr.reduce((s, p) => s + Math.abs(Number(p.quantity ?? p.totalQuantity ?? 0)), 0);
-  } catch { return null; }
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    try {
+      const body = await c.get(`/api/trading/uta/${id}/positions`, 5_000);
+      const arr = Array.isArray(body) ? body : body?.positions ?? [];
+      return arr.reduce((s, p) => s + Math.abs(Number(p.quantity ?? p.totalQuantity ?? 0)), 0);
+    } catch {
+      await sleep(2000);
+    }
+  }
+  return null;
 }
 
 /** Read + sum claude transcript token usage for a workspace (haiku cost truth). */
 function transcriptCost(wsDir) {
+  if (process.env.OPENALICE_CAMPAIGN_AGENT === 'codex') return codexTranscriptUsage(wsDir);
   const projectKey = resolve(wsDir).replaceAll('/', '-').replaceAll('.', '-');
   const dir = join(homedir(), '.claude', 'projects', projectKey);
   const tally = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, turns: 0, files: [] };
@@ -167,6 +190,48 @@ function transcriptCost(wsDir) {
     (tally.cacheReadTokens / 1e6) * HAIKU_PRICE.cacheReadPerMTok +
     (tally.cacheWriteTokens / 1e6) * HAIKU_PRICE.cacheWritePerMTok;
   return { ...tally, transcriptDir: dir, found: true, modelCostUsd: Math.round(usd * 1e6) / 1e6 };
+}
+
+function codexTranscriptUsage(wsDir) {
+  const root = join(homedir(), '.codex', 'sessions');
+  const tally = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningOutputTokens: 0, turns: 0, files: [] };
+  const target = resolve(wsDir);
+  const leaves = recentCodexLeaves(root);
+  for (const dir of leaves) {
+    for (const f of readdirSync(dir, { withFileTypes: true }).filter((d) => d.isFile() && d.name.endsWith('.jsonl'))) {
+      const fp = join(dir, f.name);
+      const lines = readFileSync(fp, 'utf8').split('\n').filter(Boolean);
+      if (lines.length === 0) continue;
+      let meta;
+      try { meta = JSON.parse(lines[0]); } catch { continue; }
+      if (resolve(meta?.payload?.cwd ?? '') !== target) continue;
+      tally.files.push(fp);
+      for (const line of lines) {
+        let evt; try { evt = JSON.parse(line); } catch { continue; }
+        const u = evt?.usage;
+        if (!u) continue;
+        tally.inputTokens += Number(u.input_tokens ?? 0);
+        tally.outputTokens += Number(u.output_tokens ?? 0);
+        tally.cacheReadTokens += Number(u.cached_input_tokens ?? 0);
+        tally.reasoningOutputTokens += Number(u.reasoning_output_tokens ?? 0);
+        tally.turns++;
+      }
+    }
+  }
+  return { ...tally, transcriptDir: root, found: tally.files.length > 0, modelCostUsd: null };
+}
+
+function recentCodexLeaves(root) {
+  const out = [];
+  if (!existsSync(root)) return out;
+  for (const y of readdirSync(root).filter((n) => /^\d+$/.test(n)).sort().slice(-1)) {
+    const yd = join(root, y);
+    for (const m of readdirSync(yd).filter((n) => /^\d+$/.test(n)).sort().slice(-1)) {
+      const md = join(yd, m);
+      for (const d of readdirSync(md).filter((n) => /^\d+$/.test(n)).sort().slice(-2)) out.push(join(md, d));
+    }
+  }
+  return out;
 }
 
 async function main() {
@@ -237,6 +302,11 @@ async function main() {
     wsId = wsRes.workspace.id;
     wsDir = wsRes.workspace.dir;
     log(`blind workspace ${wsId} (${opts.agent}) dir=${wsDir}`);
+    if (opts.agent === 'codex' && opts.model) {
+      const modelPath = join(wsDir, '.alice', 'steward', 'core-agent-model.txt');
+      writeFileSync(modelPath, `${opts.model}\n`);
+      log(`codex model override → ${opts.model}`);
+    }
     // NOTE: on `--agent claude`, an unattended steward wake can stall when the
     // agent writes its ledger entry via a brace-quoted shell heredoc (Claude
     // Code's "expansion obfuscation" classifier forces an interactive approval —
@@ -324,6 +394,7 @@ async function main() {
     const statePath = join(wsDir, '.alice', 'steward', 'state.json');
     if (existsSync(statePath)) { try { stewardState = JSON.parse(readFileSync(statePath, 'utf8')); } catch { /* ignore */ } }
 
+    process.env.OPENALICE_CAMPAIGN_AGENT = opts.agent;
     const cost = transcriptCost(wsDir);
 
     const equityCurve = [START_CASH, ...weeks.map((w) => (Number.isFinite(w.equity) ? w.equity : START_CASH)),
@@ -340,7 +411,7 @@ async function main() {
       schema: 'steward-campaign-result/1',
       runId, finishedAt: new Date().toISOString(), weeksRun: totalWeeks,
       cell: { codename, regime, weeks: WEEKS, buyHold },
-      workspace: { id: wsId, dir: wsDir, agent: opts.agent, blind: true, model: process.env.ANTHROPIC_MODEL ?? '(default)' },
+      workspace: { id: wsId, dir: wsDir, agent: opts.agent, blind: true, model: opts.model ?? process.env.ANTHROPIC_MODEL ?? '(default)' },
       account: { id: acctId, startCash: START_CASH, guards: { maxDrawdownPct: opts.maxDdPct, maxPositionPct: opts.maxPosPct } },
       metrics: {
         startCash: START_CASH,
@@ -358,7 +429,7 @@ async function main() {
         modelCostUsd,
         ledgerReportedCostUsd: ledgerCostUsd,
         pricing: HAIKU_PRICE,
-        transcript: { found: cost.found, turns: cost.turns, inputTokens: cost.inputTokens, outputTokens: cost.outputTokens, cacheReadTokens: cost.cacheReadTokens, cacheWriteTokens: cost.cacheWriteTokens, dir: cost.transcriptDir, files: cost.files },
+        transcript: { found: cost.found, turns: cost.turns, inputTokens: cost.inputTokens, outputTokens: cost.outputTokens, cacheReadTokens: cost.cacheReadTokens, cacheWriteTokens: cost.cacheWriteTokens, reasoningOutputTokens: cost.reasoningOutputTokens ?? 0, dir: cost.transcriptDir, files: cost.files },
       },
       net: { netPnL, netReturn: netPnL / START_CASH },
       verdict: { regime, pass: verdict.pass, rule: verdict.rule },
@@ -371,7 +442,7 @@ async function main() {
     if (stewardState) writeFileSync(join(runDir, 'steward-state.json'), `${JSON.stringify(stewardState, null, 2)}\n`);
     log(`\n─── ${runId} ───`);
     log(`gross PnL $${grossPnL.toFixed(2)} (${(totalReturn * 100).toFixed(1)}%)  agent maxDD ${(agentMaxDD * 100).toFixed(1)}%  vs buy-hold ${(buyHold.netReturn * 100).toFixed(1)}% / ${(buyHold.maxDD * 100).toFixed(1)}%`);
-    log(`model cost $${modelCostUsd.toFixed(4)} (${cost.inputTokens} in / ${cost.outputTokens} out tok, haiku-4.5)  → net PnL $${netPnL.toFixed(2)}`);
+    log(`model cost ${cost.modelCostUsd === null ? 'n/a' : `$${modelCostUsd.toFixed(4)}`} (${cost.inputTokens} in / ${cost.outputTokens} out tok, ${opts.model ?? opts.agent})  → net PnL $${netPnL.toFixed(2)}`);
     log(`verdict ${regime}: ${verdict.pass ? 'PASS' : 'FAIL'} (${verdict.rule})`);
     log(`result → ${join(runDir, 'result.json')}`);
   } finally {

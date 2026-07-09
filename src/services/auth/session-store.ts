@@ -13,7 +13,7 @@
  * cookie value is meaningless without an entry in `sessions.json`.
  */
 
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile, chmod, rename, unlink } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { dataPath } from '@/core/paths.js'
@@ -67,22 +67,23 @@ async function loadCache(): Promise<SessionsFile> {
 
 async function flush(): Promise<void> {
   if (!cache) return
-  // Coalesce concurrent writes — last writer wins.
-  if (writePromise) {
-    await writePromise
-  }
   const snapshot: SessionsFile = { version: 1, sessions: [...cache.sessions] }
-  writePromise = (async () => {
+  const previous = (writePromise ?? Promise.resolve()).catch(() => undefined)
+  const current = previous.then(async () => {
     const path = SESSIONS_FILE()
     await mkdir(dirname(path), { recursive: true })
-    const tmp = `${path}.tmp`
+    const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`
     const data = JSON.stringify(snapshot, null, 2) + '\n'
     await writeFile(tmp, data, { mode: 0o600 })
     await rename(tmp, path)
     await chmod(path, 0o600).catch(() => { /* noop */ })
-  })()
-  await writePromise
-  writePromise = null
+  })
+  writePromise = current
+  try {
+    await current
+  } finally {
+    if (writePromise === current) writePromise = null
+  }
 }
 
 /** Create a new session, persist, return the SID cookie value. */

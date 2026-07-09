@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
@@ -65,6 +66,7 @@ interface FileShape {
 export class WorkspaceRegistry {
   private readonly byId = new Map<string, WorkspaceMeta>();
   private readonly tagsInUse = new Set<string>();
+  private flushQueue: Promise<void> = Promise.resolve();
 
   private constructor(private readonly path: string) {}
 
@@ -150,9 +152,12 @@ export class WorkspaceRegistry {
       version: 1,
       workspaces: Array.from(this.byId.values()),
     };
-    const tmp = `${this.path}.tmp`;
-    await writeFile(tmp, JSON.stringify(payload, null, 2), 'utf8');
-    await rename(tmp, this.path);
+    this.flushQueue = this.flushQueue.catch(() => undefined).then(async () => {
+      const tmp = `${this.path}.${process.pid}.${randomUUID()}.tmp`;
+      await writeFile(tmp, JSON.stringify(payload, null, 2), 'utf8');
+      await rename(tmp, this.path);
+    });
+    await this.flushQueue;
   }
 }
 
