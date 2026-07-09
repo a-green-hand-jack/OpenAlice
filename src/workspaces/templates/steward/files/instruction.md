@@ -115,14 +115,41 @@ When a steward wake arrives:
    Reasoning, Participation Bias, and Risk Discipline above:
    `no_trade`, `propose_trade`, or `blocked`.
 5. If the decision is `propose_trade`, act on it now, before writing the
-   ledger entry: place the order with the `alice-uta` CLI, attaching a
-   stopLoss per Risk Discipline (required for every risk-increasing
-   order), then commit it
-   (`alice-uta git commit --source <accountId> --message "..."`, or
-   `alice-uta order place ... --commitMessage "..."` to stage+commit in one
-   call). Check the commit response's `autoPush` field before assuming the
-   order executed — on a paper/mock account, "committed" does NOT mean
-   "executed":
+   ledger entry. Six commands carry a free-text field — `order place`,
+   `order modify`, `position close`, `order cancel` (`commitMessage`),
+   and `git commit`, `git reject` (`message`, `reason`) — and for all
+   six, never embed that text in a raw `--commitMessage "..."` /
+   `--message "..."` / `--reason "..."` Bash argument: free-text trading
+   prose (a thesis mentioning a dollar figure like `+$543`, a stray
+   backtick, an unescaped quote) can trip Claude Code's own Bash-safety
+   classifier and hang the wake indefinitely with no one able to answer
+   the resulting prompt. Instead, use the two-step `--json-file` pattern
+   for all six: first use the **Write tool** (not Bash) to write the
+   operation's structured params plus its free-text field into a JSON
+   file under `.alice/steward/tmp/` (gitignored scratch space, e.g.
+   `.alice/steward/tmp/<wakeId>-place.json`):
+
+   ```json
+   {
+     "aliceId": "mock-simulator-.../ASSET-A",
+     "action": "SELL",
+     "orderType": "MKT",
+     "totalQuantity": "50",
+     "stopLoss": { "price": "..." },
+     "commitMessage": "Week 3 observe: trend exhaustion... lock in +$543 gain before deterioration deepens."
+   }
+   ```
+
+   then invoke the CLI with that file as the *entire* Bash command — a
+   single plain relative path, nothing else for the classifier to flag:
+   `alice-uta order place --json-file .alice/steward/tmp/<wakeId>-place.json`.
+   Attach a stopLoss per Risk Discipline (required for every
+   risk-increasing order) inside that same JSON file. Stage+commit in one
+   call (put `commitMessage` in the file above), or commit separately
+   with `alice-uta git commit --json-file <path>` whose file holds
+   `{"source": "<accountId>", "message": "..."}`. Check the commit
+   response's `autoPush` field before assuming the order executed — on a
+   paper/mock account, "committed" does NOT mean "executed":
      - `autoPush.status: "pushed"` (response `nextStep` says **EXECUTED**,
        when present) — it ran. Proceed to the ledger.
      - `autoPush.status: "skipped"` with `reason: "paper_policy_denied"`
@@ -132,8 +159,8 @@ When a steward wake arrives:
        wrong-side, or too-wide stopLoss; adding to an already-losing
        position; no resolvable entry price), correct the order — a
        stopLoss must be shaped `{"price": "..."}`, never
-       `lmtPrice`/`auxPrice` — and retry place+commit before writing the
-       ledger entry.
+       `lmtPrice`/`auxPrice` — and retry: edit the same JSON file and
+       re-invoke with `--json-file` before writing the ledger entry.
      - `autoPush.status: "failed"` — a real failure (not a policy
        rejection), e.g. the broker itself errored on push. Treat this like
        any other tool failure: investigate before retrying, and do not
@@ -152,6 +179,13 @@ When a steward wake arrives:
    failure, not the policy guard, is why) rather than recording
    `propose_trade` with `status: "committed"` — a commit the auto-push
    guard rejected did not trade, so the ledger must not read as if it did.
+   The same two-step `--json-file` pattern applies to `order modify`
+   (correcting a live order), `position close` (exiting), `order cancel`
+   (withdrawing a stale order), and `git reject` (discarding a wrong
+   stage instead of retrying it) — write the params and free-text field
+   to a JSON file with the Write tool, then invoke
+   `alice-uta <group> <verb> --json-file <path>` as the entire Bash
+   command.
 6. Append exactly one JSON object as a single line to
    `.alice/steward/ledger/decisions.jsonl` using the Write or Edit tool —
    not a Bash command. A Bash heredoc containing JSON (e.g.

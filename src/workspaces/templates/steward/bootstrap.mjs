@@ -36,6 +36,9 @@ end with one JSON line in ledger/decisions.jsonl.
   instructions and skills are written.
 - wakes/<wakeId>.json: one structured input envelope per wake.
 - ledger/decisions.jsonl: one structured decision/completion marker per wake.
+- tmp/: gitignored scratch space for --json-file payloads (order/commit/reject
+  free-text fields written here via the Write tool, then passed to alice-uta
+  by path — never embedded in a Bash argument).
 
 ## First action on wake
 
@@ -71,12 +74,14 @@ setupGitExcludes(
   '.alice/steward/state.json',
   '.alice/steward/locks/',
   '.alice/steward/supervisor.jsonl',
+  '.alice/steward/tmp/',
 )
 
 const stewardRoot = join(outDir, '.alice', 'steward')
 mkdirSync(join(stewardRoot, 'wakes'), { recursive: true })
 mkdirSync(join(stewardRoot, 'ledger'), { recursive: true })
 mkdirSync(join(stewardRoot, 'locks'), { recursive: true })
+mkdirSync(join(stewardRoot, 'tmp'), { recursive: true })
 
 writeFileSync(join(stewardRoot, 'README.md'), stewardReadme)
 writeFileSync(join(stewardRoot, 'config.json'), `${JSON.stringify(config, null, 2)}\n`)
