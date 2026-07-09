@@ -55,7 +55,7 @@ function parseArgs(argv) {
     weeks: WEEKS,
     deadlineMs: 600_000,
     pollMs: 8_000,
-    wakeTimeoutMs: 540_000,
+    wakeTimeoutMs: 720_000,
     keep: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -80,6 +80,7 @@ function parseArgs(argv) {
     else throw new Error(`unknown arg: ${a}`);
   }
   if (!out.cell) throw new Error('--cell required');
+  out.wakeTimeoutMs = Math.max(out.wakeTimeoutMs, out.deadlineMs + (out.pollMs * 2));
   return out;
 }
 
@@ -380,6 +381,9 @@ async function main() {
         await c.post(`/api/workspaces/${wsId}/steward/supervisor/tick`, {}).catch(() => undefined);
         const got = await c.get(`/api/workspaces/${wsId}/steward/wakes/${encodeURIComponent(wakeId)}`);
         wake = got.wake; ledgerEntry = got.ledgerEntry ?? ledgerEntry; status = wake.status;
+      }
+      if (!terminal.has(status)) {
+        throw new Error(`wake ${wakeId} did not reach a terminal state before ${opts.wakeTimeoutMs}ms (last status: ${status})`);
       }
 
       const equity = await netLiquidation(c, acctId);
