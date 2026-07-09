@@ -30,6 +30,8 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   [../docs/steward-workspace-behavior-contract.zh.md](../docs/steward-workspace-behavior-contract.zh.md);
   the current minimal persistent-steward implementation design is
   [../docs/steward-persistent-loop-implementation.zh.md](../docs/steward-persistent-loop-implementation.zh.md).
+  The runtime information-flow diagram and performance-test market matrix are
+  in [../docs/trading-agent-runtime-and-market-testing.zh.md](../docs/trading-agent-runtime-and-market-testing.zh.md).
   The first persistent steward scaffold lives in
   `src/workspaces/templates/steward/`; its context manifest is written by
   `src/workspaces/context-injector.ts:91-127` after instructions and skills land.
