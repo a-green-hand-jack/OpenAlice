@@ -43,8 +43,12 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   at `src/workspaces/issues/declaration.ts:84-117`, branches in
   `src/workspaces/schedule/scanner.ts:203-220` and
   `src/workspaces/schedule/scanner.ts:259-301`, then lands in
-  `src/workspaces/service.ts:651-915` (shifted 1 line from issue #109's
-  extraction of `readStewardConfig`, below).
+  `src/workspaces/service.ts:651-915` (shifted 1 line by issue #109's new
+  `StewardSupervisorScanner`/`steward/config.ts` imports above this
+  function — the `readStewardConfig` extraction below happened in
+  `routes/workspaces.ts`, not here; `service.ts`'s own separate, untouched
+  local `readStewardConfig` copy for `dispatchStewardWakeMethod` still
+  lives at `service.ts:737-750`).
   `StewardSupervisor.tick()` itself only runs when something calls it; issue
   #109 added the self-arming `StewardSupervisorScanner`
   (`src/workspaces/steward/supervisor-scanner.ts:131-209`, `.scan()` at
