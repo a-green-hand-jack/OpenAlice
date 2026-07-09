@@ -10,12 +10,15 @@ import { tool, type Tool } from 'ai'
 import { z } from 'zod'
 import Decimal from 'decimal.js'
 import { Contract, coerceSecType } from '@traderalice/ibkr'
-import { BrokerError, type AuthzLevel, type OpenOrder } from '@traderalice/uta-protocol'
+import {
+  BrokerError,
+  type AuthzLevel, type OpenOrder, type CommitPrepareResult, type PaperAutoPushResult,
+} from '@traderalice/uta-protocol'
 import type { UTAManagerSDK } from '@/services/uta-client/index.js'
 import { OPENALICE_EFFECTIVE_AUTHZ_BY_ACCOUNT_ARG } from '@/core/workspace-tool-center.js'
 import { normalizeBrokerSearchPattern } from '@traderalice/uta-protocol'
 import {
-  compactAccountInfo, compactCommit, compactContract, compactContractDetails,
+  compactAccountInfo, compactAutoPushResult, compactCommit, compactContract, compactContractDetails,
   compactOperation, compactOrderFields, compactPushResult, compactStageResult, compactStatus,
   money, price,
 } from './trading-compact.js'
@@ -192,13 +195,74 @@ async function filterVendorSearchTargets<T extends { id: string }>(
   }
 }
 
+/** The pre-#111 boilerplate — still correct for accounts/commits that were
+ *  never auto-push-eligible in the first place (live/human-approval
+ *  accounts, or a structural skip like risk-state-not-NORMAL). Kept as a
+ *  named constant so both the "no autoPush at all" and "structural skip"
+ *  branches below stay textually identical, which is the point: neither is
+ *  an error, so neither should read like one. */
+const AWAITING_APPROVAL_NEXT_STEP = 'Awaiting user approval or deterministic auto-push outside the agent tool surface.'
+
+/**
+ * Turn a commit's raw `autoPush` (a `PaperAutoPushResult`, or `undefined` for
+ * accounts the route never attempts auto-push for) into the agent-facing
+ * `{ nextStep, autoPush }` fields.
+ *
+ * Before issue #111, `stageAndMaybeCommit` discarded this entirely and
+ * always returned the same "awaiting approval" string — so an agent whose
+ * order was actually rejected by the paper-policy risk guard (missing
+ * stop-loss, stop-loss on the wrong side, adding to a loser, …) read the
+ * exact same response as an agent whose order genuinely executed. The guard
+ * itself (paper-auto-push.ts, issue #97) was correct; only the response
+ * shape hid its verdict from the caller.
+ */
+function describeAutoPushOutcome(autoPush: PaperAutoPushResult | undefined): {
+  nextStep: string
+  autoPush?: Record<string, unknown>
+} {
+  if (!autoPush) return { nextStep: AWAITING_APPROVAL_NEXT_STEP }
+  const compacted = compactAutoPushResult(autoPush)
+
+  if (autoPush.status === 'pushed') {
+    return {
+      nextStep: `Order EXECUTED — auto-pushed to the paper/mock broker as commit ${autoPush.hash}. Do not re-place it; check tradingLog/getPortfolio to confirm the fill.`,
+      autoPush: compacted,
+    }
+  }
+
+  if (autoPush.status === 'failed') {
+    return {
+      nextStep: `Auto-push FAILED — the order did NOT execute: ${autoPush.reason}. This is a real failure, not a policy rejection; investigate before retrying.`,
+      autoPush: compacted,
+    }
+  }
+
+  // status === 'skipped'. Only `paper_policy_denied` means the risk guard
+  // actually blocked this commit — every other skip reason is structural
+  // (this account/commit was never auto-push-eligible), which is the
+  // correct, expected story and should read the same as "no autoPush at
+  // all", not like an error.
+  if (autoPush.reason === 'paper_policy_denied') {
+    const violations = autoPush.policyViolations ?? []
+    const summary = violations.length > 0
+      ? violations.map((v) => v.reason).join('; ')
+      : 'the paper auto-push policy guard rejected this commit'
+    return {
+      nextStep: `Commit was REJECTED by the paper auto-push policy guard — the order did NOT execute: ${summary}. Correct the order (e.g. attach a valid stopLoss: {"price": "..."}) and retry before ending this wake.`,
+      autoPush: compacted,
+    }
+  }
+
+  return { nextStep: AWAITING_APPROVAL_NEXT_STEP, autoPush: compacted }
+}
+
 /** Stage + (optionally) commit in one call. The stage→commit split is pure
  *  ceremony when one decision = one operation — which is the dominant agent
  *  flow. The approval wall (push) is untouched. */
 async function stageAndMaybeCommit(
   uta: {
     stage: () => Promise<unknown> | unknown
-    commit: (msg: string, opts?: CommitAuthzOptions) => Promise<unknown> | unknown
+    commit: (msg: string, opts?: CommitAuthzOptions) => Promise<CommitPrepareResult> | CommitPrepareResult
   },
   commitMessage?: string,
   effectiveAuthzLevel?: AuthzLevel,
@@ -208,11 +272,11 @@ async function stageAndMaybeCommit(
   const committed = await uta.commit(
     commitMessage,
     effectiveAuthzLevel ? { effectiveAuthzLevel } : undefined,
-  ) as Record<string, unknown>
+  )
   return {
     ...staged,
-    committed: { hash: committed['hash'], message: committed['message'] },
-    nextStep: 'Awaiting user approval or deterministic auto-push outside the agent tool surface.',
+    committed: { hash: committed.hash, message: committed.message },
+    ...describeAutoPushOutcome(committed.autoPush),
   }
 }
 

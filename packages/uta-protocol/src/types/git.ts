@@ -8,6 +8,7 @@
 import type { Contract, Order, OrderCancel, Execution, OrderState } from '@traderalice/ibkr'
 import type Decimal from 'decimal.js'
 import type { Position, OpenOrder, TpSlParams, PlaceOrderLeg, RiskStateInfo } from './broker.js'
+import type { AuthzAccountType, AuthzLevel } from './authz.js'
 import './contract-ext.js'
 
 // ==================== Commit Hash ====================
@@ -149,11 +150,82 @@ export interface AddResult {
   operation: Operation
 }
 
+// ==================== Paper auto-push ====================
+//
+// UTA's POST /wallet/commit route resolves this synchronously in the same
+// request (services/uta/src/http/routes-trading.ts) and splices it onto the
+// CommitPrepareResult response as `autoPush` — it genuinely crosses the wire,
+// so the type lives here rather than staying UTA-domain-local
+// (services/uta/src/domain/trading/paper-auto-push.ts re-exports it; that
+// file remains the single place the *values* are constructed).
+
+export type PaperAutoPushSkipReason =
+  | 'not_configured'
+  | 'no_pending_commit'
+  | 'account_type_not_paper'
+  | 'authz_below_paper'
+  | 'risk_state_not_normal'
+  | 'paper_policy_denied'
+  | 'push_in_flight'
+
+export type PaperDecisionPolicyViolationCode =
+  | 'missing_stop_loss'
+  | 'stop_loss_wrong_side'
+  | 'stop_loss_too_wide'
+  | 'entry_price_unavailable'
+  | 'adding_to_losing_position'
+
+export interface PaperDecisionPolicyViolation {
+  code: PaperDecisionPolicyViolationCode
+  symbol: string
+  reason: string
+  metrics?: {
+    entryPrice?: string
+    stopLossPrice?: string
+    stopLossPct?: number
+    maxStopLossPct?: number
+    unrealizedPnL?: string
+  }
+}
+
+export type PaperAutoPushResult =
+  | {
+      status: 'pushed'
+      hash: string
+      push: PushResult
+      approver: ApproverIdentity
+      effectiveAuthzLevel: AuthzLevel
+    }
+  | {
+      status: 'skipped'
+      reason: PaperAutoPushSkipReason
+      pendingHash?: string
+      accountType?: AuthzAccountType
+      effectiveAuthzLevel?: AuthzLevel
+      risk?: RiskStateInfo
+      policyViolations?: PaperDecisionPolicyViolation[]
+    }
+  | {
+      status: 'failed'
+      reason: string
+      pendingHash: string
+      effectiveAuthzLevel: AuthzLevel
+      risk?: RiskStateInfo
+    }
+
 export interface CommitPrepareResult {
   prepared: true
   hash: CommitHash
   message: string
   operationCount: number
+  /**
+   * Paper/mock accounts only — the result of UTA's deterministic auto-push
+   * attempt for this commit (issue #111: previously computed server-side but
+   * dropped before reaching the agent tool response). Absent for accounts
+   * where the route never attempts auto-push (e.g. live/human-approval
+   * accounts on older UTA builds, or non-HTTP commit() callers).
+   */
+  autoPush?: PaperAutoPushResult
 }
 
 export interface PushResult {

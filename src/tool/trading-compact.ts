@@ -220,6 +220,28 @@ export function compactPushResult(r: unknown): AnyRec {
   }
 }
 
+/** PaperAutoPushResult (issue #111) → the paper/mock deterministic auto-push
+ *  outcome UTA computes alongside a commit. Kept close to the raw shape
+ *  (status + reason + policyViolations are exactly what the agent needs to
+ *  tell "executed" from "blocked by risk guard" from "not eligible here")
+ *  but the `push` sub-object goes through compactPushResult so a pushed
+ *  commit doesn't dump raw orderState noise. */
+export function compactAutoPushResult(r: unknown): AnyRec {
+  if (!r || typeof r !== 'object') return {}
+  const k = r as AnyRec
+  const out: AnyRec = { status: k['status'] }
+  pick(out, 'reason', k['reason'])
+  pick(out, 'hash', k['hash'])
+  pick(out, 'pendingHash', k['pendingHash'])
+  pick(out, 'accountType', k['accountType'])
+  pick(out, 'effectiveAuthzLevel', k['effectiveAuthzLevel'])
+  if (k['push']) out['push'] = compactPushResult(k['push'])
+  if (Array.isArray(k['policyViolations']) && k['policyViolations'].length > 0) {
+    out['policyViolations'] = k['policyViolations']
+  }
+  return out
+}
+
 /** GitCommit (tradingShow) → ops + results compacted; stateAfter collapsed
  *  to the account-level numbers + counts (the full position/order arrays
  *  are reachable via getPortfolio/getOrders when actually needed). */
