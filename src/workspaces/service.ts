@@ -82,6 +82,7 @@ import {
   createStewardWakeStore,
   injectStewardWake,
   StewardLockConflictError,
+  StewardSupervisorScanner,
 } from './steward/index.js';
 
 /**
@@ -913,6 +914,25 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
   });
   scheduleScanner.start();
 
+  // ── Steward supervisor self-ticking. `StewardSupervisor.tick()` (flips
+  // terminal wakes, releases per-account locks, rolls up cost) was previously
+  // reachable ONLY via `POST /:id/steward/supervisor/tick` — nothing in the
+  // running process called it on its own, so a hung/stuck wake's lock never
+  // released outside of external polling (e.g. `tools/campaigns/run-cell.mjs`
+  // during backtests). This mirrors `scheduleScanner` above: its own
+  // self-arming timer, scoped to workspaces spawned from the `steward`
+  // template. `pool` is referenced here even though it's declared later in
+  // this function — safe because `.start()` only arms a timer; by the time it
+  // fires, `pool` has long since been assigned (same pattern already used by
+  // `dispatchStewardWakeMethod` above).
+  const stewardSupervisorScanner = new StewardSupervisorScanner({
+    registry,
+    pool: { get: (sessionId: string) => pool.get(sessionId) },
+    ...(inboxStore ? { inboxStore } : {}),
+    logger: launcherLogger.child({ scope: 'steward-supervisor-scanner' }),
+  });
+  stewardSupervisorScanner.start();
+
   // Read-only aggregation for the Schedules dashboard (GET /api/schedule).
   // Walks each workspace's live declaration + the scanner's marker; the route
   // layer stays a thin adapter and the marker store stays private.
@@ -1246,6 +1266,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     shuttingDown = true;
     launcherLogger.info('workspaces.dispose', { reason, activeSessions: pool.size() });
     scheduleScanner.stop();
+    stewardSupervisorScanner.stop();
     pool.disposeAll('plugin shutdown');
     transcriptWatcher.disposeAll();
     await processLock.release().catch((err) =>

@@ -1,5 +1,15 @@
 # Persistent Steward 最小实现方案
 
+> 版本：v0.7（2026-07-09）——issue #109：`StewardSupervisor.tick()` 此前只能被
+> `POST /:id/steward/supervisor/tick` 手动触发，全仓库唯一真实调用者是
+> `tools/campaigns/run-cell.mjs` 自己的外部轮询，进程内没有任何定时器/cron/UI
+> 会自动调用它——这正是 §7 下面这行长期标注"生产中 supervisor 自己定时 tick"
+> 却从未落地的缺口，也是 #107 事故中卡死 wake 的账户锁一直未释放的直接原因之一。
+> 新增 `StewardSupervisorScanner`（`src/workspaces/steward/supervisor-scanner.ts`，
+> 镜像 `ScheduleScanner` 的自计时 pattern，默认 30s 间隔）在 `service.ts` 里随进程
+> 常驻启动，按 `template === 'steward'` 过滤自动 tick 每个 steward workspace；
+> 手动路由与自动路径共享同一个提取出来的 `runStewardSupervisorTick`，避免行为分叉。
+> §7 该行随后同步更新为已落地状态。
 > 版本：v0.6（2026-07-09）——审计 + 补救轮，记录在 PR A-F（本节所指，见上）全部落地
 > 之后一次单独会话的复核结果。核心 agent 因 codex 配额耗尽切换为
 > `claude-haiku-4-5-20251001`。复核发现的缺口经 maintainer 批准的补救计划（六阶段
@@ -293,10 +303,11 @@ server-side PTY stdin seam；`src/workspaces/steward/injector.ts` 只格式化
 | `POST` | `/api/workspaces/:id/steward/wakes` | 创建 wake、确保/选择 session、写 wake 文件、注入 PTY |
 | `GET` | `/api/workspaces/:id/steward/wakes/:wakeId` | 查看 wake status、deadline、sessionId、ledger entry |
 | `GET` | `/api/workspaces/:id/steward/ledger?limit=N` | 查看最近 decision ledger |
-| `POST` | `/api/workspaces/:id/steward/supervisor/tick` | 测试用手动 tick；生产中 supervisor 自己定时 tick |
+| `POST` | `/api/workspaces/:id/steward/supervisor/tick` | 手动 tick（测试/campaign harness 用）；生产中 `StewardSupervisorScanner` 自己定时 tick（issue #109，v0.7） |
 
 已落地：前三个 route 已经在 `src/webui/routes/workspaces.ts` 中实现为手动 wake API。
-`supervisor/tick` 留给 PR E，避免在 PR D 混入 deadline / stuck / lock 行为。
+`supervisor/tick` 在 PR E 落地手动路径；issue #109（v0.7）补上进程内自动定时 tick，
+两者共享同一个 `runStewardSupervisorTick`，行为不会分叉。
 
 `POST /wakes` body 就是行为契约里的 `WakeEnvelope` 加少量控制字段：
 
@@ -344,7 +355,9 @@ supervisor 是 core-agent 外部的小控制器。第一版只做四件事：
 4. **成本记录**：汇总 ledger cost 字段，记录月度 model/server/trading cost estimate。
 
 第一版 supervisor 可以是 Alice 进程里的 interval；不需要新进程。以后如果要硬隔离，再抽
-成单独 worker。
+成单独 worker。**已落地（issue #109，v0.7）**：`StewardSupervisorScanner`
+（`src/workspaces/steward/supervisor-scanner.ts`）就是这个进程内 interval，镜像
+`ScheduleScanner` 的自计时 pattern，默认 30s，随 `service.ts` 启动/关闭。
 
 开发阶段成本策略是**记录和告警，不阻止新 wake**。超过预算时可以标 `warn`、推 Inbox
 或写 supervisor log，但不要直接阻断；现阶段记录成本是为了优化，而不是生产限流。

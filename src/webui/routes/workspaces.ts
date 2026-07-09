@@ -47,9 +47,10 @@ import { isTerminalThemeVariant, type TerminalThemeVariant } from '../../workspa
 import {
   createStewardLedgerStore,
   createStewardLockStore,
-  createStewardSupervisor,
   createStewardWakeStore,
   injectStewardWake,
+  readStewardConfig,
+  runStewardSupervisorTick,
   StewardLockConflictError,
   stewardExpectedDecisionSchema,
   stewardWakeReasonSchema,
@@ -319,22 +320,6 @@ export function createWorkspaceRoutes(
       launcherLogger.error('workspace.session_spawn_failed', { id, err });
       return { ok: false, status: 500, body: { error: 'spawn_failed', message: (err as Error).message } };
     }
-  }
-
-  async function readStewardConfig(meta: WorkspaceMeta): Promise<Record<string, unknown>> {
-    const raw = await readWorkspaceFile(meta.dir, '.alice/steward/config.json');
-    if (raw === null || raw.trim() === '') return {};
-    const parsed = JSON.parse(raw) as unknown;
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      throw new Error('.alice/steward/config.json must be an object');
-    }
-    return parsed as Record<string, unknown>;
-  }
-
-  function asRecord(value: unknown): Record<string, unknown> | undefined {
-    return typeof value === 'object' && value !== null && !Array.isArray(value)
-      ? value as Record<string, unknown>
-      : undefined;
   }
 
   async function writeStewardSessionConfig(
@@ -900,42 +885,16 @@ export function createWorkspaceRoutes(
       return c.json({ error: 'invalid_steward_config', message: (err as Error).message }, 500);
     }
 
-    const supervisor = createStewardSupervisor(meta.dir);
-    const result = await supervisor.tick({
+    // Shared with StewardSupervisorScanner's own timer-driven tick
+    // (src/workspaces/steward/supervisor-scanner.ts) so the manual route and
+    // the self-ticking scanner can't drift on what a tick actually does.
+    const result = await runStewardSupervisorTick(meta, {
+      config,
       ...(body.now !== undefined ? { now: body.now } : {}),
       isSessionRunning: (sessionId) => svc.pool.get(sessionId) !== undefined,
-      config: {
-        monthlyBudget: asRecord(config['monthlyBudget']),
-        costPolicy: asRecord(config['costPolicy']),
-      },
+      ...(opts?.inboxStore ? { inboxStore: opts.inboxStore } : {}),
+      logger: launcherLogger,
     });
-
-    // Proactive push: a wake going `stuck` (session not running / repeated
-    // respawn) is exactly the kind of event a human should be notified about
-    // rather than having to poll GET /:id/steward/wakes/:wakeId or read the
-    // supervisor log file. Every other transition (done/blocked/error/
-    // timeout) stays log-only — narrower scope per the plan (docs/
-    // steward-persistent-loop-implementation.zh.md §7).
-    const stuckTransitions = result.transitions.filter((t) => t.to === 'stuck');
-    if (stuckTransitions.length > 0 && opts?.inboxStore) {
-      const wakeStore = createStewardWakeStore(meta.dir);
-      for (const t of stuckTransitions) {
-        const wake = await wakeStore.get(t.wakeId).catch(() => null);
-        const detail = wake?.error ?? t.reason;
-        try {
-          await opts.inboxStore.append({
-            workspaceId: id,
-            comments: `Steward wake \`${t.wakeId}\` is stuck: ${detail}.`,
-          });
-        } catch (err) {
-          launcherLogger.error('steward supervisor: inbox push for stuck wake failed', {
-            workspaceId: id,
-            wakeId: t.wakeId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-    }
 
     return c.json(result);
   });
