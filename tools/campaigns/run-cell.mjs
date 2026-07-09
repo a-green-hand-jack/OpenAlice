@@ -163,9 +163,9 @@ async function positionQty(c, id) {
   return null;
 }
 
-/** Read + sum claude transcript token usage for a workspace (haiku cost truth). */
-function transcriptCost(wsDir) {
-  if (process.env.OPENALICE_CAMPAIGN_AGENT === 'codex') return codexTranscriptUsage(wsDir);
+/** Read + sum native agent transcript token usage for a workspace. */
+function transcriptCost(agent, wsDir) {
+  if (agent === 'codex') return codexTranscriptUsage(wsDir);
   const projectKey = resolve(wsDir).replaceAll('/', '-').replaceAll('.', '-');
   const dir = join(homedir(), '.claude', 'projects', projectKey);
   const tally = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, turns: 0, files: [] };
@@ -208,11 +208,14 @@ function codexTranscriptUsage(wsDir) {
       tally.files.push(fp);
       for (const line of lines) {
         let evt; try { evt = JSON.parse(line); } catch { continue; }
-        const u = evt?.usage;
+        const u = evt?.type === 'event_msg' && evt?.payload?.type === 'token_count'
+          ? evt.payload.info?.last_token_usage
+          : evt?.usage;
         if (!u) continue;
         tally.inputTokens += Number(u.input_tokens ?? 0);
         tally.outputTokens += Number(u.output_tokens ?? 0);
         tally.cacheReadTokens += Number(u.cached_input_tokens ?? 0);
+        tally.cacheWriteTokens += Number(u.cache_creation_input_tokens ?? 0);
         tally.reasoningOutputTokens += Number(u.reasoning_output_tokens ?? 0);
         tally.turns++;
       }
@@ -394,17 +397,16 @@ async function main() {
     const statePath = join(wsDir, '.alice', 'steward', 'state.json');
     if (existsSync(statePath)) { try { stewardState = JSON.parse(readFileSync(statePath, 'utf8')); } catch { /* ignore */ } }
 
-    process.env.OPENALICE_CAMPAIGN_AGENT = opts.agent;
-    const cost = transcriptCost(wsDir);
+    const cost = transcriptCost(opts.agent, wsDir);
 
     const equityCurve = [START_CASH, ...weeks.map((w) => (Number.isFinite(w.equity) ? w.equity : START_CASH)),
       (Number.isFinite(finalEquity) ? finalEquity : START_CASH)];
     const grossPnL = (Number.isFinite(finalEquity) ? finalEquity : START_CASH) - START_CASH;
     const totalReturn = grossPnL / START_CASH;
     const agentMaxDD = maxDrawdown(equityCurve);
-    const modelCostUsd = cost.found ? (cost.modelCostUsd ?? 0) : 0;
+    const modelCostUsd = cost.found ? (cost.modelCostUsd ?? null) : null;
     const ledgerCostUsd = stewardState?.cost?.totalEstimatedCostUsd ?? 0;
-    const netPnL = grossPnL - modelCostUsd;
+    const netPnL = modelCostUsd === null ? null : grossPnL - modelCostUsd;
     const verdict = regimeVerdict(regime, totalReturn, agentMaxDD, buyHold.maxDD);
 
     const result = {
@@ -428,10 +430,10 @@ async function main() {
       cost: {
         modelCostUsd,
         ledgerReportedCostUsd: ledgerCostUsd,
-        pricing: HAIKU_PRICE,
+        pricing: opts.agent === 'claude' ? HAIKU_PRICE : null,
         transcript: { found: cost.found, turns: cost.turns, inputTokens: cost.inputTokens, outputTokens: cost.outputTokens, cacheReadTokens: cost.cacheReadTokens, cacheWriteTokens: cost.cacheWriteTokens, reasoningOutputTokens: cost.reasoningOutputTokens ?? 0, dir: cost.transcriptDir, files: cost.files },
       },
-      net: { netPnL, netReturn: netPnL / START_CASH },
+      net: { netPnL, netReturn: netPnL === null ? null : netPnL / START_CASH },
       verdict: { regime, pass: verdict.pass, rule: verdict.rule },
       weeks,
       decisions: ledgerAll.map((e) => ({ wakeId: e.wakeId, at: e.at, decision: e.decision, status: e.status, thesis: e.thesis, actions: e.actions, checklist: e.checklist })),
@@ -442,7 +444,7 @@ async function main() {
     if (stewardState) writeFileSync(join(runDir, 'steward-state.json'), `${JSON.stringify(stewardState, null, 2)}\n`);
     log(`\n─── ${runId} ───`);
     log(`gross PnL $${grossPnL.toFixed(2)} (${(totalReturn * 100).toFixed(1)}%)  agent maxDD ${(agentMaxDD * 100).toFixed(1)}%  vs buy-hold ${(buyHold.netReturn * 100).toFixed(1)}% / ${(buyHold.maxDD * 100).toFixed(1)}%`);
-    log(`model cost ${cost.modelCostUsd === null ? 'n/a' : `$${modelCostUsd.toFixed(4)}`} (${cost.inputTokens} in / ${cost.outputTokens} out tok, ${opts.model ?? opts.agent})  → net PnL $${netPnL.toFixed(2)}`);
+    log(`model cost ${cost.modelCostUsd === null ? 'n/a' : `$${modelCostUsd.toFixed(4)}`} (${cost.inputTokens} in / ${cost.outputTokens} out tok, ${opts.model ?? opts.agent})  → net PnL ${netPnL === null ? 'n/a' : `$${netPnL.toFixed(2)}`}`);
     log(`verdict ${regime}: ${verdict.pass ? 'PASS' : 'FAIL'} (${verdict.rule})`);
     log(`result → ${join(runDir, 'result.json')}`);
   } finally {
