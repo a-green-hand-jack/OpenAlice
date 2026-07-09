@@ -21,7 +21,7 @@
 | --- | --- | --- | --- | --- | --- |
 | v1 (pilot) | 4-cell 中性 steward 试点 | 已归档（见 §6 摘要） | `campaign/pilot.mjs` `stewardPrompt`（orchestrator 侧） | 已归档 | 中性框架；仅裸日收盘价；"conservative by default" → 极度保守（H1 仅吃 7–16% buy-hold，H2 决定性通过） |
 | **v2** | 双目标 + 盲但富信息 | **本文件 §5** | `campaign/prompt-v2.mjs` `stewardPrompt` | **已批准 2026-07-06；已验证 2026-07-07** | benchmark-aware 双目标；富信息（OHLCV+量+自算指标）；盲化反作弊；paste / tool-native 双模式 |
-| **v3** | steward **模板**唤醒指令实质内容（issue #98） | **`src/workspaces/templates/steward/files/instruction.md`**（仓库内提示词面，见 §3；文件本身即运行副本，无需另存比对拷贝） | 同左（in-repo 模板文件，wake 时逐字读取） | **已实现（本次 PR，2026-07-08）；H1/H2 campaign 复测 pending** | 首次把 v2 substance 移植进**真正被持久化唤醒机制使用**的模板（此前 v2 只活在 orchestrator 侧 `stress.mjs`，checked-in `instruction.md` 从未获得过它）；协议骨架（世界边界/唤醒循环 6 步/ledger JSON 契约）逐字保留，唯一例外是 Wake Loop 第 5 步补了一句工具选择澄清（用 Write/Edit 工具写 ledger，不用 Bash heredoc——issue #101 campaign harness 现场发现 heredoc 会撞上 Claude Code 的"expansion obfuscation"分类器卡死无人值守 wake，配合 #92 的裸 Write/Edit 授权一起解决，步骤数和 ledger JSON 契约本身不变）；新增 dual mandate + evidence-first + risk discipline + campaign §4.7 认可的「反过度参与」方向；stop-loss 风险上限收紧至 ~8%、禁止摊薄亏损仓，与 #97 硬 guards 语义对齐（软镜像，不替代）。逐组件解剖见 §7 |
+| **v3** | steward **模板**唤醒指令实质内容（issue #98） | **`src/workspaces/templates/steward/files/instruction.md`**（仓库内提示词面，见 §3；文件本身即运行副本，无需另存比对拷贝） | 同左（in-repo 模板文件，wake 时逐字读取） | **已实现（本次 PR，2026-07-08）；H1/H2 campaign 复测 pending** | 首次把 v2 substance 移植进**真正被持久化唤醒机制使用**的模板（此前 v2 只活在 orchestrator 侧 `stress.mjs`，checked-in `instruction.md` 从未获得过它）；协议骨架（世界边界/唤醒循环/ledger JSON 契约）基本保留；新增 dual mandate + evidence-first + risk discipline + campaign §4.7 认可的「反过度参与」方向；stop-loss 风险上限收紧至 ~8%、禁止摊薄亏损仓，与 #97 硬 guards 语义对齐（软镜像，不替代）。Wake Loop 后续经两次现场修补：issue #101 加了工具选择澄清（用 Write/Edit 写 ledger，不用 Bash heredoc），issue #103 加了 ACT 步骤（`propose_trade` 必须先下单+commit 再写 ledger，否则决策和实际敞口脱节）——现为 7 步，非原始 6 步。逐组件解剖见 §7、§8 |
 
 > **v2 验证结果（2026-07-07，paste 模式，3 个真实牛市匿名窗口）**：H1 = NVDA 42% / TSLA 65% / AMD 43%（均 ~50%），maxDD 全 0%。对比 pilot（v1）H1 仅 7-16%——**v2 把牛市参与度提升 3-5×，同时保住 H2 纪律（回撤 0%）**。即「行情好时参与、行情差时仍不冒大险」。12-cell（含 bear/chop）将复核 v2 是否破坏 H2。
 
@@ -53,7 +53,7 @@
 | 面 | 位置（file:line） | 控什么 |
 | --- | --- | --- |
 | 模板 persona / 指令 | `src/workspaces/template-registry.ts:81-87`（`injectPersona` = Alice persona + 模板 `instruction.md`）；模板目录 `src/workspaces/templates/{auto-quant,chat}/` | workspace agent 的基础人设与任务框架 |
-| Steward 唤醒指令（实质内容，v3 起纳管） | `src/workspaces/templates/steward/files/instruction.md` 全文（178 行）：World Boundary `7-21`、Mandate `23-40`、Evidence-First Reasoning `42-61`、Participation Bias `63-79`、Risk Discipline `81-95`、Wake Loop `97-117`、Decision Ledger Shape `119-168`、Safety `170-177` | steward workspace 唤醒时的完整行为提示。机制段（世界边界/唤醒循环协议/ledger JSON 契约）不变；v3 新增的推理与风控实质见 §7 逐组件解剖 |
+| Steward 唤醒指令（实质内容，v3 起纳管） | `src/workspaces/templates/steward/files/instruction.md` 全文（190 行，issue #101/#103 现场修补后）：World Boundary `7-21`、Mandate `23-40`、Evidence-First Reasoning `42-61`、Participation Bias `63-79`、Risk Discipline `81-95`、Wake Loop `97-131`（7 步，含 issue #103 新增的 ACT 步骤）、Decision Ledger Shape `132-182`、Safety `183-190` | steward workspace 唤醒时的完整行为提示。世界边界/ledger JSON 契约不变；Wake Loop 协议步骤见 §8 现场修补记录；v3 新增的推理与风控实质见 §7 逐组件解剖 |
 | 工具描述串 | `src/tool/*.ts` 的 `description:`（21 处），如 `src/tool/analysis.ts:37`、`src/tool/market.ts:27` | agent 何时/如何调用各工具——本身即 prompt |
 | Key-test 探针 | `src/workspaces/agent-probe.ts:74`（一次性 "Hi"） | 仅验证凭证连通，无行为语义 |
 
@@ -108,7 +108,7 @@ THESIS: <your read of the market> | ACTION: <what you did + current stance/size>
 
 ## 7. v3 逐组件解剖（steward 模板，issue #98 新增）
 
-v3 是首次把 v2 的实验性 substance 移植进**真正被持久化唤醒机制使用**的仓库内模板——此前 `instruction.md` 只有裸协议（世界边界 + 唤醒循环 6 步 + ledger JSON 契约），没有 v2 的任何推理/风控内容。协议骨架本身**逐字保留**（World Boundary、Wake Loop 的 6 步、Decision Ledger Shape 的 JSON 契约不变，`stewardDecisionLedgerEntrySchema` 未改一个字段——唯一改动是 Wake Loop 第 5 步补了"用 Write/Edit 工具、不用 Bash heredoc"的工具选择澄清，见上方状态栏说明，不算协议实质变化）；以下是新增的实质组件。
+v3 是首次把 v2 的实验性 substance 移植进**真正被持久化唤醒机制使用**的仓库内模板——此前 `instruction.md` 只有裸协议（世界边界 + 唤醒循环 6 步 + ledger JSON 契约），没有 v2 的任何推理/风控内容。World Boundary 与 Decision Ledger Shape 的 JSON 契约逐字保留（`stewardDecisionLedgerEntrySchema` 未改一个字段）；Wake Loop 落地后又经两轮现场修补（工具选择澄清 + ACT 步骤，见 §8），现为 7 步而非最初的 6 步。以下是本次（issue #98）新增的实质组件。
 
 每段标注：**[组件]** 意图 / 所控行为 / 相对旧 `instruction.md` 的变更 / 关联不变量。
 
@@ -116,3 +116,29 @@ v3 是首次把 v2 的实验性 substance 移植进**真正被持久化唤醒机
 - **[Evidence-First 先取证]** `instruction.md:42-61`。"read the tape yourself … thesis from evidence, not vibes"，并把 trend / momentum / volatility / levels / volume 五要素显式与 ledger 的 `thesis`/`invalidation` 字段绑定（"a moving-average cross, a break of a swing level, a stop getting hit"）。意图：让 `thesis`/`invalidation` 不再是任意占位文本，而是有证据锚点的字段。所控：ledger 条目里 `thesis`/`invalidation` 两个字符串字段的写法（不改字段本身，只改怎么填）。变更：旧版 ledger 契约把这两个字段列为纯字符串，无任何写法指引。关联：呼应 v2 §2 同名组件；不涉及不变量（不改 schema、不改风控权威）。
 - **[Participation Bias 参与偏置 / v3 方向]** `instruction.md:63-79`。"lean OUT — and default to `no_trade` — when the evidence is unclear, weakening, or downside-leaning"，同时保留 "do not sit out a clear … uptrend"。意图：这是 [steward-p3-campaign.zh.md](steward-p3-campaign.zh.md) §4.7 发现 over-participation（`sp-bear-smci` 深熊误读为可参与、串行/并行两批皆 FAIL）之后 maintainer 拍板的「prompt v3」方向本体——此前从未成文，只存在于 §4.7 的对策记录里。所控：evidence 模糊/走弱/下行时的默认动作。变更：v2 原文只有单向的 "lean IN when evidence supports a trend"；本版补上对称的另一半（证据不清/走弱/下行时默认 `no_trade`），同时刻意**不弱化** v2 已验证的 H1 修复（保留「清晰上涨仍须参与」的偏置，防止退回 v1 式极度保守）。关联：[steward-p3-campaign.zh.md](steward-p3-campaign.zh.md) §4.7 over-participation 发现 + H2 定义的判据语义。
 - **[Risk Discipline 风控收紧]** `instruction.md:81-95`。"never size a stop to risk more than roughly 8% … never add to a position that is already losing"，并显式声明 "the guards are the backstop; apply these yourself rather than relying on them to catch it"。意图：把 v2 原有的 "protective stop, trail it up" 风控语言，收紧到与 issue #97 硬 guards（`max-drawdown` / `max-position-size`）同量级的具体数字，同时把 prompt 层风控明确定位为「软镜像」而非风控权威。所控：止损比例、是否允许摊薄亏损仓。变更：v2/旧版都没有具体止损比例数字，也没有「禁止摊薄亏损仓」规则。关联：不变量 **I3**（风险机制是确定性代码，LLM 永远不在风险检查信任链上，见 [steward-plan.zh.md](steward-plan.zh.md)）——本组件不改变、不替代 I3 的分工：guards 仍是唯一权威（`services/uta/src/domain/trading/risk-state.ts`），这里只是让 agent 自身的风控直觉提前向 guards 的阈值对齐，减少被动触发 READ_ONLY 降级的次数。
+
+## 8. Wake Loop 现场修补记录（issue #101、#103）
+
+v3（§7）落地后，两轮真实 campaign 现场验证各发现一处 Wake Loop 缺口，均已修补：
+
+- **issue #101（campaign harness 首次真实 cell 跑通时发现）**：`--agent claude`
+  下 wake 卡死在 ledger 写入这一步——Wake Loop 原第 5 步只说"追加一行 JSON"，
+  没说用什么工具写；agent 自行选择 Bash heredoc，触发 Claude Code 的
+  "expansion obfuscation" 分类器，无人应答的 wake 永久卡住。修补：Wake Loop
+  该步骤明确要求用 Write/Edit 工具、不用 Bash 命令；配合 issue #92 授予的裸
+  `Write`/`Edit` 权限一起解决。
+- **issue #103（在 #101/#92 修好之后，第一次真实无人值守跑通全流程时发现）**：
+  ledger 写入不再卡死了，但 agent 把"决定 `propose_trade`"和"记录这个决定"
+  当成了任务终点——ledger 里 `decision: "propose_trade"`、`thesis` 完整，但
+  `actions: []`、`pendingHash: null`，账户全程没有任何仓位变化。根因：Wake
+  Loop 原本只有"决定"和"写 ledger"两步，中间没有"如果决定是 propose_trade，
+  必须先真的下单+commit"这一步——agent 严格按字面执行了指令，指令本身就没
+  要求它去做。修补：Wake Loop 新增第 5 步，`propose_trade` 必须先用
+  `alice-uta` 下单（按 Risk Discipline 附带 stopLoss）并 commit，再写 ledger；
+  `actions`/`pendingHash` 必须反映真实执行结果，不是意图。
+
+这两处都不改 World Boundary、Decision Ledger Shape 的 JSON 契约，也不改
+Mandate / Evidence-First / Participation Bias / Risk Discipline 这四个 §7
+组件的文字——纯粹是 Wake Loop 协议步骤本身的缺口修补，性质更接近"协议 bug
+修复"而非"prompt substance 变更"，但按 §4 的漂移规则仍需在此登记，因为两次
+都改动了 agent 实际收到的唤醒指令文本。
