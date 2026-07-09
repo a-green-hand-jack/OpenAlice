@@ -25,6 +25,7 @@ For current ownership and line anchors:
 | Alice internals under `src/` | [../src/ANATOMY.md](../src/ANATOMY.md) |
 | Workspace agent support surface | [openalice-agent-support.zh.md](openalice-agent-support.zh.md) |
 | Target steward workspace behavior | [steward-workspace-behavior-contract.zh.md](steward-workspace-behavior-contract.zh.md) |
+| Trading-agent runtime and market testing | [trading-agent-runtime-and-market-testing.zh.md](trading-agent-runtime-and-market-testing.zh.md) |
 | Event system | [event-system.md](event-system.md) |
 | UTA live testing | [uta-live-testing.md](uta-live-testing.md) |
 
