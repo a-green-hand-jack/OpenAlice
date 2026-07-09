@@ -6,3 +6,5 @@ export * from './injector.js';
 export * from './lock-store.js';
 export * from './cost.js';
 export * from './supervisor.js';
+export * from './config.js';
+export * from './supervisor-scanner.js';
