@@ -31,6 +31,15 @@ function parseArgs(argv) {
 const pct = (x) => (x === null || x === undefined || Number.isNaN(x) ? 'n/a' : `${(x * 100).toFixed(1)}%`);
 const usd = (x) => (x === null || x === undefined || Number.isNaN(x) ? 'n/a' : `$${Number(x).toFixed(4)}`);
 const money = (x) => (x === null || x === undefined || Number.isNaN(x) ? 'n/a' : `$${Number(x).toFixed(2)}`);
+const modelLabel = (r) => r.workspace?.model && r.workspace.model !== '(default)'
+  ? `${r.workspace.agent}/${r.workspace.model}`
+  : r.workspace?.agent ?? 'unknown';
+const knownModelCost = (r) => {
+  if (r.workspace?.agent === 'codex' && (!r.cost?.pricing || r.cost.pricing?.model === 'claude-haiku-4-5')) return null;
+  return r.cost?.modelCostUsd ?? null;
+};
+const knownNetPnl = (r) => (knownModelCost(r) === null ? null : r.net?.netPnL ?? null);
+const weeksLabel = (n) => `${n} ${n === 1 ? 'week' : 'weeks'}`;
 
 function loadResult(runDir) {
   const p = join(resolve(runDir), 'result.json');
@@ -44,8 +53,8 @@ function render(results) {
   L.push('');
   L.push(`> Generated ${new Date().toISOString()} by \`tools/campaigns/report.mjs\`.`);
   L.push('> Mechanism: persistent-wake steward (`/api/workspaces/:id/steward/wakes`), blind mode (#66),');
-  L.push('> MockBroker historical-bar replay (#67), paper auto-push (P3-4a). Agent: claude + haiku-4.5.');
-  L.push('> Windows: 6 weeks × 5 daily bars, one weekly decision each. Anonymized per §4.3');
+  L.push(`> MockBroker historical-bar replay (#67), paper auto-push (P3-4a). Agents/models: ${[...new Set(results.map(modelLabel))].join(', ')}.`);
+  L.push(`> Windows: ${[...new Set(results.map((r) => weeksLabel(r.weeksRun)))].join(', ')} × 5 daily bars, one weekly decision each. Anonymized per §4.3`);
   L.push('> (day-0 close = 100, fictional day index, symbol → codename). Guards: max-drawdown + max-position-size.');
   L.push('');
 
@@ -56,7 +65,7 @@ function render(results) {
   L.push('|---|---|---|---|---|---|---|---|---|---|---|');
   for (const r of results) {
     const m = r.metrics;
-    L.push(`| ${r.runId} | ${r.cell.regime} | ${pct(m.totalReturn)} | ${pct(m.buyHoldReturn)} | ${pct(m.agentMaxDD)} | ${pct(m.buyHoldMaxDD)} | ${pct(m.h1CaptureVsBuyHold)} | ${pct(m.h2DrawdownVsBuyHold)} | ${usd(r.cost.modelCostUsd)} | ${money(r.net.netPnL)} | ${r.verdict.pass ? 'PASS' : 'FAIL'} |`);
+    L.push(`| ${r.runId} | ${r.cell.regime} | ${pct(m.totalReturn)} | ${pct(m.buyHoldReturn)} | ${pct(m.agentMaxDD)} | ${pct(m.buyHoldMaxDD)} | ${pct(m.h1CaptureVsBuyHold)} | ${pct(m.h2DrawdownVsBuyHold)} | ${usd(knownModelCost(r))} | ${money(knownNetPnl(r))} | ${r.verdict.pass ? 'PASS' : 'FAIL'} |`);
   }
   L.push('');
   L.push('Verdict rules (§4.6, regime-aware): ' + [...new Set(results.map((r) => `${r.cell.regime} → ${r.verdict.rule}`))].join('; ') + '.');
@@ -65,15 +74,15 @@ function render(results) {
   // ── cost breakdown ────────────────────────────────────────────────────
   L.push('## Cost breakdown');
   L.push('');
-  L.push('| Run | Turns | Input tok | Output tok | Cache-read tok | Cache-write tok | Model cost | Ledger-reported cost |');
-  L.push('|---|---|---|---|---|---|---|---|');
+  L.push('| Run | Agent/model | Turns | Input tok | Output tok | Cache-read tok | Cache-write tok | Reasoning tok | Model cost | Ledger-reported cost |');
+  L.push('|---|---|---|---|---|---|---|---|---|---|');
   for (const r of results) {
     const t = r.cost.transcript;
-    L.push(`| ${r.runId} | ${t.turns} | ${t.inputTokens} | ${t.outputTokens} | ${t.cacheReadTokens} | ${t.cacheWriteTokens} | ${usd(r.cost.modelCostUsd)} | ${usd(r.cost.ledgerReportedCostUsd)} |`);
+    L.push(`| ${r.runId} | ${modelLabel(r)} | ${t.turns} | ${t.inputTokens} | ${t.outputTokens} | ${t.cacheReadTokens} | ${t.cacheWriteTokens} | ${t.reasoningOutputTokens ?? 0} | ${usd(knownModelCost(r))} | ${usd(r.cost.ledgerReportedCostUsd)} |`);
   }
   L.push('');
-  L.push('Model cost = claude transcript token usage × Haiku 4.5 pricing ($1.00/$5.00 per 1M in/out, cache-read ×0.1, cache-write ×1.25).');
-  L.push('"Ledger-reported cost" is the steward `state.json` cost summary — the agent leaves those fields null, so it aggregates to 0; the transcript-derived figure is the ground truth for model spend.');
+  L.push('Model cost is transcript-derived when a pricing table is available. Claude/Haiku runs use the checked-in Haiku 4.5 table; Codex subscription-backed runs record token usage but leave USD cost as `n/a` unless a pricing table is configured.');
+  L.push('"Ledger-reported cost" is the steward `state.json` cost summary. Transcript token usage is the ground-truth activity counter; USD cost can remain unknown for non-metered/subscription models.');
   L.push('');
 
   // ── per-cell narration ────────────────────────────────────────────────
@@ -84,7 +93,7 @@ function render(results) {
     L.push(`### ${r.runId} — ${r.cell.regime} (${r.cell.codename})`);
     L.push('');
     L.push(`- **Outcome**: gross PnL ${money(m.grossPnL)} (${pct(m.totalReturn)}), agent maxDD ${pct(m.agentMaxDD)}; buy-hold ${pct(m.buyHoldReturn)} / maxDD ${pct(m.buyHoldMaxDD)}. Verdict **${r.verdict.pass ? 'PASS' : 'FAIL'}** (${r.verdict.rule}).`);
-    L.push(`- **Cost**: ${usd(r.cost.modelCostUsd)} model spend over ${r.weeksRun} weekly wakes → net PnL ${money(r.net.netPnL)}.`);
+    L.push(`- **Cost**: ${usd(knownModelCost(r))} model spend over ${r.weeksRun} weekly wakes (${modelLabel(r)}) → net PnL ${money(knownNetPnl(r))}.`);
     L.push(`- **Equity curve** (start → weekly → final): ${m.equityCurve.map((e) => Math.round(e)).join(' → ')}`);
     L.push('- **Weekly decisions**:');
     for (const w of r.weeks) {
