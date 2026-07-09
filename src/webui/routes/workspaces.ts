@@ -48,6 +48,7 @@ import {
   createStewardLedgerStore,
   createStewardLockStore,
   createStewardWakeStore,
+  formatStewardWakeMessage,
   injectStewardWake,
   readStewardConfig,
   runStewardSupervisorTick,
@@ -178,7 +179,14 @@ type SpawnSessionResult =
   | { readonly ok: false; readonly status: number; readonly body: { error: string; message?: string } };
 
 type StewardSessionSelection =
-  | { readonly ok: true; readonly sessionId: string; readonly agent: string; readonly reused: boolean; readonly resumed: boolean }
+  | {
+    readonly ok: true;
+    readonly sessionId: string;
+    readonly agent: string;
+    readonly reused: boolean;
+    readonly resumed: boolean;
+    readonly injectedByInitialPrompt: boolean;
+  }
   | { readonly ok: false; readonly status: number; readonly body: { error: string; message?: string } };
 
 export function createWorkspaceRoutes(
@@ -341,6 +349,7 @@ export function createWorkspaceRoutes(
     meta: WorkspaceMeta,
     config: Record<string, unknown>,
     requestedAgent: string | undefined,
+    initialWakePrompt?: string,
   ): Promise<StewardSessionSelection> {
     const configuredSessionId = typeof config['sessionId'] === 'string' ? config['sessionId'] : null;
     const configuredAgent = typeof config['agent'] === 'string' ? config['agent'] : undefined;
@@ -353,7 +362,14 @@ export function createWorkspaceRoutes(
       (requestedAgent === undefined || requestedAgent === configuredRecord?.agent || requestedAgent === configuredAgent);
 
     if (configuredSessionId && canUseConfigured && svc.pool.get(configuredSessionId)) {
-      return { ok: true, sessionId: configuredSessionId, agent, reused: true, resumed: false };
+      return {
+        ok: true,
+        sessionId: configuredSessionId,
+        agent,
+        reused: true,
+        resumed: false,
+        injectedByInitialPrompt: false,
+      };
     }
     if (configuredRecord && canUseConfigured) {
       return resumeStewardSession(meta, configuredRecord);
@@ -365,7 +381,7 @@ export function createWorkspaceRoutes(
         body: { error: 'agent_not_enabled', message: `workspace does not enable agent: ${agent}` },
       };
     }
-    const spawned = await spawnInteractiveSession(meta, { agentId: agent });
+    const spawned = await spawnInteractiveSession(meta, { agentId: agent, initialPrompt: initialWakePrompt });
     if (!spawned.ok) return spawned;
     await writeStewardSessionConfig(meta, config, spawned.session.sessionId, spawned.session.agent);
     return {
@@ -374,6 +390,7 @@ export function createWorkspaceRoutes(
       agent: spawned.session.agent,
       reused: false,
       resumed: false,
+      injectedByInitialPrompt: initialWakePrompt !== undefined,
     };
   }
 
@@ -467,7 +484,14 @@ export function createWorkspaceRoutes(
         agent: adapter.id,
         resume: resume === undefined ? null : resume === 'last' ? 'last' : resume.sessionId,
       });
-      return { ok: true, sessionId: session.recordId, agent: adapter.id, reused: true, resumed: true };
+      return {
+        ok: true,
+        sessionId: session.recordId,
+        agent: adapter.id,
+        reused: true,
+        resumed: true,
+        injectedByInitialPrompt: false,
+      };
     } catch (err) {
       launcherLogger.error('workspace.steward_session_resume_failed', {
         id: meta.id,
@@ -814,7 +838,12 @@ export function createWorkspaceRoutes(
       }, message.includes('already exists') ? 409 : 500);
     }
 
-    const selected = await ensureStewardSession(meta, config, body.session?.agent);
+    const selected = await ensureStewardSession(
+      meta,
+      config,
+      body.session?.agent,
+      formatStewardWakeMessage(record),
+    );
     if (!selected.ok) {
       await wakeStore.updateStatus(wakeId, 'error', {
         now: new Date().toISOString(),
@@ -825,7 +854,7 @@ export function createWorkspaceRoutes(
       return c.json(selected.body, selected.status as 400 | 500);
     }
 
-    const injected = await injectStewardWake({
+    const injected = selected.injectedByInitialPrompt || await injectStewardWake({
       pool: svc.pool,
       sessionId: selected.sessionId,
       record,

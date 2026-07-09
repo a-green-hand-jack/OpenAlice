@@ -13,6 +13,7 @@
  * UTA reload automatically. Step 4 just exposes the helper.
  */
 
+import { randomUUID } from 'crypto'
 import { writeFile, rename, mkdir } from 'fs/promises'
 import { dirname } from 'path'
 import { dataPath } from '@/core/paths.js'
@@ -45,6 +46,11 @@ interface HealthBody {
   utas?: number
 }
 
+let restartQueue: Promise<TriggerResult> = Promise.resolve({
+  triggered: false,
+  ready: true,
+})
+
 async function fetchHealth(url: string): Promise<HealthBody | null> {
   try {
     const res = await fetch(url)
@@ -54,6 +60,13 @@ async function fetchHealth(url: string): Promise<HealthBody | null> {
 }
 
 export async function triggerUTARestart(opts: TriggerOpts = {}): Promise<TriggerResult> {
+  const current = restartQueue.catch(() => ({ triggered: false, ready: false }))
+    .then(() => triggerUTARestartOnce(opts))
+  restartQueue = current
+  return current
+}
+
+async function triggerUTARestartOnce(opts: TriggerOpts = {}): Promise<TriggerResult> {
   if (isUTADisabled()) {
     return { triggered: false, ready: false, error: 'UTA disabled by OPENALICE_LITE_MODE' }
   }
@@ -68,7 +81,7 @@ export async function triggerUTARestart(opts: TriggerOpts = {}): Promise<Trigger
 
   // Atomic-write so Guardian's watcher never sees a half-written flag.
   await mkdir(dirname(flagPath), { recursive: true })
-  const tmpPath = `${flagPath}.tmp`
+  const tmpPath = `${flagPath}.${process.pid}.${randomUUID()}.tmp`
   await writeFile(tmpPath, new Date().toISOString(), 'utf-8')
   await rename(tmpPath, flagPath)
 

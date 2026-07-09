@@ -121,24 +121,30 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
 - `workspaces/` computes adapter commands, then `SessionPool` owns live PTYs:
   `src/workspaces/service.ts:94-104` -> `src/workspaces/session-pool.ts:72-84`
   -> `src/workspaces/persistent-session.ts:128-150`. Server-side PTY input for
-  future steward wakes goes through `SessionPool.writeToSession()` and
-  `PersistentSession.writeInput()`, not through fabricated WebSocket frames.
-- Manual steward wake dispatch is workspace-scoped: `src/webui/routes/workspaces.ts:751-970`
+  an already-running steward session goes through `SessionPool.writeToSession()`
+  and `PersistentSession.writeInput()`, not through fabricated WebSocket frames.
+  Fresh Codex steward wakes are seeded through the adapter's native
+  `initialPrompt` path instead of PTY paste, avoiding a startup race before the
+  TUI is ready; the Codex adapter also injects loopback network access and
+  honors `.alice/steward/core-agent-model.txt` model overrides at
+  `src/workspaces/adapters/codex.ts:74-91`.
+- Manual steward wake dispatch is workspace-scoped: `src/webui/routes/workspaces.ts:760-890`
   acquires `.alice/steward/locks/*.json`, writes `.alice/steward/wakes/*.json`,
-  reuses or resumes the configured interactive session via
-  `src/webui/routes/workspaces.ts:352-507`, then calls
-  `src/workspaces/steward/injector.ts:50-65` (shifted from `:19-28`, and now
-  async: issue #91 found the message write landing in one PTY burst never
-  actually submits in an interactive TUI — see the two-phase write + submit
+  reuses/resumes an existing configured interactive session, or spawns a fresh
+  one with the formatted wake as `initialPrompt` via
+  `src/webui/routes/workspaces.ts:348-394`. Existing sessions still use
+  `src/workspaces/steward/injector.ts:50-65` (async two-phase write + submit
   gap documented at `src/workspaces/steward/injector.ts:19-47`). Manual
   supervisor tick at
-  `src/webui/routes/workspaces.ts:871-906` advances completed, stuck, or timed-out
+  `src/webui/routes/workspaces.ts:906-941` advances completed, stuck, or timed-out
   wakes and writes cost state/audit log.
-- Scheduled steward wakes follow the same workspace-local files and PTY injector:
+- Scheduled steward wakes follow the same workspace-local files and session
+  selection rule:
   issue frontmatter declares `kind: steward-wake`, scanner routes it away from
   headless at `src/workspaces/schedule/scanner.ts:203-220`, and the service
-  dispatch seam at `src/workspaces/service.ts:650-913` creates the wake, lock,
-  session, and injection.
+  dispatch seam at `src/workspaces/service.ts:652-880` creates the wake, lock,
+  session, and either seeds a fresh session via `initialPrompt` or injects into
+  an already-live session.
 - Alice talks to UTA through `@traderalice/uta-protocol`: `src/main.ts:15-16`,
   `src/services/uta-client/UTAManagerSDK.ts:21-30`, and
   `packages/uta-protocol/src/client/UTAClient.ts:48`.

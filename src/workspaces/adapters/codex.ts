@@ -11,6 +11,7 @@ const CODEX_CONFIG_PATH = '.codex/config.toml';
 const CODEX_ENV_PATH = '.codex/env.json';
 const CODEX_KEY_ENV_NAME = 'OPENALICE_WORKSPACE_KEY';
 const CODEX_PROVIDER_NAME = 'workspace';
+const CODEX_MODEL_OVERRIDE_PATH = '.alice/steward/core-agent-model.txt';
 
 /**
  * OpenAI Codex CLI (Rust rewrite, `codex-cli`).
@@ -76,7 +77,7 @@ export const codexAdapter: CliAdapter = {
    * workspace must still spawn even when no MCP URL is present.
    */
   composeCommand(_base: readonly string[], ctx: SpawnContext): readonly string[] {
-    const head = codexMcpHead(ctx);
+    const head = codexModelHead(ctx, codexMcpHead(ctx));
     if (ctx.resume === undefined) {
       // Quick-chat seed: `codex [-c …] -- <prompt>` opens the interactive TUI on
       // that prompt ("Optional user prompt to start the session" per `codex
@@ -103,8 +104,9 @@ export const codexAdapter: CliAdapter = {
   // No mcp_servers head (interactive composeCommand keeps it — MCP works there
   // with a human approver). `--` terminates options before the trailing prompt.
   composeHeadlessCommand(_base: readonly string[], _ctx: SpawnContext, prompt: string): readonly string[] {
+    const head = codexModelHead(_ctx, ['codex']);
     return [
-      'codex',
+      ...head,
       '-c',
       'approval_policy="never"',
       '-c',
@@ -312,19 +314,40 @@ export const codexAdapter: CliAdapter = {
  * the global `/mcp` server here: that bypasses the Steward authz filter.
  */
 function codexMcpHead(ctx: SpawnContext): string[] {
+  const base = [
+    'codex',
+    '-c',
+    'sandbox_mode="workspace-write"',
+    '-c',
+    'sandbox_workspace_write.network_access=true',
+  ];
   const mcpUrl = ctx.env['OPENALICE_MCP_URL'];
   if (!mcpUrl) {
-    return ['codex'];
+    return base;
   }
   const workspaceId = ctx.env['AQ_WS_ID'];
   if (!workspaceId) {
     throw new Error('codex adapter: AQ_WS_ID missing from spawn env');
   }
   return [
-    'codex',
+    ...base,
     '-c',
     `mcp_servers.openalice.url="${mcpUrl}/${workspaceId}"`,
   ];
+}
+
+function codexModelHead(ctx: SpawnContext, head: string[]): string[] {
+  const model = readCodexModelOverride(ctx.cwd);
+  if (!model) return head;
+  return [...head, '-m', model];
+}
+
+function readCodexModelOverride(cwd: string): string | null {
+  const path = join(cwd, CODEX_MODEL_OVERRIDE_PATH);
+  if (!existsSync(path)) return null;
+  const model = readFileSync(path, 'utf8').trim();
+  if (!/^[A-Za-z0-9._:-]+$/.test(model)) return null;
+  return model;
 }
 
 const CODEX_ROLLOUT_RE = /^rollout-.*\.jsonl$/;
