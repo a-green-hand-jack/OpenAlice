@@ -1,5 +1,19 @@
 # Persistent Steward 最小实现方案
 
+> 版本：v0.6（2026-07-09）——审计 + 补救轮，记录在 PR A-F（本节所指，见上）全部落地
+> 之后一次单独会话的复核结果。核心 agent 因 codex 配额耗尽切换为
+> `claude-haiku-4-5-20251001`。复核发现的缺口经 maintainer 批准的补救计划（六阶段
+> A-F，不同于本文档自己的 PR A-F 编号）处理：补 ANATOMY 引用漂移；从已关闭的
+> PR#69 移植硬 guards 进 `paper-auto-push.ts`（止损必填、风险≤8%、禁止摊薄亏损
+> 仓）；把 steward 模板 `instruction.md` 升到 v3 caliber prompt（登记见
+> [steward-prompt-anatomy.zh.md](steward-prompt-anatomy.zh.md)）；把回测 harness
+> 建成真实 checked-in 基础设施 `tools/campaigns/`（取代此前仅活在 scratchpad 的
+> 一次性 `stress.mjs`）。真实 wake 现场测试额外发现并修补了本设计文档未预见的
+> 5 处行为缺口（issue #91/#92/#93/#98/#101/#103/#105/#107，逐条见
+> [steward-prompt-anatomy.zh.md](steward-prompt-anatomy.zh.md) §8）。**截至本版本**：
+> issue #105 已合并；issue #107（PR #108）已开出待合并；§11 的 4-cell pilot
+> campaign（1 bull/2 bear/1 chop）已备好真实历史数据 cell，首次真实 6-周期跑测在
+> issue #107 上中止，待 #108 合并后重跑；§0.1 的交易行为验收 + 成本验收仍未完成。
 > 版本：v0.5（2026-07-08）——记录 PR F 已落地范围：scheduled issue
 > `kind: steward-wake` 走 persistent wake dispatch，不再走 headless；普通 issue
 > schedule 仍保持 headless 行为。
