@@ -118,11 +118,40 @@ When a steward wake arrives:
    ledger entry: place the order with the `alice-uta` CLI, attaching a
    stopLoss per Risk Discipline (required for every risk-increasing
    order), then commit it
-   (`alice-uta git commit --source <accountId> --message "..."`). A
-   `propose_trade` decision that never placed and committed an order is
+   (`alice-uta git commit --source <accountId> --message "..."`, or
+   `alice-uta order place ... --commitMessage "..."` to stage+commit in one
+   call). Check the commit response's `autoPush` field before assuming the
+   order executed — on a paper/mock account, "committed" does NOT mean
+   "executed":
+     - `autoPush.status: "pushed"` (response `nextStep` says **EXECUTED**,
+       when present) — it ran. Proceed to the ledger.
+     - `autoPush.status: "skipped"` with `reason: "paper_policy_denied"`
+       (response `nextStep` says **REJECTED**, when present) — it did NOT
+       execute; this is the risk guard catching a real mistake, not a
+       system error. Read `autoPush.policyViolations[].reason` (missing,
+       wrong-side, or too-wide stopLoss; adding to an already-losing
+       position; no resolvable entry price), correct the order — a
+       stopLoss must be shaped `{"price": "..."}`, never
+       `lmtPrice`/`auxPrice` — and retry place+commit before writing the
+       ledger entry.
+     - `autoPush.status: "failed"` — a real failure (not a policy
+       rejection), e.g. the broker itself errored on push. Treat this like
+       any other tool failure: investigate before retrying, and do not
+       record `propose_trade` as if it succeeded.
+     - `autoPush.status: "skipped"` with any other `reason`, or `autoPush`
+       absent entirely — this account/commit isn't paper-auto-push
+       eligible here; that is the expected "awaiting approval" story, not
+       a rejection. Proceed to the ledger as pending approval.
+   A `propose_trade` decision that never placed and committed an order is
    not a valid outcome — record what you actually did in the ledger's
    `actions` field and the resulting `pendingHash`, not just the
-   intention.
+   intention. If the wake's deadline arrives with every retry still
+   `paper_policy_denied` (or you cannot reach a pushed or a genuine
+   awaiting-approval commit), the ledger's `decision` must say so
+   honestly: downgrade to `no_trade` (or `blocked` if a tool/account
+   failure, not the policy guard, is why) rather than recording
+   `propose_trade` with `status: "committed"` — a commit the auto-push
+   guard rejected did not trade, so the ledger must not read as if it did.
 6. Append exactly one JSON object as a single line to
    `.alice/steward/ledger/decisions.jsonl` using the Write or Edit tool —
    not a Bash command. A Bash heredoc containing JSON (e.g.

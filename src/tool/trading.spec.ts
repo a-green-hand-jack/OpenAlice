@@ -254,6 +254,138 @@ describe('trading tools — connecting state (cold-start)', () => {
   })
 })
 
+/**
+ * stageAndMaybeCommit — autoPush response surfacing (issue #111).
+ *
+ * `uta.commit()`'s HTTP response genuinely carries a `PaperAutoPushResult`
+ * under `autoPush` (UTA's POST /wallet/commit route computes it and splices
+ * it onto the JSON body). Before this fix, `stageAndMaybeCommit` discarded
+ * everything except `hash`/`message` and always returned the same
+ * hardcoded "Awaiting user approval…" string — so an agent whose order was
+ * actually rejected by the paper-policy risk guard (e.g. missing stop-loss)
+ * read the identical response as an agent whose order genuinely executed.
+ * These tests drive `placeOrder` (one of the four `stageAndMaybeCommit`
+ * call sites) with a fake commit() returning each `autoPush` shape and
+ * assert the response differs meaningfully per case.
+ */
+describe('placeOrder + commitMessage — autoPush response surfacing (#111)', () => {
+  function fakeCommitAccount(id: string, commit: () => unknown) {
+    return {
+      id,
+      stagePlaceOrder: async () => ({ staged: true, index: 0, operation: { action: 'placeOrder', contract: {}, order: {} } }),
+      commit: async () => commit(),
+    }
+  }
+
+  function fakeManagerFor(account: ReturnType<typeof fakeCommitAccount>) {
+    return { resolveOne: async () => account } as never
+  }
+
+  const placeArgs = (aliceId: string) => ({
+    aliceId, action: 'BUY' as const, orderType: 'MKT' as const, totalQuantity: '1', commitMessage: 'Entry: momentum breakout',
+  })
+
+  it('reports EXECUTED distinctly when autoPush actually pushed the commit', async () => {
+    const account = fakeCommitAccount('alpaca-paper', () => ({
+      prepared: true, hash: 'aaaa1111', message: 'Entry: momentum breakout', operationCount: 1,
+      autoPush: {
+        status: 'pushed',
+        hash: 'bbbb2222',
+        push: {
+          hash: 'bbbb2222', message: 'Entry: momentum breakout', operationCount: 1,
+          submitted: [{ action: 'placeOrder', success: true, status: 'filled', filledQty: '1', filledPrice: '150' }],
+          rejected: [],
+        },
+        approver: { via: 'auto-push-paper', at: '2026-01-01T00:00:00.000Z' },
+        effectiveAuthzLevel: 'paper',
+      },
+    }))
+    const tools = createTradingTools(fakeManagerFor(account))
+    const res = await run(tools.placeOrder, placeArgs('alpaca-paper|AAPL')) as {
+      committed: { hash: string }
+      nextStep: string
+      autoPush: { status: string; hash: string; push: { submitted: unknown[] } }
+    }
+    expect(res.committed.hash).toBe('aaaa1111')
+    expect(res.nextStep).toMatch(/EXECUTED/)
+    expect(res.autoPush.status).toBe('pushed')
+    expect(res.autoPush.hash).toBe('bbbb2222')
+    expect(res.autoPush.push.submitted).toHaveLength(1)
+  })
+
+  it('reports a policy REJECTION distinctly (missing_stop_loss) so the agent can correct + retry', async () => {
+    const account = fakeCommitAccount('alpaca-paper', () => ({
+      prepared: true, hash: 'cccc3333', message: 'Entry: momentum breakout', operationCount: 1,
+      autoPush: {
+        status: 'skipped',
+        reason: 'paper_policy_denied',
+        pendingHash: 'cccc3333',
+        accountType: 'paper',
+        effectiveAuthzLevel: 'paper',
+        policyViolations: [{
+          code: 'missing_stop_loss',
+          symbol: 'BTC',
+          reason: 'Paper auto-push requires an attached stopLoss for risk-increasing BTC orders',
+        }],
+      },
+    }))
+    const tools = createTradingTools(fakeManagerFor(account))
+    const res = await run(tools.placeOrder, placeArgs('alpaca-paper|BTC')) as {
+      nextStep: string
+      autoPush: { status: string; reason: string; policyViolations: Array<{ code: string }> }
+    }
+    expect(res.nextStep).toMatch(/REJECTED/)
+    expect(res.nextStep).toMatch(/stopLoss/)
+    expect(res.autoPush.status).toBe('skipped')
+    expect(res.autoPush.reason).toBe('paper_policy_denied')
+    expect(res.autoPush.policyViolations).toHaveLength(1)
+    expect(res.autoPush.policyViolations[0].code).toBe('missing_stop_loss')
+  })
+
+  it('reports a real FAILURE distinctly when autoPush status is failed', async () => {
+    const account = fakeCommitAccount('alpaca-paper', () => ({
+      prepared: true, hash: 'ffff6666', message: 'Entry: momentum breakout', operationCount: 1,
+      autoPush: {
+        status: 'failed', reason: 'broker rejected: insufficient buying power',
+        pendingHash: 'ffff6666', effectiveAuthzLevel: 'paper',
+      },
+    }))
+    const tools = createTradingTools(fakeManagerFor(account))
+    const res = await run(tools.placeOrder, placeArgs('alpaca-paper|AAPL')) as {
+      nextStep: string
+      autoPush: { status: string; reason: string }
+    }
+    expect(res.nextStep).toMatch(/FAILED/)
+    expect(res.nextStep).toMatch(/insufficient buying power/)
+    expect(res.autoPush.status).toBe('failed')
+  })
+
+  it('keeps the benign "awaiting approval" framing for a structural (non-policy) skip', async () => {
+    const account = fakeCommitAccount('ibkr-live', () => ({
+      prepared: true, hash: 'dddd4444', message: 'Entry: momentum breakout', operationCount: 1,
+      autoPush: { status: 'skipped', reason: 'account_type_not_paper', pendingHash: 'dddd4444', accountType: 'live' },
+    }))
+    const tools = createTradingTools(fakeManagerFor(account))
+    const res = await run(tools.placeOrder, placeArgs('ibkr-live|AAPL')) as {
+      nextStep: string
+      autoPush: { status: string; reason: string }
+    }
+    expect(res.nextStep).toBe('Awaiting user approval or deterministic auto-push outside the agent tool surface.')
+    expect(res.nextStep).not.toMatch(/REJECTED|FAILED|EXECUTED/)
+    expect(res.autoPush.reason).toBe('account_type_not_paper')
+  })
+
+  it('falls back to the original generic message when autoPush is entirely absent (non-regression)', async () => {
+    const account = fakeCommitAccount('ibkr-live', () => ({
+      prepared: true, hash: 'eeee5555', message: 'Entry: momentum breakout', operationCount: 1,
+    }))
+    const tools = createTradingTools(fakeManagerFor(account))
+    const res = await run(tools.placeOrder, placeArgs('ibkr-live|AAPL')) as { nextStep: string; autoPush?: unknown }
+    expect(res.nextStep).toBe('Awaiting user approval or deterministic auto-push outside the agent tool surface.')
+    expect(res.autoPush).toBeUndefined()
+  })
+})
+
 describe('tradingPush — gated agent execution', () => {
   it('registers a push tool but defaults to manual approval', async () => {
     const account = {

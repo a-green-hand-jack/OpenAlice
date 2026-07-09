@@ -9,11 +9,30 @@ import {
   type AuthzAccountType,
   type AuthzLevel,
   type Operation,
+  type PaperAutoPushResult,
+  type PaperAutoPushSkipReason,
+  type PaperDecisionPolicyViolation,
+  type PaperDecisionPolicyViolationCode,
   type Position,
   type PushResult,
   type RiskStateInfo,
 } from '@traderalice/uta-protocol'
 import type { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
+
+// PaperAutoPushResult (+ its skip-reason / policy-violation constituents) is
+// declared in @traderalice/uta-protocol, not here: UTA's POST /wallet/commit
+// route splices the value this module computes directly onto the HTTP
+// response (`{ ...result, autoPush }`, routes-trading.ts), so the *type*
+// genuinely crosses the wire and belongs in the shared protocol package
+// (issue #111). This module remains the only place the *value* is
+// constructed; re-export so existing in-repo imports (`from
+// './paper-auto-push.js'`) keep working unchanged.
+export type {
+  PaperAutoPushResult,
+  PaperAutoPushSkipReason,
+  PaperDecisionPolicyViolation,
+  PaperDecisionPolicyViolationCode,
+}
 
 export const AUTO_PUSH_PAPER_VIA = 'auto-push-paper' as const
 
@@ -26,60 +45,6 @@ export const AUTO_PUSH_PAPER_VIA = 'auto-push-paper' as const
 const PAPER_POLICY_MAX_STOP_LOSS_PCT = 8
 
 export type PaperAutoPushAccountType = Extract<AuthzAccountType, 'mock' | 'paper'>
-
-export type PaperAutoPushSkipReason =
-  | 'not_configured'
-  | 'no_pending_commit'
-  | 'account_type_not_paper'
-  | 'authz_below_paper'
-  | 'risk_state_not_normal'
-  | 'paper_policy_denied'
-  | 'push_in_flight'
-
-export type PaperDecisionPolicyViolationCode =
-  | 'missing_stop_loss'
-  | 'stop_loss_wrong_side'
-  | 'stop_loss_too_wide'
-  | 'entry_price_unavailable'
-  | 'adding_to_losing_position'
-
-export interface PaperDecisionPolicyViolation {
-  code: PaperDecisionPolicyViolationCode
-  symbol: string
-  reason: string
-  metrics?: {
-    entryPrice?: string
-    stopLossPrice?: string
-    stopLossPct?: number
-    maxStopLossPct?: number
-    unrealizedPnL?: string
-  }
-}
-
-export type PaperAutoPushResult =
-  | {
-      status: 'pushed'
-      hash: string
-      push: PushResult
-      approver: ApproverIdentity
-      effectiveAuthzLevel: AuthzLevel
-    }
-  | {
-      status: 'skipped'
-      reason: PaperAutoPushSkipReason
-      pendingHash?: string
-      accountType?: AuthzAccountType
-      effectiveAuthzLevel?: AuthzLevel
-      risk?: RiskStateInfo
-      policyViolations?: PaperDecisionPolicyViolation[]
-    }
-  | {
-      status: 'failed'
-      reason: string
-      pendingHash: string
-      effectiveAuthzLevel: AuthzLevel
-      risk?: RiskStateInfo
-    }
 
 export interface PaperAutoPushInput {
   uta: UnifiedTradingAccount
