@@ -53,7 +53,7 @@
 | 面 | 位置（file:line） | 控什么 |
 | --- | --- | --- |
 | 模板 persona / 指令 | `src/workspaces/template-registry.ts:81-87`（`injectPersona` = Alice persona + 模板 `instruction.md`）；模板目录 `src/workspaces/templates/{auto-quant,chat}/` | workspace agent 的基础人设与任务框架 |
-| Steward 唤醒指令（实质内容，v3 起纳管） | `src/workspaces/templates/steward/files/instruction.md` 全文（190 行，issue #101/#103 现场修补后）：World Boundary `7-21`、Mandate `23-40`、Evidence-First Reasoning `42-61`、Participation Bias `63-79`、Risk Discipline `81-95`、Wake Loop `97-131`（7 步，含 issue #103 新增的 ACT 步骤）、Decision Ledger Shape `132-182`、Safety `183-190` | steward workspace 唤醒时的完整行为提示。世界边界/ledger JSON 契约不变；Wake Loop 协议步骤见 §8 现场修补记录；v3 新增的推理与风控实质见 §7 逐组件解剖 |
+| Steward 唤醒指令（实质内容，v3 起纳管） | `src/workspaces/templates/steward/files/instruction.md` 全文（196 行，issue #101/#103/#105 现场修补后）：World Boundary `7-21`、Mandate `23-40`、Evidence-First Reasoning `42-61`、Participation Bias `63-79`、Risk Discipline `81-95`、Wake Loop `97-137`（7 步，含 issue #103 的 ACT 步骤 + issue #105 的 expectedDecision 反偏置澄清）、Decision Ledger Shape `138-188`、Safety `189-196` | steward workspace 唤醒时的完整行为提示。世界边界/ledger JSON 契约不变；Wake Loop 协议步骤见 §8 现场修补记录；v3 新增的推理与风控实质见 §7 逐组件解剖 |
 | 工具描述串 | `src/tool/*.ts` 的 `description:`（21 处），如 `src/tool/analysis.ts:37`、`src/tool/market.ts:27` | agent 何时/如何调用各工具——本身即 prompt |
 | Key-test 探针 | `src/workspaces/agent-probe.ts:74`（一次性 "Hi"） | 仅验证凭证连通，无行为语义 |
 
@@ -137,8 +137,25 @@ v3（§7）落地后，两轮真实 campaign 现场验证各发现一处 Wake Lo
   `alice-uta` 下单（按 Risk Discipline 附带 stopLoss）并 commit，再写 ledger；
   `actions`/`pendingHash` 必须反映真实执行结果，不是意图。
 
-这两处都不改 World Boundary、Decision Ledger Shape 的 JSON 契约，也不改
+- **issue #105（在 #103 修好之后，campaign harness 第三次真实 cell 跑通时发现）**：
+  ledger 写入不卡了，`propose_trade` 也会真的去下单了，但这次 agent 在一个
+  明确、证据充分的牛市里主动选择了 `no_trade`。现场 transcript 显示它的原话
+  是——wake envelope 里的 `expectedDecision` 字段写着 `"no_trade"`，
+  `reason` 写着 `"scheduled_observe"`，agent 据此判定"这是一个纯观察 wake，
+  没有交易授权"，于是即使认出了清晰上涨趋势也照样不下单。根因：
+  `tools/campaigns/run-cell.mjs`（issue #101）对每一次 wake 都硬编码同一套
+  `reason`/`expectedDecision`，而 agent 在 Wake Loop 第 1 步就会读到这个字段
+  ——它是 wake API 的必填字段，orchestrator 侧用来做事后核对，但暴露给 agent
+  后被误当成了"预期答案"，形成自证预言式的 `no_trade` 偏置，会系统性压低整个
+  campaign 的参与度，H1（牛市参与）从根上就无法被诚实测出。修补：不改 harness
+  或 wake schema（`expectedDecision` 必填，改成"更准"的硬编码值只是把偏置换
+  个方向，治标不治本）——Wake Loop 第 1 步（读 wake envelope 的地方）明确告
+  诉 agent：`expectedDecision` 是 orchestrator 自己的记账字段，不是指导，
+  决策只能从下面几步收集到的 checklist 结果和市场证据得出，不能因为这个字段
+  写了什么就倾向或反倾向于某个决定。
+
+这三处都不改 World Boundary、Decision Ledger Shape 的 JSON 契约，也不改
 Mandate / Evidence-First / Participation Bias / Risk Discipline 这四个 §7
 组件的文字——纯粹是 Wake Loop 协议步骤本身的缺口修补，性质更接近"协议 bug
-修复"而非"prompt substance 变更"，但按 §4 的漂移规则仍需在此登记，因为两次
+修复"而非"prompt substance 变更"，但按 §4 的漂移规则仍需在此登记，因为三次
 都改动了 agent 实际收到的唤醒指令文本。
