@@ -90,9 +90,11 @@ const requiredCost = [
   'estimatedSlippageUsd',
   'totalEstimatedCostUsd',
 ]
+const actionKinds = ['order_place', 'order_commit', 'order_modify', 'order_cancel', 'position_close', 'git_reject']
+const actionOutcomes = ['executed', 'awaiting_approval', 'policy_denied', 'failed']
 
 const lines = raw.split('\\n').map((line) => line.trim()).filter(Boolean)
-let found = null
+const matches = []
 for (let i = 0; i < lines.length; i++) {
   let parsed
   try {
@@ -101,14 +103,19 @@ for (let i = 0; i < lines.length; i++) {
     if (lines[i].includes(wakeId)) fail('ledger line ' + (i + 1) + ' mentions this wake but is invalid JSON: ' + err.message)
     continue
   }
-  if (parsed && parsed.wakeId === wakeId) found = { line: i + 1, entry: parsed }
+  if (parsed && parsed.wakeId === wakeId) matches.push({ line: i + 1, entry: parsed })
 }
-if (!found) fail('no ledger entry found for wake ' + wakeId)
+if (matches.length === 0) fail('no ledger entry found for wake ' + wakeId)
+// Issue #125 D3: exactly one terminal entry per wakeId, first-wins. A later
+// duplicate can never alter the recorded decision -- appending a second entry
+// for the same wake is a validation error, not a revision.
+if (matches.length > 1) fail('wake ' + wakeId + ' has ' + matches.length + ' ledger entries (lines ' + matches.map((m) => m.line).join(', ') + '); exactly one is allowed (first-wins). Fix the earlier entry in place; do not append a second.')
 
+const found = matches[0]
 const entry = found.entry
 const missing = requiredTopLevel.filter((key) => !(key in entry))
 if (missing.length) fail('line ' + found.line + ' is missing top-level field(s): ' + missing.join(', '))
-if (entry.version !== 1) fail('line ' + found.line + ' version must be 1')
+if (entry.version !== 2) fail('line ' + found.line + ' version must be 2')
 if (!['no_trade', 'propose_trade', 'blocked'].includes(entry.decision)) fail('line ' + found.line + ' has invalid decision')
 if (!['done', 'blocked', 'error'].includes(entry.status)) fail('line ' + found.line + ' has invalid status')
 if (!entry.completion || typeof entry.completion !== 'object' || Array.isArray(entry.completion)) fail('line ' + found.line + ' completion must be an object')
@@ -118,7 +125,29 @@ if (!entry.checklist || typeof entry.checklist !== 'object' || Array.isArray(ent
 const missingChecklist = requiredChecklist.filter((key) => typeof entry.checklist[key] !== 'string' || !entry.checklist[key])
 if (missingChecklist.length) fail('line ' + found.line + ' checklist is missing field(s): ' + missingChecklist.join(', '))
 if (!Array.isArray(entry.actions)) fail('line ' + found.line + ' actions must be an array')
+
+// Issue #125 D2: v2 actions are typed objects, never free-text strings. Each
+// action records kind, the exact aliceId (except git_reject), a params summary,
+// commitHash where applicable, and the real guard/broker outcome.
+let anyExecuted = false
+for (let a = 0; a < entry.actions.length; a++) {
+  const action = entry.actions[a]
+  const where = 'line ' + found.line + ' actions[' + a + ']'
+  if (!action || typeof action !== 'object' || Array.isArray(action)) fail(where + ' must be an object -- free-text action strings are rejected at v2')
+  if (!actionKinds.includes(action.kind)) fail(where + ' has invalid kind: ' + JSON.stringify(action.kind) + '; expected one of ' + actionKinds.join(', '))
+  if (!action.params || typeof action.params !== 'object' || Array.isArray(action.params)) fail(where + ' params must be an object summary')
+  if (!actionOutcomes.includes(action.outcome)) fail(where + ' has invalid outcome: ' + JSON.stringify(action.outcome) + '; expected one of ' + actionOutcomes.join(', '))
+  if (action.kind !== 'git_reject' && (typeof action.aliceId !== 'string' || !action.aliceId)) fail(where + ' requires a non-empty aliceId')
+  if (action.outcome === 'policy_denied' && (!Array.isArray(action.violations) || action.violations.length === 0)) fail(where + ' is policy_denied and must record non-empty violations')
+  if (action.outcome === 'executed' && action.kind !== 'git_reject' && (typeof action.commitHash !== 'string' || !action.commitHash)) fail(where + ' is executed and must record its commitHash')
+  if (action.outcome === 'executed') anyExecuted = true
+}
+
+// Issue #125 D1: pendingHash is strictly the stage currently awaiting approval,
+// or null. Once any action executed (auto-pushed), it MUST be null -- the
+// commit hash lives in actions[].commitHash, not here.
 if (entry.pendingHash !== null && typeof entry.pendingHash !== 'string') fail('line ' + found.line + ' pendingHash must be string or null')
+if (anyExecuted && entry.pendingHash !== null) fail('line ' + found.line + ' pendingHash must be null once an action has outcome "executed" (put the commit hash in actions[].commitHash)')
 if (!entry.cost || typeof entry.cost !== 'object' || Array.isArray(entry.cost)) fail('line ' + found.line + ' cost must be an object')
 const missingCost = requiredCost.filter((key) => !(key in entry.cost))
 if (missingCost.length) fail('line ' + found.line + ' cost is missing field(s): ' + missingCost.join(', '))

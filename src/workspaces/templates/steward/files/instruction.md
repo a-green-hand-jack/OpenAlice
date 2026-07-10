@@ -211,9 +211,17 @@ When a steward wake arrives:
        eligible here; that is the expected "awaiting approval" story, not
        a rejection. Proceed to the ledger as pending approval.
    A `propose_trade` decision that never placed and committed an order is
-   not a valid outcome — record what you actually did in the ledger's
-   `actions` field and the resulting `pendingHash`, not just the
-   intention. If the wake's deadline arrives with every retry still
+   not a valid outcome — record what you actually did as one typed object
+   per operation in the ledger's `actions` field (see Decision Ledger
+   Shape), not just the intention. Each action's `outcome` mirrors the four
+   `autoPush` branches above: `executed` (pushed), `awaiting_approval`
+   (absent/skipped non-policy), `policy_denied` (paper_policy_denied — attach
+   the `autoPush.policyViolations` as `violations`), or `failed`. Put the
+   commit hash in that action's `commitHash`. `pendingHash` is ONLY the stage
+   still awaiting approval: once an order executed it is terminal, so set
+   `pendingHash` to null (the hash lives in `actions[].commitHash`); keep a
+   non-null `pendingHash` only while a commit is genuinely awaiting approval.
+   If the wake's deadline arrives with every retry still
    `paper_policy_denied` (or you cannot reach a pushed or a genuine
    awaiting-approval commit), the ledger's `decision` must say so
    honestly: downgrade to `no_trade` (or `blocked` if a tool/account
@@ -235,7 +243,11 @@ When a steward wake arrives:
    Write/Edit does not.
    Keep `checklist`, `thesis`, `actions`, `pendingHash`, `invalidation`, and
    `cost` as TOP-LEVEL fields of the ledger object; do not nest them inside
-   `completion`. After writing the line, run
+   `completion`. Append EXACTLY ONE entry per wake: the first entry for a
+   wakeId is the authoritative decision and can never be revised by a second —
+   if you need to correct it, edit that same line in place, never append a new
+   one (a duplicate wakeId is a validation error, and the reader takes the
+   first). After writing the line, run
    `node .alice/steward/validate-ledger.mjs <wakeId>`. If it fails, fix the
    same ledger line before you stop; a schema-invalid line is not a completion
    marker and the supervisor will treat the wake as unfinished.
@@ -247,11 +259,11 @@ Report that no active steward wake is present and wait for the next wake.
 
 ## Decision Ledger Shape
 
-Each ledger line must include these fields:
+Each ledger line must include these fields (`version` is `2`):
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "wakeId": "...",
   "at": "ISO-8601 timestamp",
   "accountId": "...",
@@ -289,6 +301,29 @@ Each ledger line must include these fields:
   }
 }
 ```
+
+`actions` is empty for `no_trade`/`blocked`. For `propose_trade`, each broker
+operation is ONE typed object — never a free-text string (rejected at v2):
+
+```json
+{
+  "kind": "order_place | order_commit | order_modify | order_cancel | position_close | git_reject",
+  "aliceId": "the exact contract you traded (required except for git_reject)",
+  "params": { "action": "BUY", "orderType": "MKT", "totalQuantity": "50" },
+  "commitHash": "the commit hash, when the operation produced one",
+  "outcome": "executed | awaiting_approval | policy_denied | failed",
+  "violations": ["required only when outcome is policy_denied"]
+}
+```
+
+`outcome` mirrors the four `autoPush` branches from Wake Loop step 5:
+`executed` = pushed (record its `commitHash`), `awaiting_approval` =
+absent/skipped non-policy, `policy_denied` = paper_policy_denied (attach the
+`autoPush.policyViolations` as `violations`), `failed` = a real push failure.
+
+`pendingHash` is strict-pending: it holds ONLY the stage hash still awaiting
+approval, and MUST be `null` once anything executed — an auto-pushed order is
+terminal, so its provenance lives in `actions[].commitHash`, not here.
 
 `context` is optional bookkeeping, not a value you need to compute for real.
 Omit the whole `context` field rather than trying to produce a genuine

@@ -26,6 +26,7 @@
 | **v5** | winner management + pullback discipline | **`src/workspaces/templates/steward/files/instruction.md`** | 同左 + `.alice/steward/validate-ledger.mjs` | **已实现（2026-07-10）；targeted regression failed** | 针对 v4 full dev baseline 的行为缺口：在 Participation Bias 中补充「盈利趋势仓位要重新评估当前 notional，不足且可控风险时可顺势加仓」「健康 uptrend 的正常 pullback / 临时浮亏不等于 invalidation」「低波动漂移不等于高置信 uptrend」，并在 Risk Discipline 中明确只允许给盈利或持平且 thesis 仍有效的仓位加仓，且必须先/同时上移 stop。Targeted regression 显示方向不够窄：NVDA 学会加仓但贴近 max-position guard 后触发 READ_ONLY；0700.HK 仍被 pullback 洗出；SPY low-vol chop 过早参与。 |
 | **v6** | guard headroom + stricter trend filter | **`src/workspaces/templates/steward/files/instruction.md`** | 同左 + `.alice/steward/validate-ledger.mjs` | **已实现（2026-07-10）；targeted regression partial / failed bull threshold** | 在 v5 基础上把 starter range 收窄为 25-45%，加仓目标收在 50-55% notional 而不是贴近 60% hard guard；明确若 mark-to-market 把敞口推近/超过 guard，应 trim 回 guard 下方而不是等 READ_ONLY；把 pullback hold 条件写成「在原 stop/risk budget 内、仍高于 swing support、且未超过约 8% adverse move」；把 low-vol chop 过滤写硬：1-4% 的一两周窄幅 drift 不足以使用 meaningful starter。Targeted regression 修掉 NVDA READ_ONLY（+17.0%，仍低于 +25% bull 阈值）并让 SPY PASS，但暴露 0700.HK 的 default-contract/AAPL 污染。 |
 | **v7** | campaign tradable contract binding | **`src/workspaces/templates/steward/files/instruction.md`** + `tools/campaigns/run-cell.mjs` | wake `marketContext.tradeableAliceId` | **已实现；targeted + 10-cell 六周 baseline 已完成（2026-07-10）；尚未冻结 holdout** | v6 targeted 暴露出非 prompt-policy 摩擦：MockBroker 空搜索会返回默认 `AAPL`，agent 在 0700.HK cell 中读 `ASSET-K` tape 却尝试交易默认 `AAPL`。v7 显式传入并强制使用 exact `tradeableAliceId`。后续 60/60 wake 证明 isolated-stack contract binding 已稳定、无 AAPL 污染；但 guard-feasible NVDA 仅 +17.7%，仍低于 +25% bull gate。六路 shared-stack 则被 Codex trust-config 并发写竞争阻断（#124），不是 prompt policy 失败。 |
+| **v8-CANDIDATE** | v2 ledger contract（strict pendingHash / typed actions / single-entry wakes） | **`src/workspaces/templates/steward/files/instruction.md`**（Wake Loop step 5-6 + Decision Ledger Shape）+ 生成的 `.alice/steward/validate-ledger.mjs` | 同左（in-repo 模板文件，wake 时逐字读取） | **候选，未冻结（issue #125）；dev matrix 复跑 pending；holdout 仍封存** | 配合 decision-ledger schema v1→v2（`DECISION_LEDGER_SCHEMA_VERSION` bump）落地的 prompt 半边：Decision Ledger Shape 现示 `version: 2` + 一个 typed action 示例（`kind`/`aliceId`/`params`/`commitHash`/`outcome`/`violations`）；Wake Loop step 5 增补「每个 broker 操作记一个 typed action 对象，`outcome` 对应四个 `autoPush` 分支，commit 出处进 `actions[].commitHash`，`pendingHash` 仅表示待批准 stage、executed 后必须为 null」；step 6 增补「每个 wakeId 恰好一条记录、first-wins、要更正就原地改那一行不追加第二行」。属**实质性契约变更**（改变 agent 记账行为），按 §4 规则 4 须 maintainer 批准后才升 v8 正式版；升版前 dev matrix 必须复跑确认 bull 参与度与 ledger 完成率不回落，holdout 保持封存。逐组件解剖见 §15。 |
 
 > **v2 验证结果（2026-07-07，paste 模式，3 个真实牛市匿名窗口）**：H1 = NVDA 42% / TSLA 65% / AMD 43%（均 ~50%），maxDD 全 0%。对比 pilot（v1）H1 仅 7-16%——**v2 把牛市参与度提升 3-5×，同时保住 H2 纪律（回撤 0%）**。即「行情好时参与、行情差时仍不冒大险」。12-cell（含 bear/chop）将复核 v2 是否破坏 H2。
 
@@ -57,7 +58,7 @@
 | 面 | 位置（file:line） | 控什么 |
 | --- | --- | --- |
 | 模板 persona / 指令 | `src/workspaces/template-registry.ts:81-87`（`injectPersona` = Alice persona + 模板 `instruction.md`）；模板目录 `src/workspaces/templates/{auto-quant,chat}/` | workspace agent 的基础人设与任务框架 |
-| Steward 唤醒指令（实质内容，v3 起纳管，v7 当前版） | `src/workspaces/templates/steward/files/instruction.md` 全文（315 行）：World Boundary `7-21`、Mandate `23-40`、Evidence-First Reasoning `42-61`、Participation Bias `63-110`（v4 新增 meaningful starter position；v5/v6 新增 winner management / pullback discipline / low-vol chop filter / guard headroom）、Risk Discipline `112-132`、Wake Loop `134-243`（7 步，含 issue #103/#105/#111/#113 修补 + v4 ledger validator + v7 `tradeableAliceId` binding）、Decision Ledger Shape `248-304`（含 issue #107 的 `context`/`manifestSha256` 可选澄清）、Safety `308-315` | steward workspace 唤醒时的完整行为提示。世界边界/ledger JSON 契约不变；Wake Loop 协议步骤见 §8 和 §10；v3-v7 的推理与风控实质见 §7、§10、§11、§12、§13 |
+| Steward 唤醒指令（实质内容，v3 起纳管，v7 当前版 + v8-CANDIDATE ledger 契约） | `src/workspaces/templates/steward/files/instruction.md` 全文（350 行）：World Boundary `7-21`、Mandate `23-40`、Evidence-First Reasoning `42-61`、Participation Bias `63-110`（v4 新增 meaningful starter position；v5/v6 新增 winner management / pullback discipline / low-vol chop filter / guard headroom）、Risk Discipline `112-132`、Wake Loop `134-259`（7 步，含 issue #103/#105/#111/#113 修补 + v4 ledger validator + v7 `tradeableAliceId` binding + #125 v2 typed-action / strict-pendingHash / single-entry 记账）、Decision Ledger Shape `260-341`（含 issue #107 的 `context`/`manifestSha256` 可选澄清 + #125 `version: 2` typed-action 示例）、Safety `343-350` | steward workspace 唤醒时的完整行为提示。世界边界不变；ledger JSON 契约在 #125 升为 v2；Wake Loop 协议步骤见 §8 和 §10；v3-v7 的推理与风控实质见 §7、§10、§11、§12、§13；v8-CANDIDATE ledger 契约见 §15 |
 | 工具描述串 | `src/tool/*.ts` 的 `description:`（21 处），如 `src/tool/analysis.ts:37`、`src/tool/market.ts:27` | agent 何时/如何调用各工具——本身即 prompt |
 | Key-test 探针 | `src/workspaces/agent-probe.ts:74`（一次性 "Hi"） | 仅验证凭证连通，无行为语义 |
 
@@ -412,3 +413,30 @@ shared-stack campaign 的失败归因给 Spark 或 v7 prompt。
 
 完整矩阵、证据边界和下一 gate 见
 [appendix/steward-v7-spark-baseline-20260710.md](appendix/steward-v7-spark-baseline-20260710.md)。
+
+## 15. v8-CANDIDATE 逐组件解剖（v2 ledger contract，issue #125）
+
+> **状态：未冻结的候选**。这是 decision-ledger schema v1→v2 落地的 prompt 半边。属实质性
+> 契约变更，按 §4 规则 4 须 maintainer 批准后才升为 v8 正式版；升版前 dev matrix 必须
+> 复跑（确认 bull 参与度、ledger 完成率、`propose_trade` 记账正确性不回落），holdout 保持封存。
+
+逐组件（相对 v7）：
+
+- **[Decision Ledger Shape · version]** `version: 1` → `version: 2`。所控：写路径严格 v2；
+  读路径对 v1 历史仍宽松（v1 `actions` 保留 `unknown[]`）。关联 D2。
+- **[Decision Ledger Shape · actions 类型化]** 新增 typed action 示例块与 `kind`/`aliceId`/
+  `params`/`commitHash`/`outcome`/`violations` 字段说明。意图：把此前的自由文本 `actions`
+  升级为可判别、可对账的结构；自由文本串在 v2 被拒。关联 D2。
+- **[Decision Ledger Shape · pendingHash 严格化]** 明确 `pendingHash` 只表示「待批准 stage
+  hash」，executed 后必须为 `null`，commit 出处进 `actions[].commitHash`。意图：让
+  ledger↔UTA 对账退化为等值比较。关联 D1。
+- **[Wake Loop step 5]** 把「record what you actually did ... and the resulting pendingHash」
+  改写为「每个 broker 操作记一个 typed action，`outcome` 对应四个 `autoPush` 分支，
+  `policy_denied` 附 `violations`，commit hash 进 action、executed 后 `pendingHash` 置 null」。
+  意图：与 step 5 已教的 `autoPush.status` 四分支对齐，杜绝「commit 了就当成交」。关联 D1/D2。
+- **[Wake Loop step 6]** 增补「每个 wakeId 恰好一条记录、first-wins、要更正原地改那一行、
+  不追加第二行（重复 wakeId 是校验错误）」。意图：让 ledger 成为 tamper-evident 审计面。关联 D3。
+- **[生成校验器 validate-ledger.mjs]** 由 `templates/steward/bootstrap.mjs` 生成的 workspace
+  本地校验器同步升级：`version === 2`、typed-action 校验、`policy_denied⇒violations`、
+  `executed⇒commitHash`、`executed⇒pendingHash===null`、重复 wakeId 报错。它是 agent 在
+  wake 结尾实际运行的那一层，与服务端 zod schema（`src/workspaces/steward/types.ts`）语义对齐。

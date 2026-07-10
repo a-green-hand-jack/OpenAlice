@@ -11,12 +11,15 @@ import {
   createStewardSupervisor,
   createStewardWakeStore,
   DECISION_LEDGER_SCHEMA_VERSION,
+  DECISION_LEDGER_SCHEMA_VERSION_V1,
   parseStewardDecisionLedgerEntry,
+  parseStewardDecisionLedgerEntryLenient,
   StewardLockConflictError,
   stewardStatePath,
   stewardSupervisorLogPath,
+  summarizeStewardCosts,
   WAKE_SCHEMA_VERSION,
-  type StewardDecisionLedgerEntry,
+  type StewardDecisionLedgerEntryV2,
   type StewardWakeEnvelope,
 } from './index.js';
 
@@ -39,7 +42,7 @@ const envelope: StewardWakeEnvelope = {
   riskContext: { riskState: 'NORMAL', guards: [] },
 };
 
-function ledgerEntry(over: Partial<StewardDecisionLedgerEntry> = {}): StewardDecisionLedgerEntry {
+function ledgerEntry(over: Partial<StewardDecisionLedgerEntryV2> = {}): StewardDecisionLedgerEntryV2 {
   return {
     version: DECISION_LEDGER_SCHEMA_VERSION,
     wakeId: '2026-07-08T14:00:00Z:aapl-risk-check',
@@ -193,7 +196,7 @@ describe('StewardLedgerStore', () => {
 
     const missingCostField = ledgerEntry() as unknown as { cost: Record<string, unknown> };
     delete missingCostField.cost.totalEstimatedCostUsd;
-    await expect(store.append(missingCostField as unknown as StewardDecisionLedgerEntry)).rejects.toThrow();
+    await expect(store.append(missingCostField as unknown as StewardDecisionLedgerEntryV2)).rejects.toThrow();
   });
 
   it('coerces numeric-string cost fields to actual numbers (a smaller model\'s observed mistake)', async () => {
@@ -279,6 +282,224 @@ describe('StewardLedgerStore', () => {
     // the missing-field line as a match -- it doesn't throw either.
     expect(await store.findByWakeId('wake-missing-decision')).toBeNull();
     expect((await store.findByWakeId('wake-good-2'))?.wakeId).toBe('wake-good-2');
+  });
+
+  // --- Issue #125: v2 ledger contract -----------------------------------
+
+  it('accepts an executed-action terminal entry with pendingHash null', async () => {
+    const store = createStewardLedgerStore(dir);
+    const entry = ledgerEntry({
+      wakeId: 'wake-executed',
+      decision: 'propose_trade',
+      pendingHash: null,
+      actions: [
+        {
+          kind: 'order_place',
+          aliceId: 'mock-simulator-1/ASSET-A',
+          params: { action: 'BUY', orderType: 'MKT', totalQuantity: '50' },
+          commitHash: 'deadbeef',
+          outcome: 'executed',
+        },
+      ],
+    });
+
+    const appended = await store.append(entry);
+    expect(appended.actions).toHaveLength(1);
+    expect((appended.actions[0] as { commitHash?: string }).commitHash).toBe('deadbeef');
+    expect(appended.pendingHash).toBeNull();
+  });
+
+  it('rejects a v2 entry that parks a commit hash in pendingHash after an executed outcome (D1)', async () => {
+    const store = createStewardLedgerStore(dir);
+    await expect(store.append(ledgerEntry({
+      wakeId: 'wake-bad-pending',
+      decision: 'propose_trade',
+      // Provenance belongs in actions[].commitHash; pendingHash is strictly the
+      // stage awaiting approval and MUST be null once anything executed.
+      pendingHash: 'deadbeef',
+      actions: [
+        {
+          kind: 'order_place',
+          aliceId: 'mock-simulator-1/ASSET-A',
+          params: { action: 'BUY' },
+          commitHash: 'deadbeef',
+          outcome: 'executed',
+        },
+      ],
+    }))).rejects.toThrow(/pendingHash must be null/);
+  });
+
+  it('keeps pendingHash for an awaiting_approval action', async () => {
+    const store = createStewardLedgerStore(dir);
+    const appended = await store.append(ledgerEntry({
+      wakeId: 'wake-awaiting',
+      decision: 'propose_trade',
+      pendingHash: 'abc12345',
+      actions: [
+        {
+          kind: 'order_commit',
+          aliceId: 'mock-simulator-1/ASSET-A',
+          params: { action: 'BUY' },
+          commitHash: 'abc12345',
+          outcome: 'awaiting_approval',
+        },
+      ],
+    }));
+    expect(appended.pendingHash).toBe('abc12345');
+  });
+
+  it('requires violations on a policy_denied action', async () => {
+    const store = createStewardLedgerStore(dir);
+    await expect(store.append(ledgerEntry({
+      wakeId: 'wake-denied-noviol',
+      decision: 'propose_trade',
+      pendingHash: null,
+      actions: [
+        {
+          kind: 'order_place',
+          aliceId: 'mock-simulator-1/ASSET-A',
+          params: { action: 'BUY' },
+          outcome: 'policy_denied',
+        },
+      ],
+    }))).rejects.toThrow(/violations/);
+
+    const ok = await store.append(ledgerEntry({
+      wakeId: 'wake-denied-ok',
+      decision: 'no_trade',
+      pendingHash: null,
+      actions: [
+        {
+          kind: 'order_place',
+          aliceId: 'mock-simulator-1/ASSET-A',
+          params: { action: 'BUY' },
+          outcome: 'policy_denied',
+          violations: [{ reason: 'stopLoss too wide' }],
+        },
+      ],
+    }));
+    expect(ok.actions).toHaveLength(1);
+  });
+
+  it('rejects a free-text action string at v2, but reads a legacy v1 line via the lenient path', async () => {
+    const store = createStewardLedgerStore(dir);
+
+    // v2 write path: a free-text action string is not a typed action object.
+    await expect(store.append(ledgerEntry({
+      wakeId: 'wake-freetext',
+      actions: ['placed a market buy for 50 shares'] as unknown as StewardDecisionLedgerEntryV2['actions'],
+    }))).rejects.toThrow();
+
+    // v1 legacy history: the same free-text action array is still READABLE
+    // (reads stay lenient), typed as legacy unknown[].
+    const legacy = {
+      ...ledgerEntry({ wakeId: 'wake-legacy-v1' }),
+      version: DECISION_LEDGER_SCHEMA_VERSION_V1,
+      actions: ['free text is fine for v1 history'],
+    };
+    await mkdir(dirname(store.path()), { recursive: true });
+    await writeFile(store.path(), `${JSON.stringify(legacy)}\n`, 'utf8');
+
+    const entries = await store.read();
+    expect(entries.map((e) => e.wakeId)).toEqual(['wake-legacy-v1']);
+    expect(entries[0].version).toBe(DECISION_LEDGER_SCHEMA_VERSION_V1);
+    expect(entries[0].actions).toEqual(['free text is fine for v1 history']);
+
+    // The lenient parser also accepts it directly; the strict v2 parser does not.
+    expect(parseStewardDecisionLedgerEntryLenient(legacy).wakeId).toBe('wake-legacy-v1');
+    expect(() => parseStewardDecisionLedgerEntry(legacy)).toThrow();
+  });
+
+  it('takes the first entry on a duplicate wakeId and reports the duplicate (D3)', async () => {
+    const store = createStewardLedgerStore(dir);
+    const first = ledgerEntry({
+      wakeId: 'wake-dup',
+      at: '2026-07-08T14:01:00.000Z',
+      decision: 'no_trade',
+      thesis: 'first-wins entry is authoritative',
+    });
+    const second = ledgerEntry({
+      wakeId: 'wake-dup',
+      at: '2026-07-08T14:05:00.000Z',
+      decision: 'propose_trade',
+      thesis: 'a later append can never alter the recorded decision',
+    });
+
+    await mkdir(dirname(store.path()), { recursive: true });
+    await writeFile(
+      store.path(),
+      `${JSON.stringify(first)}\n${JSON.stringify(second)}\n`,
+      'utf8',
+    );
+
+    // Reader returns the FIRST entry.
+    const found = await store.findByWakeId('wake-dup');
+    expect(found?.thesis).toBe('first-wins entry is authoritative');
+    expect(found?.decision).toBe('no_trade');
+
+    // Diagnostics surface the later duplicate as a violation.
+    const diagnostics = await store.readDiagnostics();
+    expect(diagnostics.duplicates).toEqual([
+      { wakeId: 'wake-dup', firstLine: 1, duplicateLine: 2 },
+    ]);
+  });
+
+  it('does not double-count a duplicate wakeId in cost aggregation (code review: cost.ts double-count)', async () => {
+    // The earlier D3 duplicate test above uses ledgerEntry()'s default null
+    // cost fields, which masks double-counting (null contributes 0 either
+    // way). This test uses real non-null numeric cost fields on BOTH the
+    // first entry and its later duplicate, so a naive entries.length /
+    // summed-over-every-line aggregation would inflate cost.entries and
+    // every USD field -- the exact state.json truth surface
+    // tools/campaigns/run-cell.mjs reads as ledgerReportedCostUsd.
+    const costFields = (overrides: Partial<Record<string, number>> = {}) => ({
+      model: 'codex',
+      inputTokens: 100,
+      outputTokens: 50,
+      modelCostUsd: 1,
+      allocatedServerCostUsd: 0.5,
+      tradingFeesUsd: 0.25,
+      estimatedSlippageUsd: 0.1,
+      totalEstimatedCostUsd: 1.85,
+      ...overrides,
+    });
+
+    const store = createStewardLedgerStore(dir);
+    const first = ledgerEntry({
+      wakeId: 'wake-cost-dup',
+      at: '2026-07-08T14:01:00.000Z',
+      cost: costFields(),
+    });
+    // A later duplicate carrying its OWN non-null cost -- must be excluded
+    // from aggregation entirely (first-wins), not just have its cost ignored.
+    const duplicate = ledgerEntry({
+      wakeId: 'wake-cost-dup',
+      at: '2026-07-08T14:05:00.000Z',
+      cost: costFields({ modelCostUsd: 999, totalEstimatedCostUsd: 999.85 }),
+    });
+    const other = ledgerEntry({
+      wakeId: 'wake-other',
+      at: '2026-07-08T14:02:00.000Z',
+      cost: costFields({ modelCostUsd: 2, totalEstimatedCostUsd: 2.85 }),
+    });
+
+    await mkdir(dirname(store.path()), { recursive: true });
+    await writeFile(
+      store.path(),
+      `${JSON.stringify(first)}\n${JSON.stringify(other)}\n${JSON.stringify(duplicate)}\n`,
+      'utf8',
+    );
+
+    // readDiagnostics().entries still returns all 3 raw lines (audit trail).
+    const allEntries = await store.read();
+    expect(allEntries).toHaveLength(3);
+
+    // Cost aggregation is first-wins per wakeId: 2 distinct wakes, and the
+    // duplicate's inflated 999 must never be counted.
+    const summary = summarizeStewardCosts(allEntries);
+    expect(summary.entries).toBe(2);
+    expect(summary.modelCostUsd).toBeCloseTo(1 + 2);
+    expect(summary.totalEstimatedCostUsd).toBeCloseTo(1.85 + 2.85);
   });
 });
 
@@ -496,5 +717,157 @@ describe('StewardSupervisor', () => {
     });
     expect((await wakeStore.get('wake-stuck'))?.status).toBe('stuck');
     expect(await lockStore.get(envelope.accountId)).toBeNull();
+  });
+
+  it('reconciles across a mixed v1+v2 ledger and warns on a duplicate wakeId (D3)', async () => {
+    const wakeStore = createStewardWakeStore(dir);
+    const lockStore = createStewardLockStore(dir);
+    const ledgerStore = createStewardLedgerStore(dir);
+    const v2Envelope: StewardWakeEnvelope = { ...envelope, accountId: 'mock-simulator-2' };
+
+    // wake-v1: a legacy v1 history entry (free-text actions), still a valid
+    // terminal marker on the lenient read path.
+    await wakeStore.create({
+      wakeId: 'wake-v1',
+      deadline: '2026-07-08T14:03:00.000Z',
+      envelope,
+      now: '2026-07-08T14:00:00.000Z',
+    });
+    await wakeStore.updateStatus('wake-v1', 'injected', {
+      now: '2026-07-08T14:00:05.000Z',
+      injectedAt: '2026-07-08T14:00:05.000Z',
+      sessionId: 'session-v1',
+    });
+    await lockStore.acquire({
+      accountId: envelope.accountId,
+      wakeId: 'wake-v1',
+      now: '2026-07-08T14:00:00.000Z',
+      expiresAt: '2026-07-08T14:03:00.000Z',
+    });
+
+    // wake-v2: a strict v2 entry with a typed executed action.
+    await wakeStore.create({
+      wakeId: 'wake-v2',
+      deadline: '2026-07-08T14:03:00.000Z',
+      envelope: v2Envelope,
+      now: '2026-07-08T14:00:00.000Z',
+    });
+    await wakeStore.updateStatus('wake-v2', 'injected', {
+      now: '2026-07-08T14:00:05.000Z',
+      injectedAt: '2026-07-08T14:00:05.000Z',
+      sessionId: 'session-v2',
+    });
+    await lockStore.acquire({
+      accountId: 'mock-simulator-2',
+      wakeId: 'wake-v2',
+      now: '2026-07-08T14:00:00.000Z',
+      expiresAt: '2026-07-08T14:03:00.000Z',
+    });
+
+    const v1Entry = {
+      ...ledgerEntry({ wakeId: 'wake-v1', at: '2026-07-08T14:01:00.000Z' }),
+      version: DECISION_LEDGER_SCHEMA_VERSION_V1,
+      actions: ['legacy free-text action'],
+    };
+    const v2Entry = ledgerEntry({
+      wakeId: 'wake-v2',
+      at: '2026-07-08T14:01:05.000Z',
+      accountId: 'mock-simulator-2',
+      decision: 'propose_trade',
+      pendingHash: null,
+      actions: [
+        {
+          kind: 'order_place',
+          aliceId: 'mock-simulator-2/ASSET-A',
+          params: { action: 'BUY' },
+          commitHash: 'feedface',
+          outcome: 'executed',
+        },
+      ],
+    });
+    // A later duplicate of wake-v1 that must NOT alter the recorded decision.
+    const v1Dup = ledgerEntry({
+      wakeId: 'wake-v1',
+      at: '2026-07-08T14:02:00.000Z',
+      decision: 'propose_trade',
+    });
+
+    await mkdir(dirname(ledgerStore.path()), { recursive: true });
+    await writeFile(
+      ledgerStore.path(),
+      `${JSON.stringify(v1Entry)}\n${JSON.stringify(v2Entry)}\n${JSON.stringify(v1Dup)}\n`,
+      'utf8',
+    );
+
+    const result = await createStewardSupervisor(dir).tick({
+      now: '2026-07-08T14:01:30.000Z',
+      isSessionRunning: () => true,
+    });
+
+    // Both the v1-history and the v2 wake reconcile to done in the same tick.
+    expect(result.transitions).toContainEqual({
+      wakeId: 'wake-v1',
+      from: 'injected',
+      to: 'done',
+      reason: 'ledger:done',
+    });
+    expect(result.transitions).toContainEqual({
+      wakeId: 'wake-v2',
+      from: 'injected',
+      to: 'done',
+      reason: 'ledger:done',
+    });
+    expect((await wakeStore.get('wake-v1'))?.status).toBe('done');
+    expect((await wakeStore.get('wake-v2'))?.status).toBe('done');
+
+    // The later duplicate of wake-v1 is surfaced as a warning, not silently
+    // taken as the decision.
+    expect(result.warnings.some((w) => w.includes('duplicate ledger entry for wake wake-v1'))).toBe(true);
+    const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
+    expect(log).toContain('"type":"ledger_duplicates"');
+  });
+
+  it('surfaces an invalid (unparseable) ledger line as a warning + event (code review: silent invalid lines)', async () => {
+    const wakeStore = createStewardWakeStore(dir);
+    const lockStore = createStewardLockStore(dir);
+    const ledgerStore = createStewardLedgerStore(dir);
+
+    // wake-invalid: its ledger line is missing `decision`, so it never
+    // reconciles via findByWakeId -- without this fix it would just sit
+    // `injected` until timeout with no visible cause.
+    await wakeStore.create({
+      wakeId: 'wake-invalid',
+      deadline: '2026-07-08T14:03:00.000Z',
+      envelope,
+      now: '2026-07-08T14:00:00.000Z',
+    });
+    await wakeStore.updateStatus('wake-invalid', 'injected', {
+      now: '2026-07-08T14:00:05.000Z',
+      injectedAt: '2026-07-08T14:00:05.000Z',
+      sessionId: 'session-invalid',
+    });
+    await lockStore.acquire({
+      accountId: envelope.accountId,
+      wakeId: 'wake-invalid',
+      now: '2026-07-08T14:00:00.000Z',
+      expiresAt: '2026-07-08T14:03:00.000Z',
+    });
+
+    const badEntry = { ...ledgerEntry({ wakeId: 'wake-invalid' }) } as Record<string, unknown>;
+    delete badEntry.decision;
+
+    await mkdir(dirname(ledgerStore.path()), { recursive: true });
+    await writeFile(ledgerStore.path(), `${JSON.stringify(badEntry)}\n`, 'utf8');
+
+    const result = await createStewardSupervisor(dir).tick({
+      now: '2026-07-08T14:01:30.000Z',
+      isSessionRunning: () => true,
+    });
+
+    // Not reconciled (no parseable ledger entry), but the cause is now visible.
+    expect((await wakeStore.get('wake-invalid'))?.status).toBe('injected');
+    expect(result.warnings.some((w) => w.startsWith('invalid ledger line 1:'))).toBe(true);
+    const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
+    expect(log).toContain('"type":"ledger_invalid_lines"');
   });
 });
