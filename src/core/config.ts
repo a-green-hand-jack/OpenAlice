@@ -374,7 +374,10 @@ export type TradingMode = z.infer<typeof tradingModeSchema>
 const tradingSchema = z.object({
   /** Product-level trading capability mode. Undefined means auto:
    *  existing UTA config -> pro; no UTA config -> lite. Env
-   *  OPENALICE_TRADING_MODE wins over this persisted preference. */
+   *  OPENALICE_TRADING_MODE wins over this persisted preference. Alice uses
+   *  readonly as a BFF defense; UTA independently loads the effective mode.
+   *  Lite blocks all broker mutation; readonly permits only presets on the
+   *  mechanically verified isolation allowlist. */
   mode: tradingModeSchema.optional(),
   /**
    * External-order observation cadence — how often UTA lists the broker's
@@ -469,13 +472,15 @@ export const utaConfigSchema = z.object({
    *  market data (quote/bars/search) — it has no account/positions and is
    *  excluded from portfolio equity aggregation. keyless ⟹ readOnly. */
   keyless: z.boolean().default(false),
-  /** Read-only — external account mutations are refused at push/dispatch time.
+  /** Per-account read-only, distinct from product `trading.mode` and Steward
+   *  `maxAuthzLevel`. External account mutations are refused at push/dispatch time.
    *  Funded read-only accounts may still stage/commit local trade proposals;
    *  keyless data sources remain public-data-only and cannot create proposals. */
   readOnly: z.boolean().default(false),
   /**
-   * Steward account-side authorization ceiling. Optional for P3-1 so old
-   * accounts remain valid without a migration; absent resolves to read_only.
+   * Steward account-side authorization ceiling. This trims workspace tools and
+   * paper auto-push eligibility; it is not a UTA broker-mutation gate. Optional
+   * for P3-1 so old accounts remain valid without a migration; absent resolves to read_only.
    */
   maxAuthzLevel: z.enum(AUTHZ_LEVELS).optional(),
   /** Data-vendor participation. When false, the UTA remains an account/trading

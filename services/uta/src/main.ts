@@ -36,6 +36,7 @@ import { buildKeylessDataUTAs } from './domain/trading/keyless-data-sources.js'
 import { createTradingRoutes } from './http/routes-trading.js'
 import { createSimulatorRoutes } from './http/routes-simulator.js'
 import type { UTAEngineContext } from './types.js'
+import { resolveTradingModePolicy } from '@/services/trading-mode.js'
 
 const UTA_PORT = Number(process.env['OPENALICE_UTA_PORT'] ?? 47333)
 const CATALOG_REFRESH_MS = 6 * 60 * 60 * 1000  // 6h
@@ -56,6 +57,7 @@ async function main(): Promise<void> {
   }
 
   const config = await loadConfig()
+  const tradingModePolicy = await resolveTradingModePolicy(config)
 
   // ==================== Trading-only dependencies ====================
   // UTA needs eventLog (UTAManager journaling) + toolCenter (CCXT tool
@@ -65,7 +67,15 @@ async function main(): Promise<void> {
   const eventLog = await createEventLog()
   const eventSink = createUtaEventSinkFromEnv()
   const toolCenter = new ToolCenter()
-  const utaManager = new UTAManager({ eventLog, toolCenter, eventSink })
+  const utaManager = new UTAManager({
+    eventLog,
+    toolCenter,
+    eventSink,
+    tradingMode: tradingModePolicy.mode,
+  })
+  if (tradingModePolicy.mode !== 'pro') {
+    console.warn(`[uta] ${tradingModePolicy.mode} containment active for every unverified broker preset; only the verified isolation allowlist remains writable`)
+  }
 
   // ==================== Account init (with ephemeral purge) ====================
 

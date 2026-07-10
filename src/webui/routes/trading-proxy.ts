@@ -132,7 +132,7 @@ export function createTradingProxyRoutes(opts: {
         hint: describeTradingMode('lite'),
       }, 503)
     }
-    if (policy.mode === 'readonly' && isVenueMutation(c.req.method, c.req.path)) {
+    if (policy.mode === 'readonly' && await isVenueMutation(c)) {
       return c.json({
         error: 'Trading mode is readonly',
         detail: 'Venue-mutating broker writes are disabled in readonly mode',
@@ -204,15 +204,23 @@ export function createTradingProxyRoutes(opts: {
   return app
 }
 
-function isVenueMutation(method: string, path: string): boolean {
-  const m = method.toUpperCase()
+async function isVenueMutation(c: Context): Promise<boolean> {
+  const m = c.req.method.toUpperCase()
   if (m === 'GET' || m === 'HEAD') return false
-  const normalized = path.toLowerCase()
+  const normalized = c.req.path.toLowerCase()
+  if (normalized.includes('/emergency-stop')) {
+    // Explicit no-cancel emergency stop only persists local HALT/audit state;
+    // it is risk tightening, not a broker mutation. Missing/malformed bodies
+    // fail closed because the UTA schema defaults cancelOrders to true.
+    const body = await c.req.raw.clone().json().catch(() => null) as { cancelOrders?: unknown } | null
+    return body?.cancelOrders !== false
+  }
   return (
     normalized.includes('/wallet/push') ||
     normalized.includes('/wallet/place-order') ||
     normalized.includes('/wallet/close-position') ||
     normalized.includes('/wallet/cancel-order') ||
+    normalized.includes('/flatten') ||
     normalized.includes('/simulate-price') ||
     normalized.startsWith('/api/simulator') ||
     normalized.startsWith('/simulator')

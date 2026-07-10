@@ -156,6 +156,69 @@ describe('createTradingProxyRoutes — UTA optional carrier', () => {
     })
   })
 
+  it.each([
+    '/api/trading/uta/alpaca/emergency-stop',
+    '/api/trading/uta/alpaca/flatten',
+  ])('blocks human emergency broker mutation in readonly mode: %s', async (path) => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const app = createTradingProxyRoutes({
+      utaBaseUrl: 'http://127.0.0.1:47333',
+      getPolicy: () => ({ mode: 'readonly', source: 'config', envLocked: false, hasUTAConfig: true }),
+    })
+
+    const res = await app.request(path, { method: 'POST', body: '{}' })
+
+    expect(res.status).toBe(403)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('allows readonly emergency-stop when cancelOrders is explicitly false', async () => {
+    const payload = {
+      reason: 'local halt only',
+      cancelOrders: false,
+      operatorContext: { incident: 'stage-0-forwarding-proof' },
+    }
+    const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      await expect(new Response(init?.body).json()).resolves.toEqual(payload)
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+    const app = createTradingProxyRoutes({
+      utaBaseUrl: 'http://127.0.0.1:47333',
+      getPolicy: () => ({ mode: 'readonly', source: 'config', envLocked: false, hasUTAConfig: true }),
+    })
+
+    const res = await app.request('/api/trading/uta/alpaca/emergency-stop', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+    expect(res.status).toBe(200)
+    expect(fetchSpy).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['missing body', { method: 'POST' }],
+    ['malformed JSON', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{not-json' }],
+  ])('fails closed for readonly emergency-stop with %s', async (_label, init) => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const app = createTradingProxyRoutes({
+      utaBaseUrl: 'http://127.0.0.1:47333',
+      getPolicy: () => ({ mode: 'readonly', source: 'config', envLocked: false, hasUTAConfig: true }),
+    })
+
+    const res = await app.request('/api/trading/uta/alpaca/emergency-stop', init)
+
+    expect(res.status).toBe(403)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
   it('allows local proposal writes in readonly mode', async () => {
     vi.stubGlobal('fetch', vi.fn(async () =>
       new Response(JSON.stringify({ ok: true }), {

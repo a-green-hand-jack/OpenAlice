@@ -1,7 +1,13 @@
 # Steward 实施计划
 
+> 版本：v1.1（2026-07-10）——maintainer 已批准把 S0-S2 灾难风险内核插到
+> 后续 P3/P4/交易表现优化之前；S2 完成后必须停下重新做 Architect/Critic 风险审查，
+> 并取得 maintainer 的新授权，不能自动继续后续阶段。
 > 版本：v1.0（2026-07-04）
-> 地位：**稳定文档**。本计划在一段时间内保持不变，作为在 OpenAlice 基础上实现 Steward 的唯一顺序依据。调整计划（增删阶段、改变顺序、修改验收标准）是 director 决定，需要用户明确批准并升版本号；实现会话不得自行改动本文档。
+> 地位：**稳定文档**。当前唯一获准的执行窗口是本文新增的 S0→S1→S2；原 P0-P6
+> 路线仍保留为长期路线，但在 S2 后复审之前不构成继续执行授权。调整计划（增删阶段、
+> 改变顺序、修改验收标准）是 director 决定，需要用户明确批准并升版本号；实现会话
+> 不得自行改动本文档。
 > 依据：[steward-direction-research.zh.md](steward-direction-research.zh.md)（版图调研 + OpenAlice 盘点 + 选型结论）及其附录。
 > 目标定义：[Steward Vision v0.3](https://gist.github.com/a-green-hand-jack/be25ea9deafce31355110e8924bd7757)——长期运行、Observe→Operate、默认保守、可审计、风险优先、有记忆复盘的资产管理 agent。
 
@@ -9,8 +15,12 @@
 
 ## 如何使用本计划（每个实现会话必读）
 
-1. **按 P0→P6 顺序执行，不跳段、不并行开段。** 一个阶段的验收标准全部满足、用户确认后，才开始下一阶段。阶段内部可以拆成多个 PR。
-2. 每个 PR 走仓库标准流程：feat 分支 → PR to master（或按用户指示走 `local`），PR body 带 Summary / Test plan / **Boundary touch**（本计划几乎每个阶段都触及 trading/auth，必须标注）。
+1. **当前按 S0→S1→S2 顺序执行，不跳段、不并行开段。** S0 验收并经 maintainer
+   确认后才能开始 S1；S1 经独立审查后才能开始 S2；S2 完成后强制停下复审。原
+   P0→P6 顺序只在复审重新授权后恢复。阶段内部可以拆成多个 PR。
+2. 每个 PR 走仓库标准流程：feat 分支 → PR to `jieke/dev`（多本地 AI 会话共享同一
+   worktree 时按用户指示使用固定 `local` 分支），PR body 带 Summary / Test plan /
+   **Boundary touch**（本计划几乎每个阶段都触及 trading/auth，必须标注）。
 3. 动手前先读的仓库文档：`CLAUDE.md`（全部）、`docs/event-system.md`（P2 触及事件类型时）、`docs/uta-live-testing.md`（每个触及交易路径的阶段）。
 4. 阶段中发现的界外问题 → 按 CLAUDE.md 规则开 Linear issue（`Angelkawaii` / `TODO from AI Code`），不扩大当前阶段范围。
 5. 本文档给的 file:line 锚点是 2026-07-03 盘点时的事实。代码会漂移——锚点用于定位，以当时代码为准，不要因为行号对不上而怀疑任务本身。
@@ -29,7 +39,56 @@
 
 ---
 
+## 当前获准的风险优先内核（S0-S2）
+
+**当前阶段：S0。** 这三个阶段只处理可能造成不可逆 broker 行为或撤权失效的灾难风险；
+不在此窗口实现 `small_live`、`limited_autonomy`、agent push、自动 flatten、live
+auto-push，也不继续 prompt v8+ 或 holdout 调优。
+
+| 阶段 | 目标 | 进入门 | 停止规则 |
+|---|---|---|---|
+| S0 | UTA 侧全局只读 containment + 计划升版 | maintainer 已批准本次改序 | 直连 UTA 负测未证明 unverified external broker mutation 全部被挡住，就不得进入 S1 |
+| S1 | 所有 broker mutation 共用可持久化的 dispatch/uncertain 边界 | S0 验收并经 maintainer 确认 | 独立审查未确认 normal push、paper auto-push、emergency cancel、flatten 全部收口，就不得进入 S2 |
+| S2 | 跨进程、可持久化、单调的 revoke epoch 与 admission barrier | S1 独立审查通过 | **完成后必须停止**；重新做 Architect/Critic 风险审查并取得 maintainer 新授权 |
+
+### S0 三种控制不得混称
+
+| 控制 | 所属边界 | 能保证什么 | 不能替代什么 |
+|---|---|---|---|
+| Alice `trading.mode=readonly` | Alice 产品/BFF | Alice BFF 拒绝识别出的 broker mutation；UTA 同时加载有效 mode，readonly 仅允许经过 containment allowlist 验证的隔离 preset 写入 | 不能用 Alice 代理层的拒绝替代 UTA 直连负测 |
+| Steward/account `maxAuthzLevel=read_only` | workspace 工具面与 paper auto-push 授权 | 把 agent 的有效授权上限收紧到只读 | 不阻止持 internal token 的 UTA 人工 push，也不是 broker mutation 闸；authz `paper` 不能证明真实资金隔离 |
+| `UTAConfig.readOnly=true` | UTA 单账户 | funded 账户仍可本地 stage/commit/reject，也可用 `emergency-stop(cancelOrders=false)` 收紧到 HALT；push/dispatch、emergency cancel、flatten 全部拒绝；keyless 还额外禁止提案 | 不代表全局产品 mode，也不能由 `maxAuthzLevel` 推导 |
+
+UTA 的有效 mode 在进程启动时按 env/config/auto 规则解析，并在 UTA 域层执行：
+`lite` 禁止全部 broker mutation（即使 UTA 被手工或异常启动）；`readonly` 只允许
+containment allowlist 中可机械证明不接触真实资金的 preset；`pro` 再交给 per-account
+控制。对被 containment 的账户，normal push、place/modify/close/cancel、emergency
+cancel（`cancelOrders=true`）、flatten 一律 fail closed，即使调用者持有正确 internal
+token。`emergency-stop(cancelOrders=false)` 只记录本地 HALT，是风险收紧动作，始终
+保留。
+
+Stage 0 allowlist **目前只有 built-in `mock-simulator`**。所有外部 broker 的
+paper/demo/testnet authz 分类都不构成 containment 证明；尤其 IBKR 的 7497/4002 只是
+惯例端口、`ccxt-custom` 的 sandbox/demoTrading 语义因交易所而异、Longbridge 当前
+`paper` 标记不改变 SDK endpoint，因此三者在 readonly 下都 fail closed。没有新增
+live auto-push 路径。Alice BFF 的拦截是纵深防御，UTA 域层才是 containment 证明。
+
+### S0 风险语义校正
+
+`max-drawdown` 超阈值会把账户降到 `READ_ONLY`，从而阻止新的风险增加；它**不会强制
+平掉已有仓位，也不保证实际亏损在阈值处封顶**。跳空、流动性和继续持有的旧敞口仍可
+让最终回撤超过配置值。自动 flatten 不在 S0-S2 范围内。
+
+S0 不改变持久化 schema。后续若需要转换用户状态，必须先明确单一写入进程；S1 的
+mutation 记录归 UTA trading state，S2 的 revoke/epoch 记录归 UTA 单独持有，禁止
+Alice 与 UTA 并发迁移同一份状态。
+
+---
+
 ## 阶段总览
+
+以下 P0-P6 是长期路线。v1.1 的 S0-S2 在当前执行顺序上优先于本表；S2 后是否以及
+如何恢复本表，由强制复审决定。
 
 | 阶段 | 名称 | 补的空白 | 为什么在这个位置 |
 |---|---|---|---|
@@ -51,7 +110,8 @@
 - 为以下既有行为补齐缺失的 spec（已有的不重复写）：
   - `allowAiTrading=false` 时 `tradingPush` 工具不触 broker、返回 awaiting-approval（锚点 `src/tool/trading.ts:748`）
   - 真 push 只能走人类 HTTP 路由（`services/uta/src/http/routes-trading.ts:450`）
-  - `readOnly` 账户拒绝 stage/commit/push；keyless⟹readOnly（`src/core/config.ts:447-450`）
+  - funded `readOnly` 账户允许本地 stage/commit/reject，但拒绝 push 与任何 broker
+    mutation；keyless⟹readOnly 且禁止创建 proposal（`src/core/config.ts`）
   - TradingGit commit 持久化含 thesis/operations/results/stateAfter（`TradingGit.ts:122-131`）
   - 三个既有 guard（MaxPositionSize/Cooldown/SymbolWhitelist）在 execute 路径生效
 - 在 mock 账户跑一遍 S1–S12 场景目录，记录基线结果（存 `docs/appendix/steward-p0-baseline.md`）
@@ -78,7 +138,8 @@
 
 **范围（in）**：
 1. 组合级 guards（数据源用现有 snapshot/持仓）：
-   - `MaxDrawdownGuard`：净值自高点回撤超阈值 → 账户降级 CAUTIOUS/READ_ONLY
+   - `MaxDrawdownGuard`：净值自高点回撤超阈值 → 账户降级 CAUTIOUS/READ_ONLY，
+     阻止新增风险；不强平已有仓，也不构成严格亏损封顶
    - `DailyLossGuard`：单日亏损超阈值 → 降级
    - `ConcentrationGuard`：单标的/单类资产敞口超阈值 → 拒绝加仓方向的新单
 2. 账户风险状态机：状态影响行为——CAUTIOUS 只允许减仓方向操作；READ_ONLY 拒绝一切 stage/commit/push；HALT 同 READ_ONLY 且 UI 顶部横幅告警。
@@ -195,6 +256,11 @@
 
 ## 变更管理
 
-- 本计划 v1.0 冻结。执行中发现的设计问题：能在阶段验收标准内解决的就地解决；动摇关键设计决定的，暂停该阶段、带着具体证据找用户裁决，裁决后升版本号（v1.1、v2.0）并在此节记录变更日志。
+- 本计划 v1.1 冻结。当前只授权 S0-S2，且 S2 后强制停止复审。执行中发现的设计问题：
+  能在阶段验收标准内解决的就地解决；动摇关键设计决定的，暂停该阶段、带着具体证据
+  找用户裁决，裁决后再升版本号（v1.2、v2.0）并在此节记录变更日志。
 - 变更日志：
+  - v1.1（2026-07-10）：maintainer 批准风险优先改序；插入 S0-S2 灾难风险内核，
+    区分 Alice mode / Steward `maxAuthzLevel` / UTA account `readOnly`，明确 UTA
+    verified-isolation allowlist containment、max-drawdown 非强平边界，以及 S2 后强制复审。
   - v1.0（2026-07-04）：初版，依据 2026-07-03 三路调研。

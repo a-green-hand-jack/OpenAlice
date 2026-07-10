@@ -75,6 +75,22 @@ const PAPER_INPUT = {
 }
 
 describe('paper auto-push', () => {
+  it('keeps verified built-in mock auto-push available under readonly containment', async () => {
+    const { uta, broker } = createUTA({
+      tradingMode: 'readonly',
+      containmentClass: 'verified-isolated',
+    })
+    stageAndCommitBuy(uta)
+
+    const result = await tryAutoPushPaper({ uta, ...PAPER_INPUT })
+
+    expect(result.status).toBe('pushed')
+    expect(uta.readOnly).toBe(false)
+    expect(uta.tradingMode).toBe('readonly')
+    expect(uta.containmentClass).toBe('verified-isolated')
+    expect(broker.callCount('placeOrder')).toBe(1)
+  })
+
   it('auto-executes paper/mock commits at effective paper authz through the normal push audit path', async () => {
     const { uta, broker, sink } = createUTA({
       guards: [{ type: 'max-position-size', options: { maxPercentOfEquity: 99 } }],

@@ -95,7 +95,29 @@ export interface BrokerPresetDef {
    * Default: true if presetData.mode is one of demo/testnet/paper.
    */
   isPaper?: (presetData: Record<string, unknown>) => boolean
+  /**
+   * Independent from `isPaper`: whether this preset has been mechanically
+   * audited as incapable of reaching real money for the matching config.
+   * Global readonly containment may exempt only `verified` configs; lite
+   * remains mutation-disabled for every preset.
+   * Every preset must declare this explicitly so a newly-added paper label
+   * cannot silently become a broker-mutation bypass.
+   */
+  readonlyContainment: ReadonlyContainmentIsolation
 }
+
+export type ReadonlyContainmentIsolation =
+  | {
+      status: 'verified'
+      reason: string
+      isIsolated: (presetData: Record<string, unknown>) => boolean
+    }
+  | {
+      status: 'unverified'
+      reason: string
+    }
+
+export type BrokerMutationContainmentClass = 'verified-isolated' | 'unverified'
 
 // ==================== Helpers ====================
 
@@ -151,6 +173,10 @@ export const BINANCE_PRESET: BrokerPresetDef = {
     apiKey: d.apiKey,
     secret: d.secret,
   }),
+  readonlyContainment: {
+    status: 'unverified',
+    reason: 'External demo venue isolation is not part of the Stage 0 containment allowlist.',
+  },
 }
 
 export const OKX_PRESET: BrokerPresetDef = {
@@ -186,6 +212,10 @@ export const OKX_PRESET: BrokerPresetDef = {
     secret: d.secret,
     password: d.password,
   }),
+  readonlyContainment: {
+    status: 'unverified',
+    reason: 'External demo venue isolation is not part of the Stage 0 containment allowlist.',
+  },
 }
 
 export const BYBIT_PRESET: BrokerPresetDef = {
@@ -221,6 +251,10 @@ export const BYBIT_PRESET: BrokerPresetDef = {
     apiKey: d.apiKey,
     secret: d.secret,
   }),
+  readonlyContainment: {
+    status: 'unverified',
+    reason: 'External testnet/demo venue isolation is not part of the Stage 0 containment allowlist.',
+  },
 }
 
 export const HYPERLIQUID_PRESET: BrokerPresetDef = {
@@ -254,6 +288,10 @@ export const HYPERLIQUID_PRESET: BrokerPresetDef = {
     walletAddress: d.walletAddress,
     privateKey: d.privateKey,
   }),
+  readonlyContainment: {
+    status: 'unverified',
+    reason: 'External testnet isolation is not part of the Stage 0 containment allowlist.',
+  },
 }
 
 export const BITGET_PRESET: BrokerPresetDef = {
@@ -289,6 +327,10 @@ export const BITGET_PRESET: BrokerPresetDef = {
     secret: d.secret,
     password: d.password,
   }),
+  readonlyContainment: {
+    status: 'unverified',
+    reason: 'External demo venue isolation is not part of the Stage 0 containment allowlist.',
+  },
 }
 
 export const CCXT_CUSTOM_PRESET: BrokerPresetDef = {
@@ -330,6 +372,10 @@ export const CCXT_CUSTOM_PRESET: BrokerPresetDef = {
     return out
   },
   isPaper: (d) => Boolean(d.sandbox || d.demoTrading),
+  readonlyContainment: {
+    status: 'unverified',
+    reason: 'Custom exchange sandbox/demo flags have exchange-specific semantics and cannot prove isolation.',
+  },
 }
 
 // ==================== Native-engine presets ====================
@@ -364,6 +410,10 @@ export const ALPACA_PRESET: BrokerPresetDef = {
     apiKey: d.apiKey,
     apiSecret: d.apiSecret,
   }),
+  readonlyContainment: {
+    status: 'unverified',
+    reason: 'External paper venue isolation is not part of the Stage 0 containment allowlist.',
+  },
 }
 
 export const IBKR_PRESET: BrokerPresetDef = {
@@ -395,6 +445,10 @@ export const IBKR_PRESET: BrokerPresetDef = {
     accountId: d.accountId,
   }),
   isPaper: (d) => Number(d.port) === 7497 || Number(d.port) === 4002,
+  readonlyContainment: {
+    status: 'unverified',
+    reason: 'A conventional TWS/Gateway port does not prove the authenticated session is paper-only.',
+  },
 }
 
 export const LONGBRIDGE_PRESET: BrokerPresetDef = {
@@ -430,6 +484,10 @@ export const LONGBRIDGE_PRESET: BrokerPresetDef = {
     paper: d.mode === 'paper',
   }),
   isPaper: (d) => d.mode === 'paper',
+  readonlyContainment: {
+    status: 'unverified',
+    reason: 'The current SDK has no sandbox URL; paper is a label/authz marker, not mechanical routing isolation.',
+  },
 }
 
 // ==================== Other ecosystem brokers (lower-tier, isolated) ====================
@@ -465,6 +523,10 @@ Paste the **private key of the authorized wallet** below. LeverUp's team confirm
     network: d.mode,
     privateKey: d.privateKey,
   }),
+  readonlyContainment: {
+    status: 'unverified',
+    reason: 'External testnet isolation is not part of the Stage 0 containment allowlist.',
+  },
 }
 
 // ==================== Testing presets ====================
@@ -492,6 +554,11 @@ export const SIMULATOR_PRESET: BrokerPresetDef = {
   fingerprintFields: ['_instanceId'],
   toEngineConfig: (d) => ({ cash: d.cash }),
   isPaper: () => true,
+  readonlyContainment: {
+    status: 'verified',
+    reason: 'Built-in in-memory MockBroker has no external venue or real-money transport.',
+    isIsolated: () => true,
+  },
 }
 
 // ==================== Catalog ====================
@@ -534,6 +601,28 @@ export function getBrokerPreset(presetId: string): BrokerPresetDef {
 export function isPaperPreset(presetId: string, presetConfig: Record<string, unknown>): boolean {
   const preset = getBrokerPreset(presetId)
   return preset.isPaper ? preset.isPaper(presetConfig) : defaultIsPaper(presetConfig)
+}
+
+/**
+ * Resolve the broker-mutation containment class independently from authz
+ * `paper` classification. Unknown presets, invalid configs, unaudited
+ * metadata, and predicate failures all fail closed as `unverified`.
+ */
+export function resolveBrokerMutationContainmentClass(input: {
+  presetId?: string
+  presetConfig?: Record<string, unknown> | null
+}): BrokerMutationContainmentClass {
+  if (!input.presetId) return 'unverified'
+  try {
+    const preset = getBrokerPreset(input.presetId)
+    const parsed = preset.zodSchema.safeParse(input.presetConfig ?? {})
+    if (!parsed.success || preset.readonlyContainment.status !== 'verified') return 'unverified'
+    return preset.readonlyContainment.isIsolated(parsed.data as Record<string, unknown>)
+      ? 'verified-isolated'
+      : 'unverified'
+  } catch {
+    return 'unverified'
+  }
 }
 
 // ==================== Derived UTA id ====================

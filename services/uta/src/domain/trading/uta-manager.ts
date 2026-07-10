@@ -13,12 +13,14 @@ import { createCcxtProviderTools } from './brokers/ccxt/ccxt-tools.js'
 import { createBroker } from './brokers/factory.js'
 import {
   getBrokerPreset,
+  resolveBrokerMutationContainmentClass,
   resolveAuthzAccountType,
   type AuthzLevel,
+  type BrokerMutationContainmentClass,
 } from '@traderalice/uta-protocol'
 import { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
 import { loadGitState, createGitPersister } from './git-persistence.js'
-import { readUTAsConfig, type UTAConfig } from '@/core/config.js'
+import { readUTAsConfig, type TradingMode, type UTAConfig } from '@/core/config.js'
 import type { EventLog } from '@/core/event-log.js'
 import type { ToolCenter } from '@/core/tool-center.js'
 import type { ReconnectResult } from '@/core/types.js'
@@ -40,6 +42,34 @@ export interface SnapshotHooks {
   onPostReject?: (utaId: string) => void | Promise<void>
 }
 
+interface UTAManagerDeps {
+  eventLog?: EventLog
+  toolCenter?: ToolCenter
+  fxService?: FxService
+  eventSink?: UtaEventSink
+  /** Effective product-level mode resolved once by the UTA process. Lite
+   * disables all mutation; readonly allows only verified isolation. */
+  tradingMode?: TradingMode
+}
+
+export interface UtaRuntimePolicy {
+  tradingMode: TradingMode
+  containmentClass: BrokerMutationContainmentClass
+}
+
+/** Pure config-to-runtime policy mapping used by UTAManager.initUTA. Keeping
+ * this export side-effect-free lets tests prove real preset config wiring
+ * without importing the UTA process entrypoint or opening broker transports. */
+export function resolveUtaRuntimePolicy(cfg: UTAConfig, tradingMode: TradingMode): UtaRuntimePolicy {
+  return {
+    tradingMode,
+    containmentClass: resolveBrokerMutationContainmentClass({
+      presetId: cfg.presetId,
+      presetConfig: cfg.presetConfig,
+    }),
+  }
+}
+
 export class UTAManager {
   private entries = new Map<string, UnifiedTradingAccount>()
   private configs = new Map<string, UTAConfig>()
@@ -50,12 +80,14 @@ export class UTAManager {
   private toolCenter?: ToolCenter
   private _snapshotHooks?: SnapshotHooks
   private fxService?: FxService
+  private readonly tradingMode: TradingMode
 
-  constructor(deps?: { eventLog: EventLog; toolCenter: ToolCenter; fxService?: FxService; eventSink?: UtaEventSink }) {
+  constructor(deps?: UTAManagerDeps) {
     this.eventLog = deps?.eventLog
     this.eventSink = deps?.eventSink
     this.toolCenter = deps?.toolCenter
     this.fxService = deps?.fxService
+    this.tradingMode = deps?.tradingMode ?? 'pro'
   }
 
   setSnapshotHooks(hooks: SnapshotHooks): void {
@@ -76,6 +108,7 @@ export class UTAManager {
       guards: cfg.guards,
       keyless: cfg.keyless,
       readOnly: cfg.readOnly,
+      ...resolveUtaRuntimePolicy(cfg, this.tradingMode),
       asVendor: cfg.asVendor,
       savedState,
       eventSink: this.eventSink,
