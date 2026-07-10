@@ -22,7 +22,10 @@
 | v1 (pilot) | 4-cell 中性 steward 试点 | 已归档（见 §6 摘要） | `campaign/pilot.mjs` `stewardPrompt`（orchestrator 侧） | 已归档 | 中性框架；仅裸日收盘价；"conservative by default" → 极度保守（H1 仅吃 7–16% buy-hold，H2 决定性通过） |
 | **v2** | 双目标 + 盲但富信息 | **本文件 §5** | `campaign/prompt-v2.mjs` `stewardPrompt` | **已批准 2026-07-06；已验证 2026-07-07** | benchmark-aware 双目标；富信息（OHLCV+量+自算指标）；盲化反作弊；paste / tool-native 双模式 |
 | **v3** | steward **模板**唤醒指令实质内容（issue #98） | **`src/workspaces/templates/steward/files/instruction.md`**（仓库内提示词面，见 §3；文件本身即运行副本，无需另存比对拷贝） | 同左（in-repo 模板文件，wake 时逐字读取） | **已实现（2026-07-08）；Codex core-agent smoke 已跑通（2026-07-09）；H1/H2 campaign 复测 pending** | 首次把 v2 substance 移植进**真正被持久化唤醒机制使用**的模板（此前 v2 只活在 orchestrator 侧 `stress.mjs`，checked-in `instruction.md` 从未获得过它）；协议骨架（世界边界/唤醒循环/ledger JSON 契约）基本保留；新增 dual mandate + evidence-first + risk discipline + campaign §4.7 认可的「反过度参与」方向；stop-loss 风险上限收紧至 ~8%、禁止摊薄亏损仓，与 #97 硬 guards 语义对齐（软镜像，不替代）。Wake Loop / Decision Ledger Shape 后续经六次现场修补：issue #101 加了工具选择澄清（用 Write/Edit 写 ledger，不用 Bash heredoc），issue #103 加了 ACT 步骤（`propose_trade` 必须先下单+commit 再写 ledger，否则决策和实际敞口脱节）——现为 7 步，非原始 6 步；issue #105 给 Wake Loop 第 1 步加了 `expectedDecision` 反偏置澄清（该字段是 orchestrator 记账值，不是决策指导）；issue #107 给 Decision Ledger Shape 加了 `context`/`manifestSha256` 可选澄清（该字段本就是 optional，无需算真实 hash，更不能为此调用未预信任的 Bash 工具）；issue #111 给 Wake Loop 第 5 步加了 `autoPush` 结果检查澄清（下单+commit 后必须看真实的 guard 拒绝/成功结果并纠正重试，不能把从未成交的单子当成功记进 ledger）；issue #113 把 Wake Loop 第 5 步里携带自由文本的 6 个写操作命令（`order place`/`modify`/`cancel`、`position close`、`git commit`/`reject`）从裸 `--flag "..."` 参数改成两步 `--json-file` 模式——用 Write 工具把结构化参数+自由文本一起写进 gitignored `.alice/steward/tmp/`，Bash 只传一个纯文件路径，杜绝自由文本（如 `+$543` 这类 `$`+数字）触发 Claude Code Bash 安全分类器（第三次同类触发，前两次是 #91 的 heredoc 和 #107 的 openssl 管道）；2026-07-09 smoke 进一步确认：Codex core-agent 的唤醒可靠性问题主要在**投递/沙箱/并发文件写**，不是 v3 文本本体，修补记录见 §9。逐组件解剖见 §7、§8 |
-| **v4** | performance tuning + ledger 自校验 | **`src/workspaces/templates/steward/files/instruction.md`** | 同左 + 新建 workspace 的 `.alice/steward/validate-ledger.mjs` | **已实现（2026-07-10）；targeted smoke pending** | 针对 2026-07-09 dev baseline：bull cells 参与不足（小仓位/过度保守）且 low-signal chop/FX wake 偶发写出 schema-invalid ledger 后被 supervisor 视为未完成直到 timeout。v4 在 Participation Bias 中加入「清晰 uptrend 下 meaningful starter position」尺寸语义（flat + NORMAL risk + high conviction 通常 25-60% notional，而非 5-10% toe-hold），并在 Wake Loop 第 6 步要求写完 ledger 后运行 workspace-local `validate-ledger.mjs <wakeId>`，明确 `checklist`/`thesis`/`actions`/`pendingHash`/`invalidation`/`cost` 必须是顶层字段，schema-invalid line 不算完成 marker。 |
+| **v4** | performance tuning + ledger 自校验 | **`src/workspaces/templates/steward/files/instruction.md`** | 同左 + 新建 workspace 的 `.alice/steward/validate-ledger.mjs` | **已实现（2026-07-10）；dev baseline 已跑** | 针对 2026-07-09 dev baseline：bull cells 参与不足（小仓位/过度保守）且 low-signal chop/FX wake 偶发写出 schema-invalid ledger 后被 supervisor 视为未完成直到 timeout。v4 在 Participation Bias 中加入「清晰 uptrend 下 meaningful starter position」尺寸语义（flat + NORMAL risk + high conviction 通常 25-60% notional，而非 5-10% toe-hold），并在 Wake Loop 第 6 步要求写完 ledger 后运行 workspace-local `validate-ledger.mjs <wakeId>`，明确 `checklist`/`thesis`/`actions`/`pendingHash`/`invalidation`/`cost` 必须是顶层字段，schema-invalid line 不算完成 marker。Full dev baseline 证明 timeout/ledger 问题消失，但 bull behavior 仍不达标：NVDA 有首仓但不加仓，0700.HK 正常回撤中过早离场。 |
+| **v5** | winner management + pullback discipline | **`src/workspaces/templates/steward/files/instruction.md`** | 同左 + `.alice/steward/validate-ledger.mjs` | **已实现（2026-07-10）；targeted regression failed** | 针对 v4 full dev baseline 的行为缺口：在 Participation Bias 中补充「盈利趋势仓位要重新评估当前 notional，不足且可控风险时可顺势加仓」「健康 uptrend 的正常 pullback / 临时浮亏不等于 invalidation」「低波动漂移不等于高置信 uptrend」，并在 Risk Discipline 中明确只允许给盈利或持平且 thesis 仍有效的仓位加仓，且必须先/同时上移 stop。Targeted regression 显示方向不够窄：NVDA 学会加仓但贴近 max-position guard 后触发 READ_ONLY；0700.HK 仍被 pullback 洗出；SPY low-vol chop 过早参与。 |
+| **v6** | guard headroom + stricter trend filter | **`src/workspaces/templates/steward/files/instruction.md`** | 同左 + `.alice/steward/validate-ledger.mjs` | **已实现（2026-07-10）；targeted regression partial / failed bull threshold** | 在 v5 基础上把 starter range 收窄为 25-45%，加仓目标收在 50-55% notional 而不是贴近 60% hard guard；明确若 mark-to-market 把敞口推近/超过 guard，应 trim 回 guard 下方而不是等 READ_ONLY；把 pullback hold 条件写成「在原 stop/risk budget 内、仍高于 swing support、且未超过约 8% adverse move」；把 low-vol chop 过滤写硬：1-4% 的一两周窄幅 drift 不足以使用 meaningful starter。Targeted regression 修掉 NVDA READ_ONLY（+17.0%，仍低于 +25% bull 阈值）并让 SPY PASS，但暴露 0700.HK 的 default-contract/AAPL 污染。 |
+| **v7** | campaign tradable contract binding | **`src/workspaces/templates/steward/files/instruction.md`** + `tools/campaigns/run-cell.mjs` | wake `marketContext.tradeableAliceId` | **已实现（2026-07-10）；targeted regression pending** | v6 targeted 暴露出非 prompt-policy 摩擦：MockBroker 空搜索会返回默认 `AAPL`，agent 在 0700.HK cell 中读 `ASSET-K` tape 却尝试交易默认 `AAPL`，导致 stopLoss 被按错 entry 估算后反复 paper-policy denied。v7 在 campaign wake 中显式传 `tradeableAliceId: <acctId>|<codename>` / `tradeableNativeKey`，并在 Wake Loop 第 1 步要求若该字段存在，order/position 命令必须使用该 exact aliceId，不能用 blank search/default/example contracts。 |
 
 > **v2 验证结果（2026-07-07，paste 模式，3 个真实牛市匿名窗口）**：H1 = NVDA 42% / TSLA 65% / AMD 43%（均 ~50%），maxDD 全 0%。对比 pilot（v1）H1 仅 7-16%——**v2 把牛市参与度提升 3-5×，同时保住 H2 纪律（回撤 0%）**。即「行情好时参与、行情差时仍不冒大险」。12-cell（含 bear/chop）将复核 v2 是否破坏 H2。
 
@@ -54,7 +57,7 @@
 | 面 | 位置（file:line） | 控什么 |
 | --- | --- | --- |
 | 模板 persona / 指令 | `src/workspaces/template-registry.ts:81-87`（`injectPersona` = Alice persona + 模板 `instruction.md`）；模板目录 `src/workspaces/templates/{auto-quant,chat}/` | workspace agent 的基础人设与任务框架 |
-| Steward 唤醒指令（实质内容，v3 起纳管，v4 当前版） | `src/workspaces/templates/steward/files/instruction.md` 全文（281 行）：World Boundary `7-21`、Mandate `23-40`、Evidence-First Reasoning `42-61`、Participation Bias `63-86`（v4 新增 meaningful starter position）、Risk Discipline `88-102`、Wake Loop `104-209`（7 步，含 issue #103/#105/#111/#113 修补 + v4 ledger validator）、Decision Ledger Shape `214-272`（含 issue #107 的 `context`/`manifestSha256` 可选澄清）、Safety `274-281` | steward workspace 唤醒时的完整行为提示。世界边界/ledger JSON 契约不变；Wake Loop 协议步骤见 §8 和 §10；v3/v4 的推理与风控实质见 §7、§10 |
+| Steward 唤醒指令（实质内容，v3 起纳管，v7 当前版） | `src/workspaces/templates/steward/files/instruction.md` 全文（315 行）：World Boundary `7-21`、Mandate `23-40`、Evidence-First Reasoning `42-61`、Participation Bias `63-110`（v4 新增 meaningful starter position；v5/v6 新增 winner management / pullback discipline / low-vol chop filter / guard headroom）、Risk Discipline `112-132`、Wake Loop `134-243`（7 步，含 issue #103/#105/#111/#113 修补 + v4 ledger validator + v7 `tradeableAliceId` binding）、Decision Ledger Shape `248-304`（含 issue #107 的 `context`/`manifestSha256` 可选澄清）、Safety `308-315` | steward workspace 唤醒时的完整行为提示。世界边界/ledger JSON 契约不变；Wake Loop 协议步骤见 §8 和 §10；v3-v7 的推理与风控实质见 §7、§10、§11、§12、§13 |
 | 工具描述串 | `src/tool/*.ts` 的 `description:`（21 处），如 `src/tool/analysis.ts:37`、`src/tool/market.ts:27` | agent 何时/如何调用各工具——本身即 prompt |
 | Key-test 探针 | `src/workspaces/agent-probe.ts:74`（一次性 "Hi"） | 仅验证凭证连通，无行为语义 |
 
@@ -115,8 +118,8 @@ v3 是首次把 v2 的实验性 substance 移植进**真正被持久化唤醒机
 
 - **[Mandate 双目标]** `instruction.md:23-40`。"two ways to fail … equally real" —— 把「跑输牛市」与「跌市亏损」定为同等失败，直接移植自 v2 §5 的 MANDATE 段（benchmark = 简单 buy-and-hold）。意图：给 Wake Loop 第 4 步的决策提供目标框架。所控：`propose_trade` vs `no_trade` 的整体倾向。变更：旧版无任何目标/benchmark 概念——6 步协议只讲「怎么走流程」,不讲「决策该往哪个方向偏」。关联：[steward-p3-campaign.zh.md](steward-p3-campaign.zh.md) §3 的 H1（顺风参与）/ H2（逆风止损）定义。
 - **[Evidence-First 先取证]** `instruction.md:42-61`。"read the tape yourself … thesis from evidence, not vibes"，并把 trend / momentum / volatility / levels / volume 五要素显式与 ledger 的 `thesis`/`invalidation` 字段绑定（"a moving-average cross, a break of a swing level, a stop getting hit"）。意图：让 `thesis`/`invalidation` 不再是任意占位文本，而是有证据锚点的字段。所控：ledger 条目里 `thesis`/`invalidation` 两个字符串字段的写法（不改字段本身，只改怎么填）。变更：旧版 ledger 契约把这两个字段列为纯字符串，无任何写法指引。关联：呼应 v2 §2 同名组件；不涉及不变量（不改 schema、不改风控权威）。
-- **[Participation Bias 参与偏置 / v3 方向]** `instruction.md:63-79`。"lean OUT — and default to `no_trade` — when the evidence is unclear, weakening, or downside-leaning"，同时保留 "do not sit out a clear … uptrend"。意图：这是 [steward-p3-campaign.zh.md](steward-p3-campaign.zh.md) §4.7 发现 over-participation（`sp-bear-smci` 深熊误读为可参与、串行/并行两批皆 FAIL）之后 maintainer 拍板的「prompt v3」方向本体——此前从未成文，只存在于 §4.7 的对策记录里。所控：evidence 模糊/走弱/下行时的默认动作。变更：v2 原文只有单向的 "lean IN when evidence supports a trend"；本版补上对称的另一半（证据不清/走弱/下行时默认 `no_trade`），同时刻意**不弱化** v2 已验证的 H1 修复（保留「清晰上涨仍须参与」的偏置，防止退回 v1 式极度保守）。关联：[steward-p3-campaign.zh.md](steward-p3-campaign.zh.md) §4.7 over-participation 发现 + H2 定义的判据语义。
-- **[Risk Discipline 风控收紧]** `instruction.md:81-95`。"never size a stop to risk more than roughly 8% … never add to a position that is already losing"，并显式声明 "the guards are the backstop; apply these yourself rather than relying on them to catch it"。意图：把 v2 原有的 "protective stop, trail it up" 风控语言，收紧到与 issue #97 硬 guards（`max-drawdown` / `max-position-size`）同量级的具体数字，同时把 prompt 层风控明确定位为「软镜像」而非风控权威。所控：止损比例、是否允许摊薄亏损仓。变更：v2/旧版都没有具体止损比例数字，也没有「禁止摊薄亏损仓」规则。关联：不变量 **I3**（风险机制是确定性代码，LLM 永远不在风险检查信任链上，见 [steward-plan.zh.md](steward-plan.zh.md)）——本组件不改变、不替代 I3 的分工：guards 仍是唯一权威（`services/uta/src/domain/trading/risk-state.ts`），这里只是让 agent 自身的风控直觉提前向 guards 的阈值对齐，减少被动触发 READ_ONLY 降级的次数。
+- **[Participation Bias 参与偏置 / v3 方向]** `instruction.md:63-110`。"lean OUT — and default to `no_trade` — when the evidence is unclear, weakening, or downside-leaning"，同时保留 "do not sit out a clear … uptrend"。意图：这是 [steward-p3-campaign.zh.md](steward-p3-campaign.zh.md) §4.7 发现 over-participation（`sp-bear-smci` 深熊误读为可参与、串行/并行两批皆 FAIL）之后 maintainer 拍板的「prompt v3」方向本体——此前从未成文，只存在于 §4.7 的对策记录里。所控：evidence 模糊/走弱/下行时的默认动作。变更：v2 原文只有单向的 "lean IN when evidence supports a trend"；本版补上对称的另一半（证据不清/走弱/下行时默认 `no_trade`），同时刻意**不弱化** v2 已验证的 H1 修复（保留「清晰上涨仍须参与」的偏置，防止退回 v1 式极度保守）。关联：[steward-p3-campaign.zh.md](steward-p3-campaign.zh.md) §4.7 over-participation 发现 + H2 定义的判据语义。v4-v6 对本组件的后续增量见 §10-§12。
+- **[Risk Discipline 风控收紧]** `instruction.md:112-132`。"never size a stop to risk more than roughly 8% … never add to a position that is already losing"，并显式声明 "the guards are the backstop; apply these yourself rather than relying on them to catch it"。意图：把 v2 原有的 "protective stop, trail it up" 风控语言，收紧到与 issue #97 硬 guards（`max-drawdown` / `max-position-size`）同量级的具体数字，同时把 prompt 层风控明确定位为「软镜像」而非风控权威。所控：止损比例、是否允许摊薄亏损仓。变更：v2/旧版都没有具体止损比例数字，也没有「禁止摊薄亏损仓」规则。关联：不变量 **I3**（风险机制是确定性代码，LLM 永远不在风险检查信任链上，见 [steward-plan.zh.md](steward-plan.zh.md)）——本组件不改变、不替代 I3 的分工：guards 仍是唯一权威（`services/uta/src/domain/trading/risk-state.ts`），这里只是让 agent 自身的风控直觉提前向 guards 的阈值对齐，减少被动触发 READ_ONLY 降级的次数。v5/v6 对「允许加赢家、不允许摊平亏损仓、给 hard guard 留余量」的补充见 §11、§12。
 
 ## 8. Wake Loop / Decision Ledger Shape 现场修补记录（issue #101、#103、#105、#107、#111、#113）
 
@@ -285,7 +288,7 @@ v4 的变更分两半：
   不应只是 5-10% toe-hold；在 paper/mock campaign 里通常应接近 25-60% notional，
   除非 stop 距离或证据质量不允许。意图是修 bull under-participation，但不放松
   Risk Discipline，也不允许给亏损仓摊平。
-- **[Ledger self-validation]** `instruction.md:196-209` +
+- **[Ledger self-validation]** `instruction.md:232-237` +
   `src/workspaces/templates/steward/bootstrap.mjs:54-131`：新建 steward workspace 会
   带 `.alice/steward/validate-ledger.mjs`，Wake Loop 第 6 步要求写完 ledger 后用
   `node .alice/steward/validate-ledger.mjs <wakeId>` 自检；尤其强调
@@ -293,3 +296,98 @@ v4 的变更分两半：
   不能塞进 `completion`。这不改变 `stewardDecisionLedgerEntrySchema`，只是让
   core-agent 在停止前用 workspace-local 脚本验证它写出的 completion marker 会被
   supervisor 接受。
+
+v4 full dev baseline（2026-07-10）结果：5 cells 全部完成，无 timeout，无 UTA
+leak，说明 ledger marker / wake lifecycle 问题已修复；但 bull performance 仍不
+达标。NVDA 从 v3/v4 早期的小仓位改善为 week2 约 35% notional 首仓，但后续强趋势
+中只 hold 不 add，最终 +15.8% 仍低于 bull 验收阈值 +25%。0700.HK week2 首仓后在
+正常趋势回撤中 week3 离场，最终 -2.8%，说明 agent 把 pullback 误读为 thesis
+失效。SPY chop 虽仍 PASS，但 v4 的 starter sizing 让它在低波动漂移中拿了 400 股，
+暴露出过度参与风险。因此 v5 不再单纯放大 starter size，而是补「盈利趋势管理 /
+pullback discipline / low-vol chop filter」。
+
+## 11. v5 修补记录（2026-07-10）
+
+v5 只改 Participation Bias 和 Risk Discipline，不改 World Boundary、Wake Loop、
+ledger shape，也不改变 UTA 硬 guards。它是在 v4 full dev baseline 后的窄幅行为
+补丁：
+
+- **[Winner management / pyramiding]** `instruction.md:79-84`：当 agent 已持有
+  盈利 long 且 tape 继续确认同一 uptrend 时，不能把「已有仓位」当成完整答案；
+  要重新评估当前 notional 与 benchmark / max-position guard 的关系。若当前敞口
+  明显低于 guard 且 trailing stop 能控制风险，应考虑顺势加仓，而不是被动持有
+  一个过小的赢家。意图：修 NVDA v4 的 week3-week6 no-add。
+- **[Pullback discipline]** `instruction.md:85-89`：健康 uptrend 中的正常回撤或
+  临时浮亏不等于 thesis 失效；只有预先写明的 swing/stop 被破、higher-high /
+  higher-low 结构明确失败、或 risk-state block 出现时，才应 exit/trim/stand down。
+  意图：修 0700.HK v4 在正常波动中被洗出。
+- **[Low-vol chop filter]** `instruction.md:96-100`：低波动 drift 不等于高置信
+  uptrend；使用 25-60% starter range 之前要看到 prior swing reclaim / persistent
+  higher lows / range expansion / volume-or-volatility confirmation。没有这些确认时
+  应小 probe 或 `no_trade`。意图：保留 v4 对 bull starter 的修复，同时不把 SPY
+  这类低波动 chop 推成大仓误判。
+- **[Add guard]** `instruction.md:119-121`：只允许给盈利或持平、且 thesis 仍有效
+  的仓位加仓；必须先或同时 trail stop，保证合并仓位的 downside defined。意图：
+  明确 v5 允许的是加赢家，不是摊平亏损仓。
+
+v5 targeted regression（2026-07-10）失败但提供了清晰诊断：NVDA 学会了 week4
+加仓，但仓位贴近 60% max-position hard guard，mark-to-market 后 week6 进入
+READ_ONLY，最终 campaign 记为 0%；0700.HK 仍在 week3 pullback 中离场；SPY
+low-vol chop week1/week2 过早参与。结论：v5 的方向正确但边界太软，必须显式写
+guard headroom、pullback hold 条件和 low-vol drift 排除规则。
+
+## 12. v6 修补记录（2026-07-10）
+
+v6 是 v5 targeted failure 后的收敛补丁，仍只动 Participation Bias 与 Risk
+Discipline：
+
+- **[Starter range headroom]** `instruction.md:72-78`：把 high-conviction starter
+  从 25-60% 收窄为 25-45%，避免首仓直接贴近 hard guard，为后续加仓和价格上涨留
+  空间。
+- **[Pyramid ceiling]** `instruction.md:79-87`：保留「盈利趋势要考虑加仓」，
+  但明确不要把目标打到 hard max-position guard；60% hard guard 下，adds 通常应在
+  50-55% notional 停止。意图：修 NVDA v5 的 READ_ONLY。
+- **[Pullback hold threshold]** `instruction.md:88-95`：把「正常 pullback 不等于
+  exit」具体化为仍在原 stop/risk budget 内、仍高于 swing support、且 adverse move
+  未超过约 8% 时通常 hold/trail，而不是 full exit。意图：继续修 0700.HK。
+- **[Low-vol exclusion]** `instruction.md:102-108`：1-4% 的一两周窄幅 drift 不足
+  以触发 meaningful starter；需要更强的 breakout/reclaim/range/volume 证据。意图：
+  修 SPY v5 的过早参与。
+- **[Trim before READ_ONLY]** `instruction.md:130-132`：若浮盈把敞口推近或超过
+  max-position guard，应主动 trim 回 guard 下方并保留 core trend position，而不是
+  等账户进入 READ_ONLY。意图：把 UTA hard guard 前移成 agent 自己能执行的软纪律。
+
+v6 targeted regression（2026-07-10）：NVDA 不再触发 READ_ONLY，仓位路径为 week2
+266 股、week3 加到 416 股，最终 +17.0% / maxDD 0%，但仍低于 bull +25% 阈值；
+SPY week1 no_trade、week2 入场，最终 -0.8% / maxDD 0.9%，仍 PASS；0700.HK week2
+在识别出趋势后没有成交，原因不是趋势判断本身，而是下到了 mock 默认 `AAPL`
+合约，stopLoss 以 `ASSET-K` tape 估算但被 paper policy 以 AAPL/default entry
+校验，连续 rejected。后者是 campaign/contract-binding 摩擦，进入 v7。
+
+## 13. v7 修补记录（2026-07-10）
+
+v7 修的是回测基建与 agent 行为面之间的 contract-binding 摩擦，不是市场判断策略：
+
+- **[Campaign wake contract binding]** `tools/campaigns/run-cell.mjs:350-359`：
+  `marketContext` 新增 `tradeableAliceId: <acctId>|<codename>` 与
+  `tradeableNativeKey: <codename>`，note 明确「本 wake 唯一可交易合约是
+  tradeableAliceId，不要使用 blank search 返回的默认/example contracts」。
+- **[Wake Loop exact aliceId rule]** `instruction.md:138-148`：Wake Loop 第 1 步
+  补充：若 `marketContext.tradeableAliceId` 存在，order/position 命令必须用这个
+  exact `aliceId`；除非它本身就是 wake 的 `tradeableAliceId`，否则不得用
+  blank search/default/example contract（例如 `AAPL`）。意图：让 agent 的交易对象
+  与 blind OHLCV tape、MockBroker injected bars、paper policy entry/stop 估算使用
+  同一个 nativeKey，避免「看 ASSET-K、下 AAPL」的错位。
+
+v7 targeted regression 先暴露了另一个并行 harness 摩擦：`run-cell.mjs` 默认在
+单格结束时 cleanup workspace/account，删除 mock UTA 会触发 Guardian/UTA restart；
+若其它 cell 仍在跑，它们的 MockBroker 内存仓位与 injected bars 会被重置，表现为
+equity/qty 突然回到初始值。可信的并行跑法应是每个 cell 加 `--keep`，等所有
+`result.json` 落盘后再统一 cleanup。`run-cell.mjs` 文件头已记录这条约束。
+
+按 `--keep` 延迟 cleanup 重跑三格后，contract-binding 已确认修复：0700.HK week2
+下到 `mock-simulator-...|ASSET-K` 并成交，不再污染到 `AAPL`。但 behavior 仍未达
+bull 验收：NVDA +18.8% / maxDD 0%（仍低于 +25% 阈值），0700.HK +4.1% /
+maxDD 1.7%，SPY chop -0.9% / maxDD 1.8% PASS。结论：OpenAlice 基建摩擦已进一步
+剥离，下一步是 trading policy 本身的 bull participation / chop false-positive
+权衡，而不是 wake/ledger/contract plumbing。

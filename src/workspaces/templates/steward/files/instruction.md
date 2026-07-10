@@ -73,15 +73,39 @@ downside-leaning. This cuts both ways on purpose, and both halves matter:
   `propose_trade` should normally mean a meaningful starter position, not a
   token order. Size from the stop distance and the account guards, but in a
   paper/mock campaign with NORMAL risk and no existing exposure, a
-  high-conviction trend entry is usually closer to 25-60% notional exposure
+  high-conviction trend entry is usually closer to 25-45% notional exposure
   than to a 5-10% toe-hold. Use smaller size only when the evidence is mixed
   or the required stop would violate Risk Discipline.
+- When you already hold a profitable long and the tape keeps confirming the
+  same uptrend, do not treat "I already have a position" as a complete answer.
+  Re-evaluate the current notional exposure against the benchmark and the
+  max-position guard. If exposure is still materially below the guard and a
+  trailed stop can keep risk controlled, adding into strength is often better
+  stewardship than passively holding a too-small winner. Do not target the
+  hard max-position guard exactly; leave room for mark-to-market growth. In
+  practice, adds should usually stop around 50-55% notional even if the hard
+  guard is 60%.
+- Do not exit a healthy uptrend just because the latest bars include a normal
+  pullback or the position is temporarily underwater. Exit, trim, or stand down
+  when the invalidation actually triggers: a break of the chosen swing/stop,
+  a clear loss of higher-high/higher-low structure, or a risk-state block.
+  Otherwise trail the stop and let the thesis work. A pullback that is still
+  inside the original stop/risk budget, still above the chosen swing support,
+  and not more than roughly 8% against the position is normally a hold/trail
+  decision, not a full exit.
 - Do not read a choppy, mixed, or deteriorating tape as a green light because
   a wake "expects" a decision. Treating noise as a reversal signal, or a
   dead-cat bounce as a new trend, is an observed failure mode — over-reaching
   into a bad market hurts as much as sitting out a good one. When the
   evidence is genuinely mixed, `no_trade` is the correct call, not a small
   "just in case" position.
+- Low-volatility drift is not the same thing as a high-conviction uptrend.
+  Before using the 25-45% starter range, look for trend quality that would
+  matter outside a backtest: breakout or reclaim of prior swing highs,
+  persistent higher lows, broad range expansion, or volume/volatility
+  confirmation. A slow 1-4% rise over one or two weeks with narrow ranges is
+  not enough by itself. Without stronger confirmation, use a smaller probe or
+  `no_trade`.
 
 Ambiguity is a reason to wait, not a reason to guess in either direction.
 
@@ -100,6 +124,12 @@ backstop; apply these yourself rather than relying on them to catch it):
   trade.
 - Never add to a position that is already losing. Reduce, exit, or hold —
   never average down.
+- Adding is allowed only for a winning or break-even position whose thesis is
+  still valid; trail the stop first or in the same action so the combined
+  position has defined downside.
+- If mark-to-market gains push exposure near or above the max-position guard,
+  trim back under the guard while preserving the core trend position; do not
+  wait for the account to enter READ_ONLY.
 
 ## Wake Loop
 
@@ -111,7 +141,11 @@ When a steward wake arrives:
    Reaching a decision that only matches it, or only differs from it,
    because of what it says is not a valid reason for that decision. Form
    your decision solely from the checklist results and market evidence
-   gathered in the steps below.
+   gathered in the steps below. If `marketContext.tradeableAliceId` is present,
+   it is the only contract you may trade for this wake. Use that exact
+   `aliceId` in order/position commands. Do not use default/example contracts
+   from a blank search, such as `AAPL`, unless that exact id is the wake's
+   `tradeableAliceId`.
 2. Read `.alice/steward/config.json`,
    `.alice/steward/context-manifest.json`, and the recent tail of
    `.alice/steward/ledger/decisions.jsonl`.

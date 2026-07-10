@@ -19,6 +19,12 @@
  *   5. writes every artifact (ledger, wake records, supervisor state, per-week
  *      snapshots, computed metrics) to tools/campaigns/runs/<runId>/ (gitignored).
  *
+ * Parallel-run note: deleting a mock UTA triggers a Guardian/UTA restart. If
+ * multiple cells are running at once, one cell's early cleanup can reset the
+ * other cells' in-memory MockBroker positions and injected bars. For parallel
+ * experiments, run each cell with --keep, wait for all result.json files, then
+ * delete the kept workspaces/accounts as a final batch.
+ *
  * The agent's identity seal is enforced at the tool layer by blind mode; the
  * price series it reasons over is anonymized (day-0=100, fictional day index).
  *
@@ -348,13 +354,15 @@ async function main() {
 
       const marketContext = {
         instrument: codename,
+        tradeableAliceId: `${acctId}|${codename}`,
+        tradeableNativeKey: codename,
         assetClassHint: cell.assetClassHint ?? 'a single anonymized, high-volatility instrument',
         interval: '1d',
         priceBasis: 'day 0 close rebased to 100; day index is fictional (no real dates)',
         currentDay: lastDay.day,
         currentClose: lastDay.close,
         weeklyCadence: `week ${week} of ${totalWeeks} (one decision per simulated week)`,
-        note: 'You manage a prudent, benchmark-aware paper portfolio. Below is the full daily OHLCV visible so far. No other identifying information exists — judge from price/volume alone.',
+        note: 'You manage a prudent, benchmark-aware paper portfolio. Below is the full daily OHLCV visible so far. No other identifying information exists — judge from price/volume alone. The only tradable contract for this wake is tradeableAliceId; do not use default/example contracts returned by blank search.',
         bars: visible,
       };
 
