@@ -22,14 +22,17 @@
  * redundant.
  */
 
-import type { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
+import {
+  BrokerMutationDeniedError,
+  type UnifiedTradingAccount,
+} from './UnifiedTradingAccount.js'
 import type { ApproverIdentity, PushResult } from './git/types.js'
 
 export type OrderEntryPhase = 'stage' | 'commit' | 'push'
 
 export type OrderEntryResult =
   | { ok: true; result: PushResult }
-  | { ok: false; phase: OrderEntryPhase; error: string }
+  | { ok: false; phase: OrderEntryPhase; error: string; code?: 'broker_mutation_denied' }
 
 /**
  * Run stage → commit → push on the given UTA. The `stage` callback is
@@ -50,7 +53,7 @@ export async function executeOneShotOrder(
   try {
     stage()
   } catch (err) {
-    return { ok: false, phase: 'stage', error: errorMessage(err) }
+    return failure('stage', err)
   }
 
   // Phase 2: commit
@@ -59,7 +62,7 @@ export async function executeOneShotOrder(
   } catch (err) {
     // Roll back so the next attempt starts from an empty staging area.
     try { await uta.reject('auto-rollback after commit error') } catch { /* best effort */ }
-    return { ok: false, phase: 'commit', error: errorMessage(err) }
+    return failure('commit', err)
   }
 
   // Phase 3: push
@@ -67,7 +70,16 @@ export async function executeOneShotOrder(
     const result = await uta.push(approver)
     return { ok: true, result }
   } catch (err) {
-    return { ok: false, phase: 'push', error: errorMessage(err) }
+    return failure('push', err)
+  }
+}
+
+function failure(phase: OrderEntryPhase, err: unknown): Extract<OrderEntryResult, { ok: false }> {
+  return {
+    ok: false,
+    phase,
+    error: errorMessage(err),
+    ...(err instanceof BrokerMutationDeniedError ? { code: 'broker_mutation_denied' as const } : {}),
   }
 }
 

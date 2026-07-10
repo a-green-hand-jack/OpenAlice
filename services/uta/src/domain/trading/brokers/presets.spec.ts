@@ -16,6 +16,7 @@ import {
   BROKER_PRESET_CATALOG,
   getBrokerPreset,
   isPaperPreset,
+  resolveBrokerMutationContainmentClass,
   deriveUtaId,
   BINANCE_PRESET,
   OKX_PRESET,
@@ -208,6 +209,39 @@ describe('isPaperPreset', () => {
     expect(isPaperPreset('ccxt-custom', { sandbox: true })).toBe(true)
     expect(isPaperPreset('ccxt-custom', { demoTrading: true })).toBe(true)
     expect(isPaperPreset('ccxt-custom', {})).toBe(false)
+  })
+})
+
+// ==================== readonly containment isolation ====================
+
+describe('resolveBrokerMutationContainmentClass', () => {
+  it('exempts only the mechanically isolated built-in simulator', () => {
+    expect(resolveBrokerMutationContainmentClass({
+      presetId: 'mock-simulator',
+      presetConfig: { cash: 50_000 },
+    })).toBe('verified-isolated')
+  })
+
+  it.each([
+    ['alpaca paper', 'alpaca', { mode: 'paper', apiKey: 'k', apiSecret: 's' }],
+    ['binance demo', 'binance', { mode: 'demo', apiKey: 'k', secret: 's' }],
+    ['ibkr conventional paper port', 'ibkr-tws', { host: '127.0.0.1', port: 7497, clientId: 0 }],
+    ['ccxt custom sandbox', 'ccxt-custom', { exchange: 'kucoin', sandbox: true }],
+    ['ccxt custom demo', 'ccxt-custom', { exchange: 'kucoin', demoTrading: true }],
+    ['longbridge paper marker', 'longbridge', { mode: 'paper', appKey: 'k', appSecret: 's', accessToken: 't' }],
+  ])('keeps external %s unverified', (_label, presetId, presetConfig) => {
+    expect(resolveBrokerMutationContainmentClass({ presetId, presetConfig })).toBe('unverified')
+  })
+
+  it('fails closed for unknown presets and invalid configs', () => {
+    expect(resolveBrokerMutationContainmentClass({
+      presetId: 'does-not-exist',
+      presetConfig: {},
+    })).toBe('unverified')
+    expect(resolveBrokerMutationContainmentClass({
+      presetId: 'mock-simulator',
+      presetConfig: { cash: 'not-a-number' },
+    })).toBe('unverified')
   })
 })
 

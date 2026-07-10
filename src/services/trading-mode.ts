@@ -55,7 +55,7 @@ export function describeTradingMode(mode: TradingMode): string {
     case 'lite':
       return 'Lite mode keeps UTA disconnected. Switch to readonly or pro to use broker-backed trading surfaces.'
     case 'readonly':
-      return 'Readonly mode connects UTA for account analysis but blocks venue-mutating broker writes.'
+      return 'Readonly mode connects UTA for account analysis and permits broker mutation only for presets on the verified non-real-money isolation allowlist.'
     case 'pro':
       return 'Pro mode enables UTA with per-account permissions.'
   }

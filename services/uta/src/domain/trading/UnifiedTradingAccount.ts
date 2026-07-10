@@ -15,7 +15,15 @@ const REACH_RANK: Record<UTAReach, number> = { down: 0, connected: 1, readable: 
 import { TradingGit } from './git/TradingGit.js'
 import { recomputeCostBasisFromCommits } from './cost-basis.js'
 import { projectOrderHistory, projectTradeHistory } from './order-history.js'
-import type { ApproverIdentity, OrderHistoryEntry, TradeHistoryEntry, RiskState, RiskStateInfo } from '@traderalice/uta-protocol'
+import {
+  type ApproverIdentity,
+  type BrokerMutationContainmentClass,
+  type OrderHistoryEntry,
+  type TradeHistoryEntry,
+  type RiskState,
+  type RiskStateInfo,
+} from '@traderalice/uta-protocol'
+import type { TradingMode } from '@/core/config.js'
 import { pnlOf } from './position-math.js'
 import type {
   Operation,
@@ -69,6 +77,14 @@ export interface UnifiedTradingAccountOptions {
   onPostReject?: (accountId: string) => void | Promise<void>
   /** Refuse external account mutations. Proposal staging stays local; push is blocked. Implied by keyless. */
   readOnly?: boolean
+  /** Effective product-level mode resolved by UTA at startup. Lite blocks all
+   *  mutation; readonly allows only verified isolation; pro delegates to
+   *  per-account controls. */
+  tradingMode?: TradingMode
+  /** Independent from authz paper/live classification. Only mechanically
+   *  verified non-real-money presets may bypass readonly containment; lite
+   *  remains mutation-disabled for every preset. */
+  containmentClass?: BrokerMutationContainmentClass
   /** Public-data-only account (no key) — no account/positions; excluded from
    *  equity aggregation. Implies readOnly. */
   keyless?: boolean
@@ -114,6 +130,15 @@ export interface FlattenResult {
   results: FlattenPositionResult[]
 }
 
+/** Structured policy denial so HTTP surfaces can map containment to 403
+ * without treating unrelated CONFIG failures as authorization failures. */
+export class BrokerMutationDeniedError extends BrokerError {
+  constructor(message: string) {
+    super('CONFIG', message)
+    this.name = 'BrokerMutationDeniedError'
+  }
+}
+
 // ==================== Stage param types ====================
 
 /**
@@ -148,6 +173,10 @@ export class UnifiedTradingAccount {
   readonly keyless: boolean
   /** External account mutations refused (implied by keyless). */
   readonly readOnly: boolean
+  /** Product-level mode, kept distinct from UTAConfig.readOnly. */
+  readonly tradingMode: TradingMode
+  /** Mechanically audited broker-isolation class, independent from authz. */
+  readonly containmentClass: BrokerMutationContainmentClass
   /** Broker-backed market-data discovery participation. */
   readonly asVendor: boolean
 
@@ -209,7 +238,9 @@ export class UnifiedTradingAccount {
     this.id = broker.id
     this.label = broker.label
     this.keyless = options.keyless ?? false
-    this.readOnly = options.readOnly ?? options.keyless ?? false
+    this.readOnly = (options.readOnly ?? false) || this.keyless
+    this.tradingMode = options.tradingMode ?? 'pro'
+    this.containmentClass = options.containmentClass ?? 'unverified'
     this.asVendor = options.asVendor ?? true
     // Optimistically assume we'll reach this account's target until the first
     // probe says otherwise — preserves "usable immediately after construction"
@@ -274,7 +305,7 @@ export class UnifiedTradingAccount {
     }
 
     const dispatcher = async (op: Operation): Promise<unknown> => {
-      this._assertCanMutateAccount(op.action)
+      this.assertBrokerMutationAllowed(op.action)
       switch (op.action) {
         case 'placeOrder':
           return broker.placeOrder(op.contract, op.order, op.tpsl)
@@ -637,10 +668,29 @@ export class UnifiedTradingAccount {
     }
   }
 
-  /** Loud-refuse broker-side account mutations on read-only / keyless accounts. */
-  private _assertCanMutateAccount(action: string): void {
+  /**
+   * Authoritative broker-mutation gate.
+   *
+   * Product mode containment blocks every unverified external broker unless
+   * mode is pro. Authz paper/live classification is deliberately irrelevant.
+   * The persisted per-account `readOnly` flag remains a separate, stricter
+   * switch and also blocks verified simulators when explicitly enabled.
+   * Keep this public so HTTP routes can preflight before making local state
+   * changes; every broker-dispatch path still calls it again at the domain
+   * boundary.
+   */
+  assertBrokerMutationAllowed(action: string): void {
+    const modeContainsMutation = this.tradingMode === 'lite' ||
+      (this.tradingMode === 'readonly' && this.containmentClass !== 'verified-isolated')
+    if (modeContainsMutation) {
+      throw new BrokerMutationDeniedError(
+        `UTA trading mode is ${this.tradingMode} — ${action} cannot mutate broker account "${this.label}". ` +
+        (this.tradingMode === 'lite'
+          ? 'Lite keeps the carrier mutation-disabled even if UTA was started manually.'
+          : 'Authz paper/demo labels do not prove real-money isolation; only the explicit containment allowlist is exempt.'))
+    }
     if (this.readOnly) {
-      throw new BrokerError('CONFIG',
+      throw new BrokerMutationDeniedError(
         `Account "${this.label}" is read-only${this.keyless ? ' (keyless public-data account)' : ''} — ${action} would mutate the external account, which is not allowed.`)
     }
   }
@@ -890,7 +940,7 @@ export class UnifiedTradingAccount {
   }
 
   async push(approver?: ApproverIdentity): Promise<PushResult> {
-    this._assertCanMutateAccount('push')
+    this.assertBrokerMutationAllowed('push')
     try {
       this._assertRiskStateAllowsWrite('push')
     } catch (err) {
@@ -1200,7 +1250,11 @@ export class UnifiedTradingAccount {
     cancelOrders: boolean
     triggerIdentity?: ApproverIdentity
   }): Promise<EmergencyStopResult> {
-    this._assertCanMutateAccount('emergencyCancelAllOpenOrders')
+    // `cancelOrders:false` is a local risk-tightening action (HALT + audit),
+    // not a broker mutation. It must remain available during containment.
+    if (input.cancelOrders) {
+      this.assertBrokerMutationAllowed('emergencyCancelAllOpenOrders')
+    }
 
     const cancellations: Array<{ orderId: string; contract: Contract; order?: Order; result: PlaceOrderResult }> = []
     const cancelResults: EmergencyCancelOrderResult[] = []
@@ -1265,7 +1319,7 @@ export class UnifiedTradingAccount {
    * close-position pipeline.
    */
   async flattenAllOpenPositions(triggerIdentity?: ApproverIdentity): Promise<FlattenResult> {
-    this._assertCanMutateAccount('flattenAllOpenPositions')
+    this.assertBrokerMutationAllowed('flattenAllOpenPositions')
 
     const positions = await this._callBroker(() => this.broker.getPositions())
     for (const position of positions) this.stampAliceId(position.contract)

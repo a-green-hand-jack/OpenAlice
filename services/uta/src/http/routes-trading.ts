@@ -3,7 +3,10 @@ import type { Context } from 'hono'
 import { z } from 'zod'
 import type { UTAEngineContext } from '../types.js'
 import { BrokerError } from '../domain/trading/brokers/types.js'
-import type { UnifiedTradingAccount } from '../domain/trading/UnifiedTradingAccount.js'
+import {
+  BrokerMutationDeniedError,
+  type UnifiedTradingAccount,
+} from '../domain/trading/UnifiedTradingAccount.js'
 import { searchTradeableContracts } from '../domain/trading/contract-search.js'
 import { AUTHZ_LEVELS, type ApproverIdentity, type AssetClassHint } from '@traderalice/uta-protocol'
 import { executeOneShotOrder, type OrderEntryPhase } from '../domain/trading/order-entry.js'
@@ -92,7 +95,8 @@ async function runOneShot(
 ): Promise<Response> {
   const r = await executeOneShotOrder(uta, message, stage, approverFromRequest(c))
   if (r.ok) return c.json(r.result)
-  return c.json({ error: r.error, phase: r.phase }, PHASE_STATUS[r.phase])
+  const status = r.code === 'broker_mutation_denied' ? 403 : PHASE_STATUS[r.phase]
+  return c.json({ error: r.error, phase: r.phase }, status)
 }
 
 const ALLOWED_ASSET_CLASSES: ReadonlySet<AssetClassHint> = new Set([
@@ -288,6 +292,16 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
     }
     const reason = body.reason ?? 'Human emergency stop'
     const triggerIdentity = approverFromRequest(c)
+    // Preflight before persisting HALT. The domain method checks again before
+    // broker dispatch, but without this first check a contained live account
+    // would be left in local HALT even though its requested cancel was denied.
+    if (body.cancelOrders) {
+      try {
+        uta.assertBrokerMutationAllowed('emergencyCancelAllOpenOrders')
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 403)
+      }
+    }
     let riskState
     try {
       riskState = await uta.setRiskState('HALT', reason, triggerIdentity)
@@ -309,7 +323,7 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
       return c.json({
         riskState,
         error: err instanceof Error ? err.message : String(err),
-      }, 500)
+      }, err instanceof BrokerMutationDeniedError ? 403 : 500)
     }
   })
 
@@ -331,7 +345,10 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
         hash: result.hash,
       })
     } catch (err) {
-      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+      return c.json(
+        { error: err instanceof Error ? err.message : String(err) },
+        err instanceof BrokerMutationDeniedError ? 403 : 500,
+      )
     }
   })
 
@@ -574,7 +591,10 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
       const result = await uta.push(approverFromRequest(c))
       return c.json(result)
     } catch (err) {
-      return c.json({ error: String(err) }, 500)
+      return c.json(
+        { error: err instanceof Error ? err.message : String(err) },
+        err instanceof BrokerMutationDeniedError ? 403 : 500,
+      )
     }
   })
 
