@@ -1,0 +1,266 @@
+{
+  "schema": "steward-campaign-cell/1",
+  "createdAt": "2026-07-09T20:27:58.426Z",
+  "codename": "ASSET-K",
+  "regime": "bull",
+  "assetClassHint": "a single anonymized listed security or fund",
+  "weeks": 6,
+  "barsPerWeek": 5,
+  "windowLen": 30,
+  "buyHold": {
+    "netReturn": 0.4678999999999999,
+    "maxDD": 0.08287583665488453,
+    "dailyVol": 0.03916810067800048,
+    "bars": 30
+  },
+  "series": [
+    {
+      "day": 0,
+      "open": 102.08,
+      "high": 103.97,
+      "low": 99.46,
+      "close": 100,
+      "volume": 15900600
+    },
+    {
+      "day": 1,
+      "open": 101.36,
+      "high": 111.74,
+      "low": 101.36,
+      "close": 107.77,
+      "volume": 34856546
+    },
+    {
+      "day": 2,
+      "open": 105.6,
+      "high": 112.74,
+      "low": 104.61,
+      "close": 110.84,
+      "volume": 22827292
+    },
+    {
+      "day": 3,
+      "open": 109.94,
+      "high": 113.82,
+      "low": 109.67,
+      "close": 111.02,
+      "volume": 12218784
+    },
+    {
+      "day": 4,
+      "open": 110.21,
+      "high": 112.2,
+      "low": 105.6,
+      "close": 106.96,
+      "volume": 16431979
+    },
+    {
+      "day": 5,
+      "open": 103.43,
+      "high": 105.87,
+      "low": 103.43,
+      "close": 104.52,
+      "volume": 12071611
+    },
+    {
+      "day": 6,
+      "open": 114.27,
+      "high": 117.8,
+      "low": 110.84,
+      "close": 116.71,
+      "volume": 27515714
+    },
+    {
+      "day": 7,
+      "open": 121.59,
+      "high": 124.93,
+      "low": 116.17,
+      "close": 117.71,
+      "volume": 25119536
+    },
+    {
+      "day": 8,
+      "open": 118.34,
+      "high": 130.17,
+      "low": 116.62,
+      "close": 130.08,
+      "volume": 32752426
+    },
+    {
+      "day": 9,
+      "open": 129,
+      "high": 134.06,
+      "low": 126.47,
+      "close": 132.97,
+      "volume": 32068657
+    },
+    {
+      "day": 10,
+      "open": 134.87,
+      "high": 135.23,
+      "low": 127.01,
+      "close": 131.89,
+      "volume": 36239336
+    },
+    {
+      "day": 11,
+      "open": 135.5,
+      "high": 136.77,
+      "low": 129.36,
+      "close": 129.99,
+      "volume": 23231619
+    },
+    {
+      "day": 12,
+      "open": 127.46,
+      "high": 129.45,
+      "low": 124.03,
+      "close": 127.91,
+      "volume": 16250397
+    },
+    {
+      "day": 13,
+      "open": 126.56,
+      "high": 129.36,
+      "low": 124.03,
+      "close": 125.29,
+      "volume": 14772484
+    },
+    {
+      "day": 14,
+      "open": 125.47,
+      "high": 128.64,
+      "low": 125.29,
+      "close": 127.37,
+      "volume": 12135284
+    },
+    {
+      "day": 15,
+      "open": 129.36,
+      "high": 130.71,
+      "low": 126.02,
+      "close": 126.65,
+      "volume": 8914180
+    },
+    {
+      "day": 16,
+      "open": 125.11,
+      "high": 125.47,
+      "low": 121.23,
+      "close": 123.31,
+      "volume": 16254950
+    },
+    {
+      "day": 17,
+      "open": 116.98,
+      "high": 122.58,
+      "low": 116.98,
+      "close": 121.95,
+      "volume": 17386988
+    },
+    {
+      "day": 18,
+      "open": 124.84,
+      "high": 129.18,
+      "low": 123.67,
+      "close": 129.09,
+      "volume": 17201226
+    },
+    {
+      "day": 19,
+      "open": 128.09,
+      "high": 132.16,
+      "low": 126.47,
+      "close": 129.72,
+      "volume": 24204539
+    },
+    {
+      "day": 20,
+      "open": 134.6,
+      "high": 137.22,
+      "low": 132.16,
+      "close": 132.97,
+      "volume": 23642095
+    },
+    {
+      "day": 21,
+      "open": 133.69,
+      "high": 135.32,
+      "low": 131.71,
+      "close": 133.69,
+      "volume": 13021130
+    },
+    {
+      "day": 22,
+      "open": 140.02,
+      "high": 143.18,
+      "low": 136.59,
+      "close": 141.82,
+      "volume": 31052386
+    },
+    {
+      "day": 23,
+      "open": 139.02,
+      "high": 141.73,
+      "low": 138.75,
+      "close": 140.83,
+      "volume": 15082670
+    },
+    {
+      "day": 24,
+      "open": 139.93,
+      "high": 143.9,
+      "low": 135.05,
+      "close": 135.59,
+      "volume": 21336262
+    },
+    {
+      "day": 25,
+      "open": 137.4,
+      "high": 143.63,
+      "low": 137.4,
+      "close": 143.36,
+      "volume": 17695169
+    },
+    {
+      "day": 26,
+      "open": 143.99,
+      "high": 147.52,
+      "low": 142.01,
+      "close": 147.06,
+      "volume": 20969110
+    },
+    {
+      "day": 27,
+      "open": 143.81,
+      "high": 146.7,
+      "low": 142.46,
+      "close": 143.45,
+      "volume": 10645405
+    },
+    {
+      "day": 28,
+      "open": 142.73,
+      "high": 146.79,
+      "low": 142.55,
+      "close": 143.81,
+      "volume": 10543291
+    },
+    {
+      "day": 29,
+      "open": 145.53,
+      "high": 148.06,
+      "low": 143.81,
+      "close": 146.79,
+      "volume": 12580629
+    }
+  ],
+  "_provenance": {
+    "symbol": "0700.HK",
+    "asset": "equity",
+    "firstDate": "2022-11-03",
+    "lastDate": "2022-12-14",
+    "firstClose": 202.85275268554688,
+    "lastClose": 297.7739562988281
+  }
+}

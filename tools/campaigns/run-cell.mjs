@@ -9,7 +9,7 @@
  *      so paper auto-push (P3-4a) executes the agent's commits;
  *   2. injects the anonymized daily series into the MockBroker so getQuote and
  *      the intra-week TP/SL protective-leg fills use it;
- *   3. creates a BLIND (#66) steward workspace running claude+haiku-4.5, with
+ *   3. creates a BLIND (#66) steward workspace running the selected agent/model, with
  *      the mock account whitelisted as the only allowed bar source, and lifts
  *      the workspace authz to `paper`;
  *   4. runs WEEKS weekly decision cycles: step the sim clock day-by-day through
@@ -18,6 +18,12 @@
  *      supervisor until the wake reaches a terminal state, and snapshot equity;
  *   5. writes every artifact (ledger, wake records, supervisor state, per-week
  *      snapshots, computed metrics) to tools/campaigns/runs/<runId>/ (gitignored).
+ *
+ * Parallel-run note: deleting a mock UTA triggers a Guardian/UTA restart. If
+ * multiple cells are running at once, one cell's early cleanup can reset the
+ * other cells' in-memory MockBroker positions and injected bars. For parallel
+ * experiments, run each cell with --keep, wait for all result.json files, then
+ * delete the kept workspaces/accounts as a final batch.
  *
  * The agent's identity seal is enforced at the tool layer by blind mode; the
  * price series it reasons over is anonymized (day-0=100, fictional day index).
@@ -30,11 +36,12 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   WEEKS, BARS_PER_WEEK, WINDOW_LEN, START_CASH, HAIKU_PRICE,
-  sleep, maxDrawdown, regimeVerdict, login, makeClient, tokenFromLog,
+  sleep, maxDrawdown, regimeVerdict, maxWeeklyLongReturnUnderExposure, login, makeClient, tokenFromLog,
 } from './_lib.mjs';
 
 // Fictional sim-clock epoch: day 0 → 2020-01-01, +1 day per bar. Keeps the
@@ -54,7 +61,7 @@ function parseArgs(argv) {
     weeks: WEEKS,
     deadlineMs: 600_000,
     pollMs: 8_000,
-    wakeTimeoutMs: 540_000,
+    wakeTimeoutMs: 720_000,
     keep: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -79,11 +86,22 @@ function parseArgs(argv) {
     else throw new Error(`unknown arg: ${a}`);
   }
   if (!out.cell) throw new Error('--cell required');
+  out.wakeTimeoutMs = Math.max(out.wakeTimeoutMs, out.deadlineMs + (out.pollMs * 2));
   return out;
 }
 
 const nowStamp = () => new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
 function log(msg) { process.stderr.write(`[${new Date().toISOString().slice(11, 19)}] ${msg}\n`); }
+function workspaceTag(runId) {
+  const hash = createHash('sha1').update(runId).digest('hex').slice(0, 6);
+  const stem = `campaign-${runId}`
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^[^a-z0-9]+/, 'c')
+    .slice(0, 26)
+    .replace(/[-_]+$/, '') || 'campaign';
+  return `${stem}-${hash}`;
+}
 
 async function resolveCookie(opts) {
   if (opts.cookie) return opts.cookie;
@@ -294,9 +312,9 @@ async function main() {
     });
     log(`injected ${series.length} daily bars for ${codename}`);
 
-    // ── blind steward workspace (claude + haiku) ─────────────────────────
+    // ── blind steward workspace ─────────────────────────────────────────
     const wsRes = await c.post('/api/workspaces', {
-      tag: `campaign-${runId}`.slice(0, 60),
+      tag: workspaceTag(runId),
       template: 'steward',
       agents: [opts.agent],
       blind: true,
@@ -336,13 +354,15 @@ async function main() {
 
       const marketContext = {
         instrument: codename,
-        assetClassHint: 'a single anonymized, high-volatility instrument',
+        tradeableAliceId: `${acctId}|${codename}`,
+        tradeableNativeKey: codename,
+        assetClassHint: cell.assetClassHint ?? 'a single anonymized, high-volatility instrument',
         interval: '1d',
         priceBasis: 'day 0 close rebased to 100; day index is fictional (no real dates)',
         currentDay: lastDay.day,
         currentClose: lastDay.close,
         weeklyCadence: `week ${week} of ${totalWeeks} (one decision per simulated week)`,
-        note: 'You manage a conservative paper portfolio. Below is the full daily OHLCV visible so far. No other identifying information exists — judge from price/volume alone.',
+        note: 'You manage a prudent, benchmark-aware paper portfolio. Below is the full daily OHLCV visible so far. No other identifying information exists — judge from price/volume alone. The only tradable contract for this wake is tradeableAliceId; do not use default/example contracts returned by blank search.',
         bars: visible,
       };
 
@@ -369,6 +389,9 @@ async function main() {
         await c.post(`/api/workspaces/${wsId}/steward/supervisor/tick`, {}).catch(() => undefined);
         const got = await c.get(`/api/workspaces/${wsId}/steward/wakes/${encodeURIComponent(wakeId)}`);
         wake = got.wake; ledgerEntry = got.ledgerEntry ?? ledgerEntry; status = wake.status;
+      }
+      if (!terminal.has(status)) {
+        throw new Error(`wake ${wakeId} did not reach a terminal state before ${opts.wakeTimeoutMs}ms (last status: ${status})`);
       }
 
       const equity = await netLiquidation(c, acctId);
@@ -404,6 +427,7 @@ async function main() {
     const grossPnL = (Number.isFinite(finalEquity) ? finalEquity : START_CASH) - START_CASH;
     const totalReturn = grossPnL / START_CASH;
     const agentMaxDD = maxDrawdown(equityCurve);
+    const maxGuardedLong = maxWeeklyLongReturnUnderExposure(series, opts.maxPosPct, START_CASH, BARS_PER_WEEK);
     const modelCostUsd = cost.found ? (cost.modelCostUsd ?? null) : null;
     const ledgerCostUsd = stewardState?.cost?.totalEstimatedCostUsd ?? 0;
     const netPnL = modelCostUsd === null ? null : grossPnL - modelCostUsd;
@@ -425,6 +449,10 @@ async function main() {
         buyHoldMaxDD: buyHold.maxDD,
         h1CaptureVsBuyHold: buyHold.netReturn > 0 ? totalReturn / buyHold.netReturn : null,
         h2DrawdownVsBuyHold: buyHold.maxDD > 0 ? agentMaxDD / buyHold.maxDD : null,
+        maxGuardedLongReturn: maxGuardedLong.return,
+        maxGuardedLongEntryWeek: maxGuardedLong.week,
+        maxGuardedLongShares: maxGuardedLong.shares,
+        bullTargetFeasibleUnderGuard: regime === 'bull' ? (maxGuardedLong.return ?? Number.NEGATIVE_INFINITY) >= 0.25 : null,
         equityCurve,
       },
       cost: {

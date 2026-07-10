@@ -1,0 +1,266 @@
+{
+  "schema": "steward-campaign-cell/1",
+  "createdAt": "2026-07-09T20:27:35.185Z",
+  "codename": "ASSET-H",
+  "regime": "bull",
+  "assetClassHint": "a single anonymized listed security or fund",
+  "weeks": 6,
+  "barsPerWeek": 5,
+  "windowLen": 30,
+  "buyHold": {
+    "netReturn": 1.3403,
+    "maxDD": 0.07073610641415841,
+    "dailyVol": 0.05021500401670449,
+    "bars": 30
+  },
+  "series": [
+    {
+      "day": 0,
+      "open": 104.54,
+      "high": 106.32,
+      "low": 98.38,
+      "close": 100,
+      "volume": 20941288
+    },
+    {
+      "day": 1,
+      "open": 101.03,
+      "high": 104.06,
+      "low": 100.19,
+      "close": 103.77,
+      "volume": 21586769
+    },
+    {
+      "day": 2,
+      "open": 105.89,
+      "high": 109.07,
+      "low": 105,
+      "close": 107.23,
+      "volume": 20830341
+    },
+    {
+      "day": 3,
+      "open": 104.09,
+      "high": 111.09,
+      "low": 102.34,
+      "close": 110.95,
+      "volume": 19620231
+    },
+    {
+      "day": 4,
+      "open": 111.85,
+      "high": 115.44,
+      "low": 111.06,
+      "close": 112.31,
+      "volume": 15704143
+    },
+    {
+      "day": 5,
+      "open": 111.33,
+      "high": 113.29,
+      "low": 109.87,
+      "close": 113,
+      "volume": 13508978
+    },
+    {
+      "day": 6,
+      "open": 118.4,
+      "high": 119.36,
+      "low": 115.84,
+      "close": 118.25,
+      "volume": 18106714
+    },
+    {
+      "day": 7,
+      "open": 118.86,
+      "high": 120.94,
+      "low": 117.79,
+      "close": 120.71,
+      "volume": 13837075
+    },
+    {
+      "day": 8,
+      "open": 121.91,
+      "high": 127.31,
+      "low": 121.89,
+      "close": 124.99,
+      "volume": 18607020
+    },
+    {
+      "day": 9,
+      "open": 124.99,
+      "high": 126.16,
+      "low": 123.46,
+      "close": 125.91,
+      "volume": 11620996
+    },
+    {
+      "day": 10,
+      "open": 127.42,
+      "high": 130.31,
+      "low": 125.33,
+      "close": 130.11,
+      "volume": 13126505
+    },
+    {
+      "day": 11,
+      "open": 130.06,
+      "high": 131.7,
+      "low": 128.47,
+      "close": 131.67,
+      "volume": 12597021
+    },
+    {
+      "day": 12,
+      "open": 135.17,
+      "high": 142.49,
+      "low": 133.4,
+      "close": 141.94,
+      "volume": 33080393
+    },
+    {
+      "day": 13,
+      "open": 143.34,
+      "high": 143.36,
+      "low": 139.84,
+      "close": 142.01,
+      "volume": 18118701
+    },
+    {
+      "day": 14,
+      "open": 143.13,
+      "high": 146.71,
+      "low": 138.75,
+      "close": 140.25,
+      "volume": 17768772
+    },
+    {
+      "day": 15,
+      "open": 141.47,
+      "high": 145.99,
+      "low": 141.1,
+      "close": 145.12,
+      "volume": 19868854
+    },
+    {
+      "day": 16,
+      "open": 148.55,
+      "high": 155.2,
+      "low": 145.96,
+      "close": 154.79,
+      "volume": 25022547
+    },
+    {
+      "day": 17,
+      "open": 154.06,
+      "high": 158.24,
+      "low": 152.91,
+      "close": 155.75,
+      "volume": 23270609
+    },
+    {
+      "day": 18,
+      "open": 171.78,
+      "high": 180.06,
+      "low": 170.65,
+      "close": 177.42,
+      "volume": 41632678
+    },
+    {
+      "day": 19,
+      "open": 176.66,
+      "high": 178.13,
+      "low": 167.73,
+      "close": 170.69,
+      "volume": 25803561
+    },
+    {
+      "day": 20,
+      "open": 159.08,
+      "high": 167.06,
+      "low": 158.13,
+      "close": 164.87,
+      "volume": 21935575
+    },
+    {
+      "day": 21,
+      "open": 166.59,
+      "high": 173.52,
+      "low": 162.65,
+      "close": 171.96,
+      "volume": 22803714
+    },
+    {
+      "day": 22,
+      "open": 174.13,
+      "high": 181.07,
+      "low": 169.66,
+      "close": 180.83,
+      "volume": 21483014
+    },
+    {
+      "day": 23,
+      "open": 179.49,
+      "high": 185.06,
+      "low": 178.15,
+      "close": 183.91,
+      "volume": 17485820
+    },
+    {
+      "day": 24,
+      "open": 183.79,
+      "high": 184.58,
+      "low": 172.77,
+      "close": 174.22,
+      "volume": 21424302
+    },
+    {
+      "day": 25,
+      "open": 179.31,
+      "high": 183.42,
+      "low": 175.92,
+      "close": 181.22,
+      "volume": 32766324
+    },
+    {
+      "day": 26,
+      "open": 208.88,
+      "high": 219.65,
+      "low": 205.08,
+      "close": 214.95,
+      "volume": 44752195
+    },
+    {
+      "day": 27,
+      "open": 212.75,
+      "high": 215.11,
+      "low": 204.59,
+      "close": 208.36,
+      "volume": 22896093
+    },
+    {
+      "day": 28,
+      "open": 213.52,
+      "high": 232.75,
+      "low": 213.37,
+      "close": 232.19,
+      "volume": 29654612
+    },
+    {
+      "day": 29,
+      "open": 234.93,
+      "high": 239.35,
+      "low": 229.99,
+      "close": 234.03,
+      "volume": 23508162
+    }
+  ],
+  "_provenance": {
+    "symbol": "AMD",
+    "asset": "equity",
+    "firstDate": "2026-03-30",
+    "lastDate": "2026-05-11",
+    "firstClose": 196.0399932861328,
+    "lastClose": 458.7900085449219
+  }
+}

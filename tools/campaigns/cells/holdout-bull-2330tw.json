@@ -1,0 +1,266 @@
+{
+  "schema": "steward-campaign-cell/1",
+  "createdAt": "2026-07-09T20:28:11.787Z",
+  "codename": "ASSET-N",
+  "regime": "bull",
+  "assetClassHint": "a single anonymized listed security or fund",
+  "weeks": 6,
+  "barsPerWeek": 5,
+  "windowLen": 30,
+  "buyHold": {
+    "netReturn": 0.31810000000000005,
+    "maxDD": 0.03516352529240855,
+    "dailyVol": 0.025837814318043096,
+    "bars": 30
+  },
+  "series": [
+    {
+      "day": 0,
+      "open": 102.43,
+      "high": 103.1,
+      "low": 100,
+      "close": 100,
+      "volume": 21991941
+    },
+    {
+      "day": 1,
+      "open": 99.87,
+      "high": 102.16,
+      "low": 99.73,
+      "close": 101.35,
+      "volume": 16936568
+    },
+    {
+      "day": 2,
+      "open": 103.64,
+      "high": 104.85,
+      "low": 103.1,
+      "close": 103.91,
+      "volume": 13147519
+    },
+    {
+      "day": 3,
+      "open": 102.29,
+      "high": 102.96,
+      "low": 101.08,
+      "close": 102.29,
+      "volume": 11564680
+    },
+    {
+      "day": 4,
+      "open": 104.04,
+      "high": 105.12,
+      "low": 102.7,
+      "close": 105.12,
+      "volume": 11053733
+    },
+    {
+      "day": 5,
+      "open": 104.72,
+      "high": 105.93,
+      "low": 104.04,
+      "close": 105.53,
+      "volume": 11922122
+    },
+    {
+      "day": 6,
+      "open": 105.39,
+      "high": 106.47,
+      "low": 104.72,
+      "close": 106.47,
+      "volume": 6485530
+    },
+    {
+      "day": 7,
+      "open": 103.77,
+      "high": 104.31,
+      "low": 103.37,
+      "close": 103.5,
+      "volume": 11434271
+    },
+    {
+      "day": 8,
+      "open": 102.7,
+      "high": 103.64,
+      "low": 102.02,
+      "close": 102.96,
+      "volume": 8172486
+    },
+    {
+      "day": 9,
+      "open": 105.12,
+      "high": 105.93,
+      "low": 104.31,
+      "close": 105.12,
+      "volume": 10184220
+    },
+    {
+      "day": 10,
+      "open": 106.47,
+      "high": 107.68,
+      "low": 106.2,
+      "close": 107.55,
+      "volume": 9162715
+    },
+    {
+      "day": 11,
+      "open": 108.76,
+      "high": 112.4,
+      "low": 108.76,
+      "close": 112.4,
+      "volume": 15040133
+    },
+    {
+      "day": 12,
+      "open": 110.24,
+      "high": 110.92,
+      "low": 109.43,
+      "close": 109.84,
+      "volume": 9222207
+    },
+    {
+      "day": 13,
+      "open": 119,
+      "high": 119.14,
+      "low": 117.25,
+      "close": 119,
+      "volume": 23027843
+    },
+    {
+      "day": 14,
+      "open": 121.29,
+      "high": 121.29,
+      "low": 119,
+      "close": 119.95,
+      "volume": 17823739
+    },
+    {
+      "day": 15,
+      "open": 125.34,
+      "high": 131.27,
+      "low": 124.53,
+      "close": 129.38,
+      "volume": 32629546
+    },
+    {
+      "day": 16,
+      "open": 132.48,
+      "high": 133.15,
+      "low": 129.78,
+      "close": 131.27,
+      "volume": 24671174
+    },
+    {
+      "day": 17,
+      "open": 130.05,
+      "high": 130.73,
+      "low": 128.03,
+      "close": 130.73,
+      "volume": 12992265
+    },
+    {
+      "day": 18,
+      "open": 132.48,
+      "high": 133.15,
+      "low": 131,
+      "close": 131.27,
+      "volume": 10320060
+    },
+    {
+      "day": 19,
+      "open": 131.4,
+      "high": 131.94,
+      "low": 129.51,
+      "close": 129.92,
+      "volume": 8550286
+    },
+    {
+      "day": 20,
+      "open": 128.3,
+      "high": 132.35,
+      "low": 128.3,
+      "close": 132.35,
+      "volume": 10746970
+    },
+    {
+      "day": 21,
+      "open": 133.29,
+      "high": 133.69,
+      "low": 131.67,
+      "close": 132.61,
+      "volume": 9633860
+    },
+    {
+      "day": 22,
+      "open": 133.15,
+      "high": 133.69,
+      "low": 132.61,
+      "close": 133.69,
+      "volume": 7884448
+    },
+    {
+      "day": 23,
+      "open": 133.15,
+      "high": 134.23,
+      "low": 133.15,
+      "close": 134.23,
+      "volume": 11497193
+    },
+    {
+      "day": 24,
+      "open": 131,
+      "high": 132.08,
+      "low": 129.51,
+      "close": 129.51,
+      "volume": 11202769
+    },
+    {
+      "day": 25,
+      "open": 127.63,
+      "high": 131.54,
+      "low": 127.49,
+      "close": 131.27,
+      "volume": 10988446
+    },
+    {
+      "day": 26,
+      "open": 130.19,
+      "high": 132.08,
+      "low": 130.05,
+      "close": 132.08,
+      "volume": 16436135
+    },
+    {
+      "day": 27,
+      "open": 136.39,
+      "high": 136.93,
+      "low": 134.37,
+      "close": 134.37,
+      "volume": 12014325
+    },
+    {
+      "day": 28,
+      "open": 132.08,
+      "high": 133.96,
+      "low": 132.08,
+      "close": 132.75,
+      "volume": 8150114
+    },
+    {
+      "day": 29,
+      "open": 132.48,
+      "high": 134.1,
+      "low": 131.81,
+      "close": 131.81,
+      "volume": 8161846
+    }
+  ],
+  "_provenance": {
+    "symbol": "2330.TW",
+    "asset": "equity",
+    "firstDate": "2022-10-25",
+    "lastDate": "2022-12-05",
+    "firstClose": 347.4758605957031,
+    "lastClose": 457.9938049316406
+  }
+}

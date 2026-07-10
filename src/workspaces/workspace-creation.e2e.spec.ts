@@ -207,6 +207,7 @@ describe('steward workspace create: scaffold → manifest → commit', () => {
       '.alice/steward/README.md',
       '.alice/steward/config.json',
       '.alice/steward/context-manifest.json',
+      '.alice/steward/validate-ledger.mjs',
       '.alice/steward/wakes/.gitkeep',
       '.alice/steward/ledger/decisions.jsonl',
       '.alice/steward/supervisor.jsonl',

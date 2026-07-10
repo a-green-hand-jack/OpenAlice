@@ -1,0 +1,266 @@
+{
+  "schema": "steward-campaign-cell/1",
+  "createdAt": "2026-07-09T20:27:58.583Z",
+  "codename": "ASSET-I",
+  "regime": "bear",
+  "assetClassHint": "a single anonymized listed security or fund",
+  "weeks": 6,
+  "barsPerWeek": 5,
+  "windowLen": 30,
+  "buyHold": {
+    "netReturn": -0.4893,
+    "maxDD": 0.4893,
+    "dailyVol": 0.06217701028960214,
+    "bars": 30
+  },
+  "series": [
+    {
+      "day": 0,
+      "open": 104.71,
+      "high": 105.39,
+      "low": 99.75,
+      "close": 100,
+      "volume": 267102003
+    },
+    {
+      "day": 1,
+      "open": 99.54,
+      "high": 99.6,
+      "low": 93.9,
+      "close": 96.18,
+      "volume": 379311668
+    },
+    {
+      "day": 2,
+      "open": 97.37,
+      "high": 99.69,
+      "low": 95.03,
+      "close": 96.8,
+      "volume": 316986345
+    },
+    {
+      "day": 3,
+      "open": 98.79,
+      "high": 99.34,
+      "low": 88.57,
+      "close": 88.77,
+      "volume": 518690286
+    },
+    {
+      "day": 4,
+      "open": 88.55,
+      "high": 93.15,
+      "low": 86.84,
+      "close": 92.84,
+      "volume": 467528981
+    },
+    {
+      "day": 5,
+      "open": 94.63,
+      "high": 95.48,
+      "low": 84.81,
+      "close": 86.84,
+      "volume": 461341356
+    },
+    {
+      "day": 6,
+      "open": 85.2,
+      "high": 90.17,
+      "low": 81.8,
+      "close": 85.89,
+      "volume": 656478848
+    },
+    {
+      "day": 7,
+      "open": 86.18,
+      "high": 90.07,
+      "low": 83.63,
+      "close": 89.23,
+      "volume": 504931199
+    },
+    {
+      "day": 8,
+      "open": 84.75,
+      "high": 87.36,
+      "low": 80.76,
+      "close": 81.83,
+      "volume": 616267311
+    },
+    {
+      "day": 9,
+      "open": 81.24,
+      "high": 84.28,
+      "low": 77.93,
+      "close": 83.53,
+      "volume": 678256961
+    },
+    {
+      "day": 10,
+      "open": 79.31,
+      "high": 79.54,
+      "low": 71.72,
+      "close": 74.11,
+      "volume": 783416988
+    },
+    {
+      "day": 11,
+      "open": 73.61,
+      "high": 76.64,
+      "low": 71.09,
+      "close": 73.25,
+      "volume": 699892576
+    },
+    {
+      "day": 12,
+      "open": 76.75,
+      "high": 77.65,
+      "low": 73.31,
+      "close": 75.75,
+      "volume": 712081676
+    },
+    {
+      "day": 13,
+      "open": 75.34,
+      "high": 75.4,
+      "low": 70.68,
+      "close": 71.61,
+      "volume": 608262334
+    },
+    {
+      "day": 14,
+      "open": 73.99,
+      "high": 77.11,
+      "low": 73.73,
+      "close": 76.69,
+      "volume": 497280461
+    },
+    {
+      "day": 15,
+      "open": 76.68,
+      "high": 79.65,
+      "low": 75.77,
+      "close": 78.18,
+      "volume": 452332872
+    },
+    {
+      "day": 16,
+      "open": 76.54,
+      "high": 76.56,
+      "low": 73.12,
+      "close": 74.24,
+      "volume": 440671115
+    },
+    {
+      "day": 17,
+      "open": 75.19,
+      "high": 79.19,
+      "low": 74.28,
+      "close": 77.13,
+      "volume": 464589709
+    },
+    {
+      "day": 18,
+      "open": 75.17,
+      "high": 78.85,
+      "low": 74.81,
+      "close": 76.33,
+      "volume": 443595837
+    },
+    {
+      "day": 19,
+      "open": 73.77,
+      "high": 77.35,
+      "low": 73.2,
+      "close": 77.05,
+      "volume": 403866485
+    },
+    {
+      "day": 20,
+      "open": 80.62,
+      "high": 82.44,
+      "low": 80.32,
+      "close": 81.95,
+      "volume": 318169480
+    },
+    {
+      "day": 21,
+      "open": 82.38,
+      "high": 83.48,
+      "low": 81.9,
+      "close": 83.41,
+      "volume": 278822967
+    },
+    {
+      "day": 22,
+      "open": 82.82,
+      "high": 83.26,
+      "low": 78,
+      "close": 78.77,
+      "volume": 393892627
+    },
+    {
+      "day": 23,
+      "open": 77.8,
+      "high": 79.83,
+      "low": 76.74,
+      "close": 77.43,
+      "volume": 363109041
+    },
+    {
+      "day": 24,
+      "open": 76.48,
+      "high": 76.82,
+      "low": 70.8,
+      "close": 71.26,
+      "volume": 519977786
+    },
+    {
+      "day": 25,
+      "open": 68.01,
+      "high": 71.62,
+      "low": 65.92,
+      "close": 71.21,
+      "volume": 536146294
+    },
+    {
+      "day": 26,
+      "open": 70.44,
+      "high": 73.31,
+      "low": 69.13,
+      "close": 72.85,
+      "volume": 487193708
+    },
+    {
+      "day": 27,
+      "open": 69.83,
+      "high": 76.06,
+      "low": 69.71,
+      "close": 74.48,
+      "volume": 617595453
+    },
+    {
+      "day": 28,
+      "open": 65.16,
+      "high": 66.9,
+      "low": 62.28,
+      "close": 62.51,
+      "volume": 703035560
+    },
+    {
+      "day": 29,
+      "open": 57.16,
+      "high": 58.14,
+      "low": 50.99,
+      "close": 51.07,
+      "volume": 1294658240
+    }
+  ],
+  "_provenance": {
+    "symbol": "TQQQ",
+    "asset": "equity",
+    "firstDate": "2025-02-24",
+    "lastDate": "2025-04-04",
+    "firstClose": 39.86020278930664,
+    "lastClose": 20.355487823486328
+  }
+}

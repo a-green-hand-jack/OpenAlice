@@ -1,0 +1,266 @@
+{
+  "schema": "steward-campaign-cell/1",
+  "createdAt": "2026-07-09T20:27:34.870Z",
+  "codename": "ASSET-J",
+  "regime": "chop",
+  "assetClassHint": "a single anonymized listed security or fund",
+  "weeks": 6,
+  "barsPerWeek": 5,
+  "windowLen": 30,
+  "buyHold": {
+    "netReturn": 0.00030000000000001136,
+    "maxDD": 0.031413096996553404,
+    "dailyVol": 0.006203806869762283,
+    "bars": 30
+  },
+  "series": [
+    {
+      "day": 0,
+      "open": 100.34,
+      "high": 100.5,
+      "low": 99.85,
+      "close": 100,
+      "volume": 2402507
+    },
+    {
+      "day": 1,
+      "open": 100.28,
+      "high": 100.56,
+      "low": 99.5,
+      "close": 100.2,
+      "volume": 3643253
+    },
+    {
+      "day": 2,
+      "open": 101.69,
+      "high": 101.91,
+      "low": 100.89,
+      "close": 101.18,
+      "volume": 3644640
+    },
+    {
+      "day": 3,
+      "open": 100.88,
+      "high": 100.94,
+      "low": 100.02,
+      "close": 100.22,
+      "volume": 3492320
+    },
+    {
+      "day": 4,
+      "open": 99.9,
+      "high": 99.96,
+      "low": 98.91,
+      "close": 99.11,
+      "volume": 4609707
+    },
+    {
+      "day": 5,
+      "open": 99.39,
+      "high": 99.95,
+      "low": 99.36,
+      "close": 99.93,
+      "volume": 2498773
+    },
+    {
+      "day": 6,
+      "open": 100.41,
+      "high": 100.43,
+      "low": 99.97,
+      "close": 100.23,
+      "volume": 3050507
+    },
+    {
+      "day": 7,
+      "open": 99.86,
+      "high": 100.14,
+      "low": 99.65,
+      "close": 99.85,
+      "volume": 2345333
+    },
+    {
+      "day": 8,
+      "open": 99.97,
+      "high": 100.35,
+      "low": 99.88,
+      "close": 100.24,
+      "volume": 2688427
+    },
+    {
+      "day": 9,
+      "open": 100.44,
+      "high": 100.46,
+      "low": 99.37,
+      "close": 99.41,
+      "volume": 3245547
+    },
+    {
+      "day": 10,
+      "open": 99.91,
+      "high": 100.07,
+      "low": 99.45,
+      "close": 99.81,
+      "volume": 2480533
+    },
+    {
+      "day": 11,
+      "open": 99.88,
+      "high": 99.94,
+      "low": 99.61,
+      "close": 99.74,
+      "volume": 2701227
+    },
+    {
+      "day": 12,
+      "open": 100.43,
+      "high": 100.55,
+      "low": 99.83,
+      "close": 100.44,
+      "volume": 3002507
+    },
+    {
+      "day": 13,
+      "open": 101.17,
+      "high": 101.24,
+      "low": 100.26,
+      "close": 100.58,
+      "volume": 2654133
+    },
+    {
+      "day": 14,
+      "open": 101,
+      "high": 101.58,
+      "low": 100.34,
+      "close": 100.51,
+      "volume": 4205920
+    },
+    {
+      "day": 15,
+      "open": 101.18,
+      "high": 102.06,
+      "low": 100.79,
+      "close": 101.55,
+      "volume": 5481653
+    },
+    {
+      "day": 16,
+      "open": 100.3,
+      "high": 100.73,
+      "low": 100.19,
+      "close": 100.59,
+      "volume": 3913387
+    },
+    {
+      "day": 17,
+      "open": 99.67,
+      "high": 100.17,
+      "low": 99.57,
+      "close": 100.04,
+      "volume": 2899253
+    },
+    {
+      "day": 18,
+      "open": 100.23,
+      "high": 100.72,
+      "low": 100.13,
+      "close": 100.56,
+      "volume": 2595253
+    },
+    {
+      "day": 19,
+      "open": 100.51,
+      "high": 101.01,
+      "low": 100.42,
+      "close": 100.53,
+      "volume": 3347680
+    },
+    {
+      "day": 20,
+      "open": 100.22,
+      "high": 100.55,
+      "low": 100.17,
+      "close": 100.44,
+      "volume": 2065760
+    },
+    {
+      "day": 21,
+      "open": 100.03,
+      "high": 100.14,
+      "low": 99.81,
+      "close": 100.05,
+      "volume": 2353387
+    },
+    {
+      "day": 22,
+      "open": 99.52,
+      "high": 99.88,
+      "low": 99.39,
+      "close": 99.79,
+      "volume": 2510027
+    },
+    {
+      "day": 23,
+      "open": 98.85,
+      "high": 98.87,
+      "low": 98.31,
+      "close": 98.42,
+      "volume": 5080427
+    },
+    {
+      "day": 24,
+      "open": 98.28,
+      "high": 98.6,
+      "low": 98.02,
+      "close": 98.36,
+      "volume": 3750187
+    },
+    {
+      "day": 25,
+      "open": 98.99,
+      "high": 99.21,
+      "low": 98.72,
+      "close": 99.02,
+      "volume": 3322080
+    },
+    {
+      "day": 26,
+      "open": 98.71,
+      "high": 99.56,
+      "low": 98.58,
+      "close": 99.38,
+      "volume": 3476533
+    },
+    {
+      "day": 27,
+      "open": 100.25,
+      "high": 100.28,
+      "low": 99.95,
+      "close": 99.98,
+      "volume": 2949973
+    },
+    {
+      "day": 28,
+      "open": 100.2,
+      "high": 100.29,
+      "low": 99.79,
+      "close": 99.99,
+      "volume": 3087573
+    },
+    {
+      "day": 29,
+      "open": 100.03,
+      "high": 100.07,
+      "low": 99.76,
+      "close": 100.03,
+      "volume": 2427093
+    }
+  ],
+  "_provenance": {
+    "symbol": "GLD",
+    "asset": "equity",
+    "firstDate": "2024-01-10",
+    "lastDate": "2024-02-22",
+    "firstClose": 187.5,
+    "lastClose": 187.55999755859375
+  }
+}

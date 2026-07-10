@@ -1,0 +1,266 @@
+{
+  "schema": "steward-campaign-cell/1",
+  "createdAt": "2026-07-09T20:28:11.930Z",
+  "codename": "ASSET-P",
+  "regime": "chop",
+  "assetClassHint": "a single anonymized FX pair",
+  "weeks": 6,
+  "barsPerWeek": 5,
+  "windowLen": 30,
+  "buyHold": {
+    "netReturn": -0.00010000000000005117,
+    "maxDD": 0.03670520231213875,
+    "dailyVol": 0.0057657697699182425,
+    "bars": 30
+  },
+  "series": [
+    {
+      "day": 0,
+      "open": 100,
+      "high": 100.88,
+      "low": 99.64,
+      "close": 100,
+      "volume": 0
+    },
+    {
+      "day": 1,
+      "open": 100.73,
+      "high": 100.96,
+      "low": 100.66,
+      "close": 100.73,
+      "volume": 0
+    },
+    {
+      "day": 2,
+      "open": 100.86,
+      "high": 101.09,
+      "low": 100.72,
+      "close": 100.86,
+      "volume": 0
+    },
+    {
+      "day": 3,
+      "open": 100.9,
+      "high": 101.07,
+      "low": 100.02,
+      "close": 100.9,
+      "volume": 0
+    },
+    {
+      "day": 4,
+      "open": 100.71,
+      "high": 101.03,
+      "low": 100.57,
+      "close": 100.71,
+      "volume": 0
+    },
+    {
+      "day": 5,
+      "open": 100.92,
+      "high": 101.64,
+      "low": 100.77,
+      "close": 100.92,
+      "volume": 0
+    },
+    {
+      "day": 6,
+      "open": 101.19,
+      "high": 101.45,
+      "low": 100.95,
+      "close": 101.19,
+      "volume": 0
+    },
+    {
+      "day": 7,
+      "open": 101.29,
+      "high": 101.63,
+      "low": 101.17,
+      "close": 101.29,
+      "volume": 0
+    },
+    {
+      "day": 8,
+      "open": 101.4,
+      "high": 101.44,
+      "low": 101.23,
+      "close": 101.4,
+      "volume": 0
+    },
+    {
+      "day": 9,
+      "open": 101.45,
+      "high": 101.97,
+      "low": 101.45,
+      "close": 101.45,
+      "volume": 0
+    },
+    {
+      "day": 10,
+      "open": 102.08,
+      "high": 102.51,
+      "low": 101.92,
+      "close": 102.08,
+      "volume": 0
+    },
+    {
+      "day": 11,
+      "open": 102.67,
+      "high": 102.71,
+      "low": 102.13,
+      "close": 102.67,
+      "volume": 0
+    },
+    {
+      "day": 12,
+      "open": 102.56,
+      "high": 102.6,
+      "low": 102.28,
+      "close": 102.56,
+      "volume": 0
+    },
+    {
+      "day": 13,
+      "open": 102.56,
+      "high": 103.28,
+      "low": 102.55,
+      "close": 102.56,
+      "volume": 0
+    },
+    {
+      "day": 14,
+      "open": 103.16,
+      "high": 103.23,
+      "low": 102.97,
+      "close": 103.16,
+      "volume": 0
+    },
+    {
+      "day": 15,
+      "open": 103.2,
+      "high": 103.56,
+      "low": 102.94,
+      "close": 103.2,
+      "volume": 0
+    },
+    {
+      "day": 16,
+      "open": 103.35,
+      "high": 103.87,
+      "low": 103.29,
+      "close": 103.35,
+      "volume": 0
+    },
+    {
+      "day": 17,
+      "open": 103.73,
+      "high": 103.87,
+      "low": 103.59,
+      "close": 103.73,
+      "volume": 0
+    },
+    {
+      "day": 18,
+      "open": 103.73,
+      "high": 104.01,
+      "low": 103.32,
+      "close": 103.73,
+      "volume": 0
+    },
+    {
+      "day": 19,
+      "open": 103.8,
+      "high": 103.78,
+      "low": 103.38,
+      "close": 103.8,
+      "volume": 0
+    },
+    {
+      "day": 20,
+      "open": 103.64,
+      "high": 103.64,
+      "low": 103.05,
+      "close": 103.64,
+      "volume": 0
+    },
+    {
+      "day": 21,
+      "open": 103.17,
+      "high": 103.47,
+      "low": 102.94,
+      "close": 103.17,
+      "volume": 0
+    },
+    {
+      "day": 22,
+      "open": 103.31,
+      "high": 103.72,
+      "low": 103.24,
+      "close": 103.31,
+      "volume": 0
+    },
+    {
+      "day": 23,
+      "open": 103.62,
+      "high": 103.88,
+      "low": 103.6,
+      "close": 103.62,
+      "volume": 0
+    },
+    {
+      "day": 24,
+      "open": 103.8,
+      "high": 103.89,
+      "low": 101.15,
+      "close": 103.8,
+      "volume": 0
+    },
+    {
+      "day": 25,
+      "open": 101.61,
+      "high": 102.36,
+      "low": 101.08,
+      "close": 101.61,
+      "volume": 0
+    },
+    {
+      "day": 26,
+      "open": 101.68,
+      "high": 101.71,
+      "low": 101.32,
+      "close": 101.68,
+      "volume": 0
+    },
+    {
+      "day": 27,
+      "open": 101.57,
+      "high": 102.02,
+      "low": 101.55,
+      "close": 101.57,
+      "volume": 0
+    },
+    {
+      "day": 28,
+      "open": 101.7,
+      "high": 101.85,
+      "low": 100.27,
+      "close": 101.7,
+      "volume": 0
+    },
+    {
+      "day": 29,
+      "open": 99.99,
+      "high": 100.83,
+      "low": 99.87,
+      "close": 99.99,
+      "volume": 0
+    }
+  ],
+  "_provenance": {
+    "symbol": "USDJPY=X",
+    "asset": "currency",
+    "firstDate": "2024-06-07",
+    "lastDate": "2024-07-18",
+    "firstClose": 155.69700622558594,
+    "lastClose": 155.68600463867188
+  }
+}

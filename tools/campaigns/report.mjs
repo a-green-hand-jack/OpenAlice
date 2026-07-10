@@ -61,14 +61,22 @@ function render(results) {
   // ── results matrix ──────────────────────────────────────────────────────
   L.push('## Results matrix');
   L.push('');
-  L.push('| Run | Regime | Agent ret | Buy-hold | Agent maxDD | BH maxDD | H1 (ret/BH) | H2 (DD/BH-DD) | Model cost | Net PnL | Verdict |');
-  L.push('|---|---|---|---|---|---|---|---|---|---|---|');
+  L.push('| Run | Regime | Agent ret | Buy-hold | Max guarded long | Agent maxDD | BH maxDD | H1 (ret/BH) | H2 (DD/BH-DD) | Model cost | Net PnL | Verdict |');
+  L.push('|---|---|---|---|---|---|---|---|---|---|---|---|');
   for (const r of results) {
     const m = r.metrics;
-    L.push(`| ${r.runId} | ${r.cell.regime} | ${pct(m.totalReturn)} | ${pct(m.buyHoldReturn)} | ${pct(m.agentMaxDD)} | ${pct(m.buyHoldMaxDD)} | ${pct(m.h1CaptureVsBuyHold)} | ${pct(m.h2DrawdownVsBuyHold)} | ${usd(knownModelCost(r))} | ${money(knownNetPnl(r))} | ${r.verdict.pass ? 'PASS' : 'FAIL'} |`);
+    const maxGuarded = m.maxGuardedLongReturn == null
+      ? 'n/a'
+      : `${pct(m.maxGuardedLongReturn)}${m.maxGuardedLongEntryWeek ? ` (wk${m.maxGuardedLongEntryWeek})` : ''}`;
+    L.push(`| ${r.runId} | ${r.cell.regime} | ${pct(m.totalReturn)} | ${pct(m.buyHoldReturn)} | ${maxGuarded} | ${pct(m.agentMaxDD)} | ${pct(m.buyHoldMaxDD)} | ${pct(m.h1CaptureVsBuyHold)} | ${pct(m.h2DrawdownVsBuyHold)} | ${usd(knownModelCost(r))} | ${money(knownNetPnl(r))} | ${r.verdict.pass ? 'PASS' : 'FAIL'} |`);
   }
   L.push('');
   L.push('Verdict rules (§4.6, regime-aware): ' + [...new Set(results.map((r) => `${r.cell.regime} → ${r.verdict.rule}`))].join('; ') + '.');
+  const infeasible = results.filter((r) => r.cell.regime === 'bull' && r.metrics?.bullTargetFeasibleUnderGuard === false);
+  if (infeasible.length) {
+    L.push('');
+    L.push(`Feasibility note: ${infeasible.map((r) => r.runId).join(', ')} cannot reach the +25% bull target under the configured max-position guard even with an optimistic weekly max-long entry. Treat FAIL there as a cell/guard/threshold mismatch, not pure agent behavior.`);
+  }
   L.push('');
 
   // ── cost breakdown ────────────────────────────────────────────────────
@@ -93,6 +101,9 @@ function render(results) {
     L.push(`### ${r.runId} — ${r.cell.regime} (${r.cell.codename})`);
     L.push('');
     L.push(`- **Outcome**: gross PnL ${money(m.grossPnL)} (${pct(m.totalReturn)}), agent maxDD ${pct(m.agentMaxDD)}; buy-hold ${pct(m.buyHoldReturn)} / maxDD ${pct(m.buyHoldMaxDD)}. Verdict **${r.verdict.pass ? 'PASS' : 'FAIL'}** (${r.verdict.rule}).`);
+    if (m.maxGuardedLongReturn != null) {
+      L.push(`- **Feasibility**: max guarded weekly long ${pct(m.maxGuardedLongReturn)} from wk${m.maxGuardedLongEntryWeek ?? '?'} at ${m.maxGuardedLongShares ?? '?'} shares under max-position guard ${r.account?.guards?.maxPositionPct ?? '?'}%.`);
+    }
     L.push(`- **Cost**: ${usd(knownModelCost(r))} model spend over ${r.weeksRun} weekly wakes (${modelLabel(r)}) → net PnL ${money(knownNetPnl(r))}.`);
     L.push(`- **Equity curve** (start → weekly → final): ${m.equityCurve.map((e) => Math.round(e)).join(' → ')}`);
     L.push('- **Weekly decisions**:');
