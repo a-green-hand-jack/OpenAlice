@@ -50,6 +50,13 @@
       "sourceSymbol": "0700.HK"
     },
     {
+      "file": "dev-bull-3690hk.json",
+      "split": "dev",
+      "regime": "bull",
+      "marketBucket": "hk-equity",
+      "sourceSymbol": "3690.HK"
+    },
+    {
       "file": "dev-bear-tsla.json",
       "split": "dev",
       "regime": "bear",
@@ -114,4 +121,3 @@
     }
   ]
 }
-

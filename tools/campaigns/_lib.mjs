@@ -145,6 +145,38 @@ export function regimeVerdict(regime, agentReturn, agentMaxDD, bhMaxDD) {
   return { pass: false, rule: 'unknown regime' };
 }
 
+/**
+ * Optimistic upper bound for a long-only weekly steward under the configured
+ * max-position guard: enter at each weekly decision close with max allowed
+ * notional and hold to the final close, then keep the best result. This is not
+ * an agent strategy; it is an evaluation sanity check. If a bull cell's target
+ * return is above this bound, the cell/guard/threshold combination is
+ * impossible before model behavior enters the picture.
+ */
+export function maxWeeklyLongReturnUnderExposure(series, maxPositionPct = 60, startCash = START_CASH, barsPerWeek = BARS_PER_WEEK) {
+  const finalClose = Number(series[series.length - 1]?.close);
+  const maxNotional = startCash * (maxPositionPct / 100);
+  let best = {
+    return: Number.NEGATIVE_INFINITY,
+    week: null,
+    entryClose: null,
+    shares: 0,
+    finalClose,
+    maxPositionPct,
+  };
+  if (!Number.isFinite(finalClose) || finalClose <= 0) return { ...best, return: null };
+  for (let i = barsPerWeek - 1, week = 1; i < series.length; i += barsPerWeek, week++) {
+    const entryClose = Number(series[i]?.close);
+    if (!Number.isFinite(entryClose) || entryClose <= 0) continue;
+    const shares = Math.floor(maxNotional / entryClose);
+    const ret = (shares * (finalClose - entryClose)) / startCash;
+    if (ret > best.return) {
+      best = { return: ret, week, entryClose, shares, finalClose, maxPositionPct };
+    }
+  }
+  return best.return === Number.NEGATIVE_INFINITY ? { ...best, return: null } : best;
+}
+
 // ── data sources ─────────────────────────────────────────────────────────
 
 /**

@@ -26,7 +26,8 @@ visible-to-date bars, and a coarse `assetClassHint` into the blind steward wake.
 | legacy | bear | `bear-sol.json` | SOLUSDT, 2025-01-26..2025-02-24 | Second crypto bear defense benchmark |
 | legacy | chop | `chop-cx.json` | BTCUSDT, 2024-11-27..2024-12-26 | Original crypto chop over-trading benchmark |
 | dev | bull | `dev-bull-nvda.json` | NVDA, 2022-12-27..2023-02-08 | US single-name trend participation |
-| dev | bull | `dev-bull-0700hk.json` | 0700.HK, 2022-11-03..2022-12-14 | HK equity trend participation |
+| dev | bull | `dev-bull-0700hk.json` | 0700.HK, 2022-11-03..2022-12-14 | HK equity trend observation; +25% target is infeasible under 60% max-position guard |
+| dev | bull | `dev-bull-3690hk.json` | 3690.HK, 2024-08-22..2024-10-07 | Guard-feasible HK equity trend participation |
 | dev | bear | `dev-bear-tsla.json` | TSLA, 2022-11-18..2023-01-03 | US single-name crash defense |
 | dev | chop | `dev-chop-spy.json` | SPY, 2023-07-06..2023-08-16 | Broad US market low-volatility chop |
 | dev | chop | `dev-chop-eurusd.json` | EURUSD=X, 2024-05-31..2024-07-11 | FX range discipline; data/research first |
@@ -55,3 +56,6 @@ node tools/campaigns/run-cell.mjs \
 For tuning, run the `dev-*` cells first and keep the `holdout-*` set untouched
 until the proposed behavior change is frozen.
 
+Bull cells should also be checked against `maxGuardedLongReturn` in the report.
+If the +25% bull target is infeasible under the configured max-position guard,
+use that cell for behavior observation only, not as a hard PASS/FAIL gate.

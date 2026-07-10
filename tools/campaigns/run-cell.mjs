@@ -41,7 +41,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   WEEKS, BARS_PER_WEEK, WINDOW_LEN, START_CASH, HAIKU_PRICE,
-  sleep, maxDrawdown, regimeVerdict, login, makeClient, tokenFromLog,
+  sleep, maxDrawdown, regimeVerdict, maxWeeklyLongReturnUnderExposure, login, makeClient, tokenFromLog,
 } from './_lib.mjs';
 
 // Fictional sim-clock epoch: day 0 → 2020-01-01, +1 day per bar. Keeps the
@@ -427,6 +427,7 @@ async function main() {
     const grossPnL = (Number.isFinite(finalEquity) ? finalEquity : START_CASH) - START_CASH;
     const totalReturn = grossPnL / START_CASH;
     const agentMaxDD = maxDrawdown(equityCurve);
+    const maxGuardedLong = maxWeeklyLongReturnUnderExposure(series, opts.maxPosPct, START_CASH, BARS_PER_WEEK);
     const modelCostUsd = cost.found ? (cost.modelCostUsd ?? null) : null;
     const ledgerCostUsd = stewardState?.cost?.totalEstimatedCostUsd ?? 0;
     const netPnL = modelCostUsd === null ? null : grossPnL - modelCostUsd;
@@ -448,6 +449,10 @@ async function main() {
         buyHoldMaxDD: buyHold.maxDD,
         h1CaptureVsBuyHold: buyHold.netReturn > 0 ? totalReturn / buyHold.netReturn : null,
         h2DrawdownVsBuyHold: buyHold.maxDD > 0 ? agentMaxDD / buyHold.maxDD : null,
+        maxGuardedLongReturn: maxGuardedLong.return,
+        maxGuardedLongEntryWeek: maxGuardedLong.week,
+        maxGuardedLongShares: maxGuardedLong.shares,
+        bullTargetFeasibleUnderGuard: regime === 'bull' ? (maxGuardedLong.return ?? Number.NEGATIVE_INFINITY) >= 0.25 : null,
         equityCurve,
       },
       cost: {

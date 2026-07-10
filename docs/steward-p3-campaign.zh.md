@@ -1,5 +1,10 @@
 # Steward P3 后半排期 + Paper 多市场行为评估战役
 
+> 版本：v0.4（2026-07-10）——回填 persistent-wake campaign harness 的 guard 可达性
+> 诊断：启用 `max-position-size 60%` 后，bull `ret ≥ +25%` 判据对某些 30-bar cell
+> 数学上不可达。新增 `maxGuardedLongReturn` 作为报告/validator 指标：PASS/FAIL
+> 判据暂不改，但报告必须标出 cell/guard/threshold 是否可达，避免把不可达组合误判成
+> 纯 agent 行为失败。
 > 版本：v0.3（2026-07-07）——回填 stress harness 与原计划的实况偏差（新增 §4.6；§4.1/§4.4 就地校正：6 周非 12 周、串行非并行、确定性缩放非随机）。工作方式与旋钮的方法论分立到 [steward-agent-working-modes.zh.md](steward-agent-working-modes.zh.md)。
 > 版本：v0.2（2026-07-06）——**确认点 A 已过**：maintainer 批准排期顺序（P3-2 → P3-4a → 战役 → P3-3+P3-4b）、战役设计与 §4.3 匿名化对策。P3-2 开工。
 > 地位：**阶段执行文档**，从属于 [steward-plan.zh.md](steward-plan.zh.md)（v1.0 冻结）与 [steward-p3-design.zh.md](steward-p3-design.zh.md)（v0.3 已批准）。战役是 I8/I9（验证门 + paper 优先）范围内的**行为评估强化**，同时为 P4 模板设计和 P6 晋升标准收集实证——不构成计划变更。
@@ -99,6 +104,26 @@ maintainer 要求下一轮测试用 paper 模式跑多市场回测战役。**战
 | 判据 | H1≥50%基准 / H2 回撤≤基准60% | regime-aware：牛 H1≥25%&DD≤10%；熊 ret≥−8%&DD≤max(12%,½·BHdd)；震荡 \|ret\|≤6%&DD≤8% | 逐 regime 更可判定 |
 
 > 已知覆盖缺口（写入未来工作）：窗口短且猛，**未测**慢牛长磨、多月横盘、真·长期托管周期——后者才是 steward 终极目标，属 [working-modes §4](steward-agent-working-modes.zh.md) 的「时间粒度」轴。
+
+#### 4.6.1 Guard 可达性诊断（2026-07-10 回填）
+
+2026-07-10 的 persistent-wake dev cells 暴露一个重要评估问题：`max-position-size
+60%` 接入后，bull `ret ≥ +25%` 不一定对所有 bull cell 可达。若一个 cell 到 week2
+才出现足够干净的 trend，且从 week2 close 到最终 close 的涨幅有限，那么即使 agent
+在 week2 用满 60% 敞口并一直持有，也达不到 +25%；更极端地，某些 cell 就算 week1
+满 60% 买入并持有也低于 +25%。这种 FAIL 不能全算成 trading-agent 行为失败。
+
+因此 checked-in harness 新增一个评估 sanity check：
+
+- `maxGuardedLongReturn`：在当前 `max-position-size` 下，假设每个周决策点都允许用
+  最大多头敞口买入并持有到最终 close，取其中最优收益。
+- `bullTargetFeasibleUnderGuard`：bull cell 的 +25% 目标是否低于上述上界。
+- `validate-cells.mjs` 对 bull 目标不可达的 cell 打 warning，不直接 fail；`report.mjs`
+  在结果矩阵和 per-cell narration 中显示可达性。
+
+这不是给 agent 放水：它只是把「模型没做好」和「cell/guard/threshold 数学上不一致」
+分开。后续 dev/holdout 选格应优先使用 `bullTargetFeasibleUnderGuard=true` 的 bull
+cell；若保留不可达 cell，它只能用于观察参与度/风控形态，不能作为硬 PASS 线。
 
 ### 4.7 压测结果 + over-participation 发现（2026-07-07）
 

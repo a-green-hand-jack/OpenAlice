@@ -10,7 +10,7 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { WINDOW_LEN, windowStats, classifyRegime } from './_lib.mjs';
+import { WINDOW_LEN, windowStats, classifyRegime, maxWeeklyLongReturnUnderExposure } from './_lib.mjs';
 
 const ROOT = resolve('tools/campaigns/cells');
 const EPS = 1e-9;
@@ -56,6 +56,10 @@ function validateCell(file, manifestEntry) {
     fail(`${file}: missing assetClassHint`);
   }
   if (!cell._provenance?.symbol || !cell._provenance?.asset) fail(`${file}: missing _provenance symbol/asset`);
+  const maxGuardedLong = maxWeeklyLongReturnUnderExposure(cell.series, 60);
+  if (cell.regime === 'bull' && (maxGuardedLong.return ?? Number.NEGATIVE_INFINITY) < 0.25) {
+    console.warn(`${file}: WARN bull +25% target is infeasible under 60% max-position guard; max guarded weekly long is ${(maxGuardedLong.return * 100).toFixed(1)}% from wk${maxGuardedLong.week}`);
+  }
   return { file, regime: cell.regime, symbol: cell._provenance.symbol };
 }
 
