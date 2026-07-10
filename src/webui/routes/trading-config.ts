@@ -18,10 +18,21 @@ import { approverFromAliceRequest } from './approver-identity.js'
 import { resolveUTAUrl } from '../../services/uta-supervisor/url.js'
 import { describeTradingMode } from '../../services/trading-mode.js'
 
-/** Fire-and-forget UTA restart after a config mutation. Logs but doesn't
- *  block the HTTP response — UI returns immediately and Guardian flips
- *  the UTA process in the background. Subsequent `/api/trading/*` requests
- *  will hit the new UTA via the BFF proxy. */
+/** Fire-and-forget UTA restart after a config mutation. This is the SINGLE
+ *  owner of restart-on-config-change (issue #127): the route layer triggers
+ *  exactly one whole-UTA-process restart per logical mutation. The
+ *  `UTAManagerSDK` lifecycle methods (`reconnectUTA` / `removeUTA`) no longer
+ *  touch the Guardian flag — previously they did, so every create/update/delete
+ *  fired two restarts (this trigger + the SDK's) spaced beyond Guardian's
+ *  debounce window, producing two SIGTERM/respawn cycles per change.
+ *
+ *  Logs but doesn't block the HTTP response — the UI returns immediately and
+ *  Guardian flips the UTA process in the background. Expect a brief
+ *  (~1–2s) window where `/api/trading/*` requests hit a restarting UTA;
+ *  startup-path == restart-path (no in-process broker hot reload), so the
+ *  respawned UTA reads the freshly-written `accounts.json` and reconnects every
+ *  account. Bursts coalesce into at most one in-flight + one trailing restart
+ *  (see `triggerUTARestart`), never one-per-mutation. */
 function notifyUTAReload(): void {
   triggerUTARestart()
     .then((r) => {
@@ -175,7 +186,6 @@ export function createTradingConfigRoutes(
         await writeUTAsConfig(accounts)
         notifyUTAReload()
 
-        ctx.utaManager.reconnectUTA(id).catch(() => {})
         // Echo masked — plaintext credentials never leave the server, and the
         // client's local state stays shape-identical to what GET / returns.
         return c.json(maskSecrets({ ...validated }), 201)
@@ -233,20 +243,12 @@ export function createTradingConfigRoutes(
             approver: await approverFromAliceRequest(c),
           })
         }
+        // A single whole-process restart applies every enabled-state and
+        // credential-rotation change: the respawned UTA reads the fresh
+        // `accounts.json` and connects exactly the enabled accounts. No
+        // per-account SDK bounce is needed (and issuing one here re-introduced
+        // the #127 double restart).
         notifyUTAReload()
-
-        // Handle enabled state changes at runtime
-        const wasEnabled = existing.enabled !== false
-        const nowEnabled = validated.enabled !== false
-        if (wasEnabled && !nowEnabled) {
-          await ctx.utaManager.removeUTA(id)
-        } else if (!wasEnabled && nowEnabled) {
-          ctx.utaManager.reconnectUTA(id).catch(() => {})
-        } else if (wasEnabled && nowEnabled) {
-          // Same enabled state but credentials may have changed (rotation) —
-          // bounce the account so the new credentials take effect.
-          ctx.utaManager.reconnectUTA(id).catch(() => {})
-        }
 
         // Echo masked — same reasoning as POST.
         return c.json(maskSecrets({ ...validated }))
@@ -271,8 +273,6 @@ export function createTradingConfigRoutes(
         const filtered = accounts.filter((a) => a.id !== id)
         await writeUTAsConfig(filtered)
         notifyUTAReload()
-        // Close and deregister running account instance if any
-        await ctx.utaManager.removeUTA(id)
         // Ephemeral UTAs also have their persistent trading state wiped — the
         // whole point of `ephemeral: true` is that nothing about the test
         // account survives its destruction. Real broker UTAs keep their
