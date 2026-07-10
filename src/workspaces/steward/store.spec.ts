@@ -871,3 +871,102 @@ describe('StewardSupervisor', () => {
     expect(log).toContain('"type":"ledger_invalid_lines"');
   });
 });
+
+describe('StewardSupervisor timeout attribution (issue #132)', () => {
+  async function seedTimedOutWake(): Promise<void> {
+    const wakeStore = createStewardWakeStore(dir);
+    const lockStore = createStewardLockStore(dir);
+    await wakeStore.create({
+      wakeId: 'wake-timeout',
+      deadline: '2026-07-08T14:03:00.000Z',
+      envelope,
+      now: '2026-07-08T14:00:00.000Z',
+    });
+    await wakeStore.updateStatus('wake-timeout', 'injected', {
+      now: '2026-07-08T14:00:05.000Z',
+      injectedAt: '2026-07-08T14:00:05.000Z',
+      sessionId: 'sess-poisoned',
+    });
+    await lockStore.acquire({
+      accountId: envelope.accountId,
+      wakeId: 'wake-timeout',
+      now: '2026-07-08T14:00:00.000Z',
+      expiresAt: '2026-07-08T14:03:00.000Z',
+    });
+  }
+
+  it('classifies a deadline-past wake as context_overflow when telemetry shows the window exceeded', async () => {
+    await seedTimedOutWake();
+
+    const result = await createStewardSupervisor(dir).tick({
+      now: '2026-07-08T14:05:00.000Z', // past the 14:03 deadline
+      isSessionRunning: () => true,
+      readContextTelemetry: async () => ({
+        inputTokens: 125765,
+        modelContextWindow: 121600,
+        source: '/ws/rollout.jsonl',
+      }),
+    });
+
+    expect(result.transitions[0]).toMatchObject({ wakeId: 'wake-timeout', to: 'timeout' });
+    const wake = await createStewardWakeStore(dir).get('wake-timeout');
+    expect(wake?.status).toBe('timeout');
+    expect(wake?.attribution).toEqual({
+      kind: 'context_overflow',
+      inputTokens: 125765,
+      modelContextWindow: 121600,
+    });
+    const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
+    expect(log).toContain('"type":"wake_timeout"');
+    expect(log).toContain('"attribution":"context_overflow"');
+  });
+
+  it('records a plain timeout (no attribution) when telemetry is under the window', async () => {
+    await seedTimedOutWake();
+
+    await createStewardSupervisor(dir).tick({
+      now: '2026-07-08T14:05:00.000Z',
+      isSessionRunning: () => true,
+      readContextTelemetry: async () => ({
+        inputTokens: 40000,
+        modelContextWindow: 121600,
+        source: '/ws/rollout.jsonl',
+      }),
+    });
+
+    const wake = await createStewardWakeStore(dir).get('wake-timeout');
+    expect(wake?.status).toBe('timeout');
+    expect(wake?.attribution).toBeUndefined();
+    const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
+    expect(log).not.toContain('"attribution":"context_overflow"');
+  });
+
+  it('falls back to a plain timeout when the telemetry read throws', async () => {
+    await seedTimedOutWake();
+
+    await createStewardSupervisor(dir).tick({
+      now: '2026-07-08T14:05:00.000Z',
+      isSessionRunning: () => true,
+      readContextTelemetry: async () => {
+        throw new Error('rollout unreadable');
+      },
+    });
+
+    const wake = await createStewardWakeStore(dir).get('wake-timeout');
+    expect(wake?.status).toBe('timeout');
+    expect(wake?.attribution).toBeUndefined();
+  });
+
+  it('records a plain timeout when no telemetry reader is provided', async () => {
+    await seedTimedOutWake();
+
+    await createStewardSupervisor(dir).tick({
+      now: '2026-07-08T14:05:00.000Z',
+      isSessionRunning: () => true,
+    });
+
+    const wake = await createStewardWakeStore(dir).get('wake-timeout');
+    expect(wake?.status).toBe('timeout');
+    expect(wake?.attribution).toBeUndefined();
+  });
+});

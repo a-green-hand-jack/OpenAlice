@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
-import type { BootstrapContext, CliAdapter, OnDiskSession, SpawnContext, WorkspaceAiCred } from '../cli-adapter.js';
+import type { BootstrapContext, CliAdapter, ContextTelemetry, OnDiskSession, SpawnContext, WorkspaceAiCred } from '../cli-adapter.js';
 import { readWorkspaceFile, writeWorkspaceFile } from '../file-service.js';
 
 const CODEX_CONFIG_PATH = '.codex/config.toml';
@@ -304,7 +304,83 @@ export const codexAdapter: CliAdapter = {
     }
     return out;
   },
+
+  /**
+   * Latest context-window telemetry for `sessionId` (issue #132). Locates the
+   * session's rollout via `listOnDisk` (cwd-attributed), then reads the tail
+   * of its `token_count` events. Best-effort: any miss (no rollout on disk yet,
+   * no token event, unreadable file) returns null so a wake is never blocked.
+   */
+  async readContextTelemetry(cwd: string, sessionId: string): Promise<ContextTelemetry | null> {
+    return readCodexContextTelemetry(cwd, sessionId);
+  },
 };
+
+/**
+ * Find `sessionId`'s rollout among this cwd's on-disk codex sessions and read
+ * the newest `token_count` event's `input_tokens` / `model_context_window`.
+ * Shares `listOnDisk`'s cwd-attribution + recent-leaf scan (a persistent
+ * steward session actively receiving wakes keeps its rollout in a recent dated
+ * leaf), so it inherits the same discovery window. Returns null on any miss.
+ */
+export async function readCodexContextTelemetry(cwd: string, sessionId: string): Promise<ContextTelemetry | null> {
+  const sessions = await codexAdapter.listOnDisk!(cwd);
+  const match = sessions.find((s) => s.sessionId === sessionId);
+  if (!match) return null;
+  const tail = await readLastTokenCount(match.file);
+  if (!tail) return null;
+  return { inputTokens: tail.inputTokens, modelContextWindow: tail.modelContextWindow, source: match.file };
+}
+
+/**
+ * Stream a codex rollout JSONL and return the LAST `token_count` event's
+ * `payload.info.total_token_usage.input_tokens` +
+ * `payload.info.model_context_window`. Streams line-by-line (a rollout can hold
+ * a many-KB degenerate turn) and only JSON-parses lines that mention
+ * `token_count`. Returns null when the file has no usable token_count event.
+ */
+export async function readLastTokenCount(
+  fp: string,
+): Promise<{ inputTokens: number; modelContextWindow: number } | null> {
+  let input: ReturnType<typeof createReadStream>;
+  try {
+    input = createReadStream(fp, { encoding: 'utf8' });
+  } catch {
+    return null;
+  }
+  const rl = createInterface({ input, crlfDelay: Infinity });
+  let latest: { inputTokens: number; modelContextWindow: number } | null = null;
+  try {
+    for await (const line of rl) {
+      if (!line.includes('"token_count"')) continue;
+      try {
+        const evt = JSON.parse(line) as {
+          payload?: {
+            type?: string;
+            info?: {
+              total_token_usage?: { input_tokens?: unknown };
+              model_context_window?: unknown;
+            };
+          };
+        };
+        if (evt.payload?.type !== 'token_count') continue;
+        const inputTokens = evt.payload.info?.total_token_usage?.input_tokens;
+        const modelContextWindow = evt.payload.info?.model_context_window;
+        if (typeof inputTokens === 'number' && typeof modelContextWindow === 'number') {
+          latest = { inputTokens, modelContextWindow };
+        }
+      } catch {
+        // malformed line — skip, keep the last good token_count
+      }
+    }
+  } catch {
+    // read error mid-stream — return whatever we captured (possibly null)
+  } finally {
+    rl.close();
+    input.destroy();
+  }
+  return latest;
+}
 
 /**
  * Optional `codex -c mcp_servers.*` head. When MCP is disabled, return the

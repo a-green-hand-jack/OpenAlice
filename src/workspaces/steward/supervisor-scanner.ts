@@ -22,6 +22,7 @@
  * over the rest.
  */
 
+import type { ContextTelemetry } from '../cli-adapter.js';
 import type { IInboxStore } from '../../core/inbox-store.js';
 import type { Logger } from '../logger.js';
 import type { WorkspaceMeta, WorkspaceRegistry } from '../workspace-registry.js';
@@ -47,6 +48,10 @@ export interface StewardSupervisorTickDeps {
    *  skip). */
   readonly config: Record<string, unknown>;
   readonly isSessionRunning: (sessionId: string) => boolean;
+  /** Best-effort context telemetry reader for timeout attribution (issue
+   *  #132). Forwarded straight to `StewardSupervisor.tick`; optional so callers
+   *  without an adapter wired just skip attribution. */
+  readonly readContextTelemetry?: (sessionId: string) => Promise<ContextTelemetry | null>;
   /** Push surface for the "wake went stuck" proactive notification. Optional
    *  so callers without an Inbox wired (tests, satellite embedders) just skip
    *  the push. */
@@ -72,6 +77,7 @@ export async function runStewardSupervisorTick(
   const result = await supervisor.tick({
     ...(deps.now !== undefined ? { now: deps.now } : {}),
     isSessionRunning: deps.isSessionRunning,
+    ...(deps.readContextTelemetry ? { readContextTelemetry: deps.readContextTelemetry } : {}),
     config: {
       monthlyBudget: asRecord(deps.config['monthlyBudget']),
       costPolicy: asRecord(deps.config['costPolicy']),
@@ -120,6 +126,13 @@ export interface StewardSupervisorScannerDeps {
   readonly pool: SessionPoolLike;
   /** Optional Inbox push surface - forwarded to `runStewardSupervisorTick`. */
   readonly inboxStore?: IInboxStore;
+  /** Resolve the context-telemetry reader for a workspace (issue #132) - the
+   *  composition root binds this to the workspace's runtime adapter + dir.
+   *  Optional so embedders without adapter access skip timeout attribution. */
+  readonly readContextTelemetry?: (
+    ws: WorkspaceMeta,
+    sessionId: string,
+  ) => Promise<ContextTelemetry | null>;
   readonly logger: Logger;
   /** Injectable clock for tests - epoch ms, same convention as
    *  `ScheduleScanner`. */
@@ -195,10 +208,14 @@ export class StewardSupervisorScanner {
   private async tickWorkspace(ws: WorkspaceMeta): Promise<void> {
     try {
       const config = await readStewardConfig(ws);
+      const readContextTelemetry = this.deps.readContextTelemetry;
       await runStewardSupervisorTick(ws, {
         config,
         now: new Date(this.now()).toISOString(),
         isSessionRunning: (sessionId) => this.deps.pool.get(sessionId) !== undefined,
+        ...(readContextTelemetry
+          ? { readContextTelemetry: (sessionId: string) => readContextTelemetry(ws, sessionId) }
+          : {}),
         ...(this.deps.inboxStore ? { inboxStore: this.deps.inboxStore } : {}),
         logger: this.deps.logger,
       });

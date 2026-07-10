@@ -20,6 +20,20 @@ export interface OnDiskSession {
   readonly sizeBytes: number;
 }
 
+/**
+ * Latest context-window accounting for a running/on-disk session, read from
+ * the CLI's own transcript. Used by steward session rotation and supervisor
+ * timeout attribution (issue #132) to detect a poisoned/overflowed context.
+ * `inputTokens` is the current prompt size the next turn would carry;
+ * `modelContextWindow` is the model's hard limit. `source` names where the
+ * numbers came from (e.g. the rollout file path) for logging.
+ */
+export interface ContextTelemetry {
+  readonly inputTokens: number;
+  readonly modelContextWindow: number;
+  readonly source: string;
+}
+
 export interface SpawnContext {
   readonly resume?: 'last' | { readonly sessionId: string };
   /** Workspace cwd; lets adapters read e.g. `<cwd>/.mcp.json`. */
@@ -240,6 +254,17 @@ export interface CliAdapter {
 
   /** Subprocess discovery (capabilities.transcriptDiscovery === 'subprocess'). */
   listOnDisk?(cwd: string): Promise<readonly OnDiskSession[]>;
+
+  /**
+   * Read the latest context-window telemetry for `sessionId` from the CLI's
+   * on-disk transcript (issue #132). Returns null when it can't be determined
+   * (no transcript yet, no token-accounting event, parse error) — callers MUST
+   * treat null as "unknown" and never block a wake on it. Only the codex
+   * adapter implements this today (its rollout JSONL carries `token_count`
+   * events); the method is optional so other adapters can add it later without
+   * touching the rotation/attribution seams.
+   */
+  readContextTelemetry?(cwd: string, sessionId: string): Promise<ContextTelemetry | null>;
 }
 
 export function isAgentRuntime(adapter: CliAdapter): boolean {

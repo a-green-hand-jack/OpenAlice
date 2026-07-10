@@ -48,9 +48,11 @@ import {
   createStewardLedgerStore,
   createStewardLockStore,
   createStewardWakeStore,
+  evaluateStewardRotation,
   formatStewardWakeMessage,
   injectStewardWake,
   readStewardConfig,
+  recordStewardRotation,
   runStewardSupervisorTick,
   StewardLockConflictError,
   stewardExpectedDecisionSchema,
@@ -186,6 +188,9 @@ type StewardSessionSelection =
     readonly reused: boolean;
     readonly resumed: boolean;
     readonly injectedByInitialPrompt: boolean;
+    /** Issue #132: the previously-configured session was context-poisoned and
+     *  disposed; this is a freshly spawned replacement. */
+    readonly rotated?: boolean;
   }
   | { readonly ok: false; readonly status: number; readonly body: { error: string; message?: string } };
 
@@ -362,13 +367,64 @@ export function createWorkspaceRoutes(
       (requestedAgent === undefined || requestedAgent === configuredRecord?.agent || requestedAgent === configuredAgent);
 
     if (configuredSessionId && canUseConfigured && svc.pool.get(configuredSessionId)) {
+      // Issue #132: before reusing the running session, check whether its
+      // context is over threshold / already overflowed. If so, dispose it and
+      // spawn fresh (continuity comes from workspace files the Wake Loop
+      // re-reads, not from conversational carry-over).
+      const adapter = svc.adapters.get(agent);
+      const decision = adapter
+        ? await evaluateStewardRotation({
+          adapter,
+          cwd: meta.dir,
+          sessionId: configuredSessionId,
+          config,
+          onWarn: (message, detail) => launcherLogger.warn(message, { id: meta.id, ...detail }),
+        })
+        : null;
+      if (!decision || !decision.rotate) {
+        return {
+          ok: true,
+          sessionId: configuredSessionId,
+          agent,
+          reused: true,
+          resumed: false,
+          injectedByInitialPrompt: false,
+          rotated: false,
+        };
+      }
+      svc.pool.disposeToken(configuredSessionId, 'steward_session_rotated');
+      const spawned = await spawnInteractiveSession(meta, {
+        agentId: agent,
+        initialPrompt: initialWakePrompt,
+      });
+      if (!spawned.ok) return spawned;
+      await writeStewardSessionConfig(meta, config, spawned.session.sessionId, spawned.session.agent);
+      await recordStewardRotation(meta.dir, {
+        at: new Date().toISOString(),
+        wsId: meta.id,
+        disposedSessionId: configuredSessionId,
+        newSessionId: spawned.session.sessionId,
+        reason: decision.reason,
+        inputTokens: decision.telemetry?.inputTokens ?? null,
+        modelContextWindow: decision.telemetry?.modelContextWindow ?? null,
+        threshold: decision.threshold,
+      }).catch(() => undefined);
+      launcherLogger.info('workspace.steward_session_rotated', {
+        id: meta.id,
+        disposed: configuredSessionId,
+        spawned: spawned.session.sessionId,
+        reason: decision.reason,
+        inputTokens: decision.telemetry?.inputTokens ?? null,
+        modelContextWindow: decision.telemetry?.modelContextWindow ?? null,
+      });
       return {
         ok: true,
-        sessionId: configuredSessionId,
-        agent,
-        reused: true,
+        sessionId: spawned.session.sessionId,
+        agent: spawned.session.agent,
+        reused: false,
         resumed: false,
-        injectedByInitialPrompt: false,
+        injectedByInitialPrompt: initialWakePrompt !== undefined,
+        rotated: true,
       };
     }
     if (configuredRecord && canUseConfigured) {
@@ -921,6 +977,14 @@ export function createWorkspaceRoutes(
       config,
       ...(body.now !== undefined ? { now: body.now } : {}),
       isSessionRunning: (sessionId) => svc.pool.get(sessionId) !== undefined,
+      // Issue #132: context-overflow attribution via the workspace runtime
+      // adapter's rollout telemetry (null when unavailable).
+      readContextTelemetry: (sessionId) => {
+        const adapter = svc.resolveAdapter(meta);
+        return adapter.readContextTelemetry
+          ? adapter.readContextTelemetry(meta.dir, sessionId)
+          : Promise.resolve(null);
+      },
       ...(opts?.inboxStore ? { inboxStore: opts.inboxStore } : {}),
       logger: launcherLogger,
     });

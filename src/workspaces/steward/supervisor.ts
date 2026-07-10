@@ -6,9 +6,11 @@ import { createStewardLedgerStore } from './ledger-store.js';
 import { createStewardLockStore } from './lock-store.js';
 import { stewardStatePath, stewardSupervisorLogPath } from './paths.js';
 import { createStewardWakeStore } from './wake-store.js';
+import type { ContextTelemetry } from '../cli-adapter.js';
 import type {
   StewardCostSummary,
   StewardState,
+  StewardWakeAttribution,
   StewardWakeRecord,
   StewardWakeStatus,
 } from './types.js';
@@ -17,6 +19,14 @@ export interface StewardSupervisorTickOptions {
   readonly now?: string;
   readonly isSessionRunning?: (sessionId: string) => boolean;
   readonly config?: StewardCostPolicyInput;
+  /**
+   * Best-effort context-window telemetry reader for a wake's session (issue
+   * #132). When a wake hits its deadline, the supervisor consults this to tell
+   * a context-overflow timeout (session poisoned past the window) apart from a
+   * plain slow timeout. Optional and failure-isolated — absent, missing, or a
+   * throw ⇒ the timeout is classified plainly.
+   */
+  readonly readContextTelemetry?: (sessionId: string) => Promise<ContextTelemetry | null>;
 }
 
 export interface StewardSupervisorTransition {
@@ -83,10 +93,20 @@ export class StewardSupervisor {
       }
 
       if (Date.parse(wake.deadline) <= Date.parse(now)) {
+        // Issue #132: attribute the timeout. If the session's rollout shows
+        // input_tokens already at/past the model context window, this wake
+        // died because the session was context-poisoned, not merely slow —
+        // distinct in the terminal metadata and the supervisor event so
+        // campaign reports can count context overflows apart from timeouts.
+        const attribution = await this.classifyTimeout(wake.sessionId, opts.readContextTelemetry);
         const updated = await wakeStore.updateStatus(wake.wakeId, 'timeout', {
           now,
           completedAt: now,
-          error: `deadline expired at ${wake.deadline}`,
+          error: attribution
+            ? `deadline expired at ${wake.deadline}; context overflow ` +
+              `(input_tokens ${attribution.inputTokens} >= window ${attribution.modelContextWindow})`
+            : `deadline expired at ${wake.deadline}`,
+          ...(attribution ? { attribution } : {}),
         });
         await lockStore.release(updated.envelope.accountId, updated.wakeId);
         transitions.push({
@@ -102,6 +122,13 @@ export class StewardSupervisor {
           from: wake.status,
           to: updated.status,
           deadline: wake.deadline,
+          ...(attribution
+            ? {
+              attribution: 'context_overflow',
+              inputTokens: attribution.inputTokens,
+              modelContextWindow: attribution.modelContextWindow,
+            }
+            : {}),
         });
         continue;
       }
@@ -187,6 +214,37 @@ export class StewardSupervisor {
       cost: state.cost,
       warnings,
     };
+  }
+
+  /**
+   * Best-effort context-overflow check for a timed-out wake (issue #132).
+   * Returns a `context_overflow` attribution when the session's latest
+   * telemetry has `input_tokens >= model_context_window`, else null. Never
+   * throws — a missing reader, no session, or a telemetry error all classify
+   * the timeout plainly.
+   */
+  private async classifyTimeout(
+    sessionId: string | null,
+    readContextTelemetry: StewardSupervisorTickOptions['readContextTelemetry'],
+  ): Promise<StewardWakeAttribution | null> {
+    if (!sessionId || !readContextTelemetry) return null;
+    try {
+      const telemetry = await readContextTelemetry(sessionId);
+      if (
+        telemetry &&
+        telemetry.modelContextWindow > 0 &&
+        telemetry.inputTokens >= telemetry.modelContextWindow
+      ) {
+        return {
+          kind: 'context_overflow',
+          inputTokens: telemetry.inputTokens,
+          modelContextWindow: telemetry.modelContextWindow,
+        };
+      }
+    } catch {
+      // telemetry is advisory only — fall back to a plain timeout
+    }
+    return null;
   }
 }
 
