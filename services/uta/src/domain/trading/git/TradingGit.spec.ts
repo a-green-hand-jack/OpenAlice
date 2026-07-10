@@ -2,8 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import Decimal from 'decimal.js'
 import { Contract, Order, OrderState } from '@traderalice/ibkr'
 import { TradingGit } from './TradingGit.js'
+import { MutationRecoveryRequiredError } from './mutation-coordinator.js'
+import { markNoBrokerDispatch } from '../guards/guard-pipeline.js'
 import type { TradingGitConfig } from './interfaces.js'
 import type { Operation, GitExportState, GitState } from './types.js'
+import { isMutationEnvelopeV1 } from './types.js'
 import '../contract-ext.js'
 
 // ==================== Helpers ====================
@@ -39,6 +42,9 @@ function makeConfig(overrides: Partial<TradingGitConfig> = {}): TradingGitConfig
     }),
     getGitState: overrides.getGitState ?? vi.fn().mockResolvedValue(makeGitState()),
     onCommit: overrides.onCommit,
+    accountId: overrides.accountId,
+    mutationTimeoutMs: overrides.mutationTimeoutMs,
+    allowEphemeralPersistence: overrides.allowEphemeralPersistence ?? true,
   }
 }
 
@@ -174,7 +180,8 @@ describe('TradingGit', () => {
       gitWithCb.commit('msg')
       await gitWithCb.push()
 
-      expect(onCommit).toHaveBeenCalledTimes(3)
+      // add, commit, prepared, dispatching, confirmed, final commit
+      expect(onCommit).toHaveBeenCalledTimes(6)
       expect(onCommit.mock.calls[0][0]).toMatchObject({
         commits: [],
         head: null,
@@ -187,7 +194,7 @@ describe('TradingGit', () => {
         head: null,
         pendingMessage: 'msg',
       })
-      const exported = onCommit.mock.calls[2][0]
+      const exported = onCommit.mock.calls[5][0]
       expect(exported.commits).toHaveLength(1)
       expect(exported.head).toHaveLength(8)
       expect(exported.stagingArea).toEqual([])
@@ -195,7 +202,7 @@ describe('TradingGit', () => {
       expect(exported.pendingHash).toBeNull()
     })
 
-    it('handles rejected operations gracefully', async () => {
+    it('quarantines generic failed broker responses as uncertain', async () => {
       const failConfig = makeConfig({
         executeOperation: vi.fn().mockResolvedValue({ success: false, error: 'Insufficient funds' }),
       })
@@ -203,13 +210,16 @@ describe('TradingGit', () => {
 
       gitFail.add(buyOp())
       gitFail.commit('msg')
-      const result = await gitFail.push()
-
-      expect(result.rejected).toHaveLength(1)
-      expect(result.submitted).toHaveLength(0)
+      await expect(gitFail.push()).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+      expect(gitFail.status().mutation).toMatchObject({
+        readiness: 'recovery_required',
+        activeAttempt: {
+          operations: [{ state: 'uncertain', result: { status: 'uncertain' } }],
+        },
+      })
     })
 
-    it('handles operation exceptions', async () => {
+    it('quarantines operation exceptions as uncertain', async () => {
       const failConfig = makeConfig({
         executeOperation: vi.fn().mockRejectedValue(new Error('Network error')),
       })
@@ -217,10 +227,11 @@ describe('TradingGit', () => {
 
       gitFail.add(buyOp())
       gitFail.commit('msg')
-      const result = await gitFail.push()
-
-      expect(result.rejected).toHaveLength(1)
-      expect(result.rejected[0].error).toBe('Network error')
+      await expect(gitFail.push()).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+      expect(gitFail.status().mutation?.activeAttempt?.operations[0]).toMatchObject({
+        state: 'uncertain',
+        error: 'Network error',
+      })
     })
 
     it('categorizes pending orders correctly', async () => {
@@ -321,7 +332,7 @@ describe('TradingGit', () => {
       expect(result.submitted[0].status).toBe('rejected')
     })
 
-    it('records failed cancelOrder in rejected array', async () => {
+    it('quarantines a generic failed cancel response instead of treating it as non-acceptance proof', async () => {
       const failConfig = makeConfig({
         executeOperation: vi.fn().mockResolvedValue({
           success: false,
@@ -332,11 +343,829 @@ describe('TradingGit', () => {
 
       gitFail.add({ action: 'cancelOrder', orderId: 'nonexistent' })
       gitFail.commit('cancel unknown')
-      const result = await gitFail.push()
+      await expect(gitFail.push()).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+      expect(gitFail.status().mutation?.activeAttempt?.operations[0]).toMatchObject({
+        state: 'uncertain',
+        error: 'Order not found',
+      })
+    })
+  })
 
-      expect(result.rejected).toHaveLength(1)
-      expect(result.rejected[0].error).toBe('Order not found')
-      expect(result.submitted).toHaveLength(0)
+  describe('durable mutation coordinator', () => {
+    const humanApprover = {
+      via: 'alice-bff' as const,
+      fingerprint: 'fp-human',
+      at: '2026-07-10T00:00:00.000Z',
+    }
+
+    it('requires an explicit durable persister outside the test-only ephemeral mode', () => {
+      expect(() => new TradingGit({
+        executeOperation: vi.fn(),
+        getGitState: vi.fn().mockResolvedValue(makeGitState()),
+      })).toThrow(/requires a synchronous durable persister/i)
+    })
+
+    it('durably records dispatching and clears legacy replay fields before calling the broker', async () => {
+      let latest: GitExportState | undefined
+      const executeOperation = vi.fn(async () => {
+        expect(latest?.stagingArea).toEqual([])
+        expect(latest?.pendingMessage).toBeNull()
+        expect(latest?.pendingHash).toBeNull()
+        expect(latest?.mutation?.schemaVersion).toBe(1)
+        expect((latest?.mutation as { activeAttempt?: { operations: Array<{ state: string }> } })
+          .activeAttempt?.operations[0].state).toBe('dispatching')
+        return { success: true, orderId: 'durable-1' }
+      })
+      const durable = new TradingGit(makeConfig({
+        executeOperation,
+        onCommit: (state) => { latest = JSON.parse(JSON.stringify(state)) },
+      }))
+
+      durable.add(buyOp())
+      durable.commit('durable order')
+      await durable.push(humanApprover)
+
+      expect(executeOperation).toHaveBeenCalledOnce()
+      expect(latest?.mutation).toEqual({ schemaVersion: 1 })
+    })
+
+    it('freezes a committed approval until it is pushed or rejected', () => {
+      const durable = new TradingGit(makeConfig())
+      durable.add(buyOp('AAPL'))
+      const pending = durable.commit('approval A')
+
+      expect(() => durable.add(buyOp('MSFT'))).toThrow(/pending approval already exists/i)
+      expect(() => durable.commit('replacement B')).toThrow(/pending approval already exists/i)
+      expect(durable.status()).toMatchObject({
+        pendingHash: pending.hash,
+        pendingMessage: 'approval A',
+        staged: [expect.objectContaining({ action: 'placeOrder' })],
+      })
+    })
+
+    it('binds async preflight and dispatch to one exact approval under the same lease', async () => {
+      let enterPreflight!: () => void
+      let releasePreflight!: () => void
+      const entered = new Promise<void>((resolve) => { enterPreflight = resolve })
+      const released = new Promise<void>((resolve) => { releasePreflight = resolve })
+      const executeOperation = vi.fn().mockResolvedValue({ success: true, orderId: 'bound-A' })
+      const durable = new TradingGit(makeConfig({ executeOperation }))
+      durable.add(buyOp('AAPL'))
+      const pending = durable.commit('approval A')
+
+      const push = durable.push(humanApprover, {
+        expectedHash: pending.hash,
+        preflight: async (context) => {
+          expect(context).toMatchObject({
+            hash: pending.hash,
+            message: 'approval A',
+            operations: [expect.objectContaining({ action: 'placeOrder' })],
+          })
+          enterPreflight()
+          await released
+        },
+      })
+      await entered
+
+      expect(durable.status().mutation).toMatchObject({ readiness: 'busy' })
+      expect(durable.status().mutation?.activeAttempt).toBeUndefined()
+      expect(() => durable.add(buyOp('MSFT'))).toThrow('Another account mutation')
+      expect(() => durable.commit('replacement B')).toThrow('Another account mutation')
+      expect(executeOperation).not.toHaveBeenCalled()
+
+      releasePreflight()
+      const result = await push
+      expect(result.hash).toBe(pending.hash)
+      expect(executeOperation).toHaveBeenCalledOnce()
+      expect(durable.show(result.hash)?.operations).toHaveLength(1)
+    })
+
+    it('refuses a stale expected hash before preflight or broker dispatch', async () => {
+      const preflight = vi.fn()
+      const executeOperation = vi.fn()
+      const durable = new TradingGit(makeConfig({ executeOperation }))
+      durable.add(buyOp())
+      const pending = durable.commit('approval A')
+
+      await expect(durable.push(humanApprover, {
+        expectedHash: 'deadbeef',
+        preflight,
+      })).rejects.toMatchObject({ code: 'PENDING_APPROVAL_CHANGED' })
+      expect(preflight).not.toHaveBeenCalled()
+      expect(executeOperation).not.toHaveBeenCalled()
+      expect(durable.status().pendingHash).toBe(pending.hash)
+    })
+
+    it('does not call the broker when persisting dispatching fails', async () => {
+      const executeOperation = vi.fn()
+      const onCommit = vi.fn((state: GitExportState) => {
+        const attempt = isMutationEnvelopeV1(state.mutation) ? state.mutation.activeAttempt : undefined
+        if (attempt?.operations[0]?.state === 'dispatching') {
+          throw new Error('disk full before dispatch')
+        }
+      })
+      const durable = new TradingGit(makeConfig({ executeOperation, onCommit }))
+      durable.add(buyOp())
+      durable.commit('must not dispatch')
+
+      await expect(durable.push(humanApprover)).rejects.toThrow('disk full before dispatch')
+      expect(executeOperation).not.toHaveBeenCalled()
+      expect(durable.status().mutation?.readiness).toBe('recovery_required')
+      const attemptId = durable.status().mutation?.activeAttempt?.attemptId
+      await expect(durable.resolveMutation({
+        attemptId: attemptId!,
+        action: 'discard-never-dispatched',
+        reason: 'should require restart after lost fsync acknowledgement',
+        confirmation: attemptId!,
+        approver: humanApprover,
+      })).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+    })
+
+    it('logs a structured secret-free CRITICAL recovery record on persistence failure', async () => {
+      const operation = buyOp()
+      if (operation.action === 'placeOrder') operation.order.orderRef = 'must-not-reach-log'
+      // The persister failure itself carries a secret in its MESSAGE — the
+      // exact leak class this log once had: arbitrary error text can embed
+      // API keys, paths, or upstream payloads. Only stable classification
+      // fields (error name/code) may reach the structured log.
+      class UpstreamWriteError extends Error {
+        code = 'EIO'
+      }
+      const onCommit = vi.fn((state: GitExportState) => {
+        const attempt = isMutationEnvelopeV1(state.mutation) ? state.mutation.activeAttempt : undefined
+        if (attempt?.operations[0]?.state === 'dispatching') {
+          throw new UpstreamWriteError('write failed for https://user:sk-SECRET-API-KEY@broker.example/api')
+        }
+      })
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const durable = new TradingGit(makeConfig({
+        accountId: 'paper-safe-id',
+        executeOperation: vi.fn(),
+        onCommit,
+      }))
+      durable.add(operation)
+      const pending = durable.commit('secret-free log')
+
+      await expect(durable.push(humanApprover)).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+
+      const critical = error.mock.calls.find(([label]) =>
+        label === '[TradingGit] CRITICAL mutation persistence failure')
+      expect(critical).toBeDefined()
+      expect(critical?.[1]).toMatchObject({
+        accountId: 'paper-safe-id',
+        pendingHash: pending.hash,
+        attemptId: expect.any(String),
+        recovery: 'restart-and-resolve-before-any-further-write',
+        errorName: 'Error',
+        errorCode: 'EIO',
+      })
+      const logged = JSON.stringify(critical)
+      expect(logged).not.toContain('sk-SECRET-API-KEY')
+      expect(logged).not.toContain('must-not-reach-log')
+      expect(logged).not.toContain('write failed for')
+      error.mockRestore()
+    })
+
+    it('quarantines broker success when the confirmed receipt cannot be durably acknowledged', async () => {
+      let persisted: GitExportState | undefined
+      const executeOperation = vi.fn().mockResolvedValue({ success: true, orderId: 'venue-once' })
+      const onCommit = vi.fn((state: GitExportState) => {
+        const attempt = isMutationEnvelopeV1(state.mutation) ? state.mutation.activeAttempt : undefined
+        if (attempt?.operations[0]?.state === 'confirmed') {
+          throw new Error('receipt fsync failed')
+        }
+        persisted = JSON.parse(JSON.stringify(state))
+      })
+      const durable = new TradingGit(makeConfig({ executeOperation, onCommit }))
+      durable.add(buyOp())
+      durable.commit('one venue call')
+
+      await expect(durable.push(humanApprover)).rejects.toThrow('receipt fsync failed')
+      expect(executeOperation).toHaveBeenCalledOnce()
+
+      const retryBroker = vi.fn()
+      const restored = TradingGit.restore(persisted!, makeConfig({ executeOperation: retryBroker }))
+      expect(restored.status().mutation?.activeAttempt?.operations[0].state).toBe('uncertain')
+      await expect(restored.push(humanApprover)).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+      expect(retryBroker).not.toHaveBeenCalled()
+    })
+
+    it('stops a multi-operation attempt at the first uncertain result', async () => {
+      const executeOperation = vi.fn()
+        .mockResolvedValueOnce({ success: true, orderId: 'confirmed-1' })
+        .mockResolvedValueOnce(markNoBrokerDispatch({ success: false, error: 'local policy' }))
+        .mockResolvedValueOnce({ success: false, error: 'transport gave no acceptance proof' })
+        .mockResolvedValueOnce({ success: true, orderId: 'must-not-run' })
+      const durable = new TradingGit(makeConfig({ executeOperation }))
+      for (const symbol of ['AAPL', 'MSFT', 'NVDA', 'GOOG']) durable.add(buyOp(symbol))
+      durable.commit('mixed outcomes')
+
+      await expect(durable.push(humanApprover)).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+      expect(executeOperation).toHaveBeenCalledTimes(3)
+      expect(durable.status().mutation?.activeAttempt?.operations.map((entry) => entry.state)).toEqual([
+        'confirmed',
+        'definitely_rejected',
+        'uncertain',
+        'prepared',
+      ])
+    })
+
+    it('times out a never-settling broker dispatch into durable uncertainty and releases the lease', async () => {
+      const executeOperation = vi.fn(() => new Promise<never>(() => {}))
+      const durable = new TradingGit(makeConfig({
+        executeOperation,
+        mutationTimeoutMs: 10,
+      }))
+      durable.add(buyOp())
+      durable.commit('never settles')
+
+      await expect(durable.push(humanApprover)).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+      expect(executeOperation).toHaveBeenCalledOnce()
+      expect(durable.status().mutation).toMatchObject({
+        readiness: 'recovery_required',
+        restartRequired: true,
+        activeAttempt: {
+          operations: [{ state: 'uncertain', error: expect.stringContaining('timed out') }],
+        },
+      })
+    })
+
+    it('latches a timed-out dispatch as restart-required: no coexistence of the old call and a replacement', async () => {
+      let settleDispatch!: (value: unknown) => void
+      const orphanedCall = new Promise<unknown>((resolve) => { settleDispatch = resolve })
+      let persisted: GitExportState | undefined
+      const executeOperation = vi.fn().mockImplementationOnce(() => orphanedCall)
+      const durable = new TradingGit(makeConfig({
+        executeOperation,
+        mutationTimeoutMs: 10,
+        onCommit: (state) => { persisted = JSON.parse(JSON.stringify(state)) },
+      }))
+      durable.add(buyOp('AAPL'))
+      durable.add(buyOp('MSFT')) // never reached — stays prepared
+      durable.commit('dispatch will time out')
+
+      await expect(durable.push(humanApprover)).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+      expect(executeOperation).toHaveBeenCalledTimes(1)
+      const status = durable.status().mutation
+      expect(status).toMatchObject({ readiness: 'recovery_required', restartRequired: true })
+      const attemptId = status?.activeAttempt?.attemptId
+
+      // While the venue request may still land, EVERY new mutation and EVERY
+      // human resolution in this process must refuse with a restart demand.
+      await expect(durable.push(humanApprover)).rejects.toThrow(/restarted/)
+      const resolveInput = {
+        attemptId: attemptId!,
+        action: 'acknowledge-uncertainty' as const,
+        reason: 'operator checked the venue',
+        confirmation: attemptId!,
+        approver: humanApprover,
+      }
+      await expect(durable.resolveMutation(resolveInput)).rejects.toThrow(/restarted/)
+
+      // The orphaned call settles late with a venue ACCEPTANCE. The outcome is
+      // recorded durably as evidence — but the restart latch must NOT lift:
+      // this process still cannot resolve or start replacement mutations.
+      settleDispatch({ success: true, orderId: 'venue-late-1' })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      const lateOps = isMutationEnvelopeV1(persisted?.mutation)
+        ? persisted?.mutation.activeAttempt?.operations
+        : undefined
+      expect(lateOps?.[0].state).toBe('confirmed')
+      expect(durable.status().mutation?.restartRequired).toBe(true)
+      await expect(durable.resolveMutation(resolveInput)).rejects.toThrow(/restarted/)
+      await expect(durable.push(humanApprover)).rejects.toThrow(/restarted/)
+
+      // A REAL restart (fresh process restoring the durable state) is the only
+      // exit. The late-recorded acceptance is present; finalization makes ZERO
+      // broker calls — the old call and a replacement can never coexist.
+      const retryBroker = vi.fn()
+      const restored = TradingGit.restore(persisted!, makeConfig({ executeOperation: retryBroker }))
+      const restoredOps = restored.status().mutation?.activeAttempt?.operations
+      expect(restoredOps?.map((entry) => entry.state)).toEqual(['confirmed', 'prepared'])
+      expect(restoredOps?.[0].evidence?.type).toBe('late-broker-outcome')
+      const resolved = await restored.resolveMutation({
+        ...resolveInput,
+        action: 'finalize-known-outcomes',
+        reason: 'venue reconciled after restart',
+      })
+      expect(resolved).toMatchObject({ resolved: true, readiness: 'ready' })
+      expect(retryBroker).not.toHaveBeenCalled()
+      const commit = restored.show(resolved.hash!)
+      expect(commit?.results[0]).toMatchObject({ success: true, orderId: 'venue-late-1' })
+      expect(commit?.results[1]).toMatchObject({ success: false, status: 'user-rejected' })
+    })
+
+    it('fails closed when the persister is asynchronous or returns a thenable', () => {
+      expect(() => new TradingGit(makeConfig({
+        onCommit: (async () => {}) as unknown as (state: GitExportState) => void,
+      }))).toThrow(/must be synchronous/i)
+
+      const executeOperation = vi.fn()
+      const thenable = new TradingGit(makeConfig({
+        executeOperation,
+        onCommit: (() => Promise.resolve()) as unknown as (state: GitExportState) => void,
+      }))
+      expect(() => thenable.add(buyOp())).toThrow(/thenable/)
+      // A started-but-unawaited write means memory can no longer be trusted:
+      // poisoned, restart required, and the broker was never reachable.
+      expect(thenable.status().mutation).toMatchObject({
+        readiness: 'recovery_required',
+        restartRequired: true,
+      })
+      expect(executeOperation).not.toHaveBeenCalled()
+    })
+
+    it('detaches durable audit from caller-owned objects (input aliasing)', async () => {
+      let persisted: GitExportState | undefined
+      const approver = { via: 'alice-bff' as const, fingerprint: 'original-reviewer', at: humanApprover.at }
+      const context = { reason: 'halt requested by human', cancelOrders: true }
+      const durable = new TradingGit(makeConfig({
+        executeOperation: vi.fn().mockResolvedValue({ success: true, orderId: 'ok-1' }),
+        onCommit: (state) => { persisted = JSON.parse(JSON.stringify(state)) },
+      }))
+      durable.add(buyOp())
+      durable.commit('aliasing probe')
+      await durable.push(approver)
+      await durable.executeSyntheticMutation({
+        kind: 'emergency_cancel',
+        message: 'halt audit',
+        approver,
+        context,
+        prepare: async () => [],
+        execute: vi.fn(),
+      })
+
+      // Caller mutates ITS objects after both mutations finalized…
+      approver.fingerprint = 'tampered-after-push'
+      context.reason = 'tampered-reason'
+      // …and a later ledger write re-persists the full history.
+      durable.add(sellOp())
+
+      expect(persisted?.commits[0].approver?.fingerprint).toBe('original-reviewer')
+      expect(persisted?.commits[0].mutationAudit?.initiator.fingerprint).toBe('original-reviewer')
+      expect(persisted?.commits[1].mutationAudit?.context?.reason).toBe('halt requested by human')
+    })
+
+    it('allowlists persisted orderState and legs — account identifiers never reach disk', async () => {
+      const durable = new TradingGit(makeConfig({
+        executeOperation: vi.fn().mockResolvedValue({
+          success: true,
+          orderId: 'venue-1',
+          orderState: {
+            status: 'Filled',
+            rejectReason: 'none',
+            orderAllocations: [{ account: 'U-SECRET-7788' }],
+            initMarginAfter: 'SECRET-MARGIN',
+          },
+          legs: [{ orderId: 'leg-1', kind: 'takeProfit', account: 'U-SECRET-LEG' }],
+        }),
+      }))
+      durable.add(buyOp())
+      durable.commit('hostile order state')
+      await durable.push(humanApprover)
+
+      const persisted = JSON.stringify(durable.exportState())
+      expect(persisted).not.toContain('U-SECRET-7788')
+      expect(persisted).not.toContain('U-SECRET-LEG')
+      expect(persisted).not.toContain('SECRET-MARGIN')
+      expect(persisted).not.toContain('orderAllocations')
+      const result = durable.show(durable.status().head!)!.results[0]
+      expect(result.orderState).toEqual({ status: 'Filled', rejectReason: 'none' })
+      expect(result.legs).toEqual([{ orderId: 'leg-1', kind: 'takeProfit' }])
+    })
+
+    it('refuses a reconcile whose drift decision predates the current head', async () => {
+      const durable = new TradingGit(makeConfig({
+        executeOperation: vi.fn().mockResolvedValue({ success: true, orderId: 'o-1' }),
+      }))
+      // Caller captures head (null), then the ledger advances before its
+      // broker-snapshot-based drift decision reaches the writer.
+      const staleHead = durable.status().head
+      durable.add(buyOp())
+      durable.commit('advance head')
+      await durable.push(humanApprover)
+      const before = durable.status().commitCount
+
+      const stale = await durable.recordReconcile({
+        aliceId: 'mock-paper|AAPL',
+        quantityDelta: new Decimal('5'),
+        markPrice: new Decimal('100'),
+        stateAfter: makeGitState(),
+        expectedHead: staleHead,
+      })
+      expect(stale).toBeNull()
+      expect(durable.status().commitCount).toBe(before)
+
+      const fresh = await durable.recordReconcile({
+        aliceId: 'mock-paper|AAPL',
+        quantityDelta: new Decimal('5'),
+        markPrice: new Decimal('100'),
+        stateAfter: makeGitState(),
+        expectedHead: durable.status().head,
+      })
+      expect(fresh).toHaveLength(8)
+      expect(durable.status().commitCount).toBe(before + 1)
+    })
+
+    it('captures the sync snapshot inside the ledger lease, never from the caller', async () => {
+      let snapshotCount = 0
+      const durable = new TradingGit(makeConfig({
+        executeOperation: vi.fn().mockResolvedValue({ success: true, orderId: 'order-1' }),
+        getGitState: vi.fn(async () => makeGitState({ netLiquidation: String(100000 + ++snapshotCount) })),
+      }))
+      durable.add(buyOp())
+      durable.commit('resting order')
+      await durable.push(humanApprover) // consumes snapshot #1 for its own finalization
+
+      await durable.sync([{
+        orderId: 'order-1',
+        symbol: 'AAPL',
+        previousStatus: 'submitted',
+        currentStatus: 'filled',
+        filledPrice: '155',
+        filledQty: '10',
+      }])
+
+      // The sync commit carries the state fetched DURING sync (#2) — a caller
+      // snapshot taken before the lease could be stale by a whole push.
+      const head = durable.show(durable.status().head!)
+      expect(head?.stateAfter.netLiquidation).toBe('100002')
+    })
+
+    it('allows retrying discard-never-dispatched after a failed finalization snapshot', async () => {
+      let persisted: GitExportState | undefined
+      const failing = new TradingGit(makeConfig({
+        executeOperation: vi.fn(),
+        onCommit: (state) => {
+          const attempt = isMutationEnvelopeV1(state.mutation) ? state.mutation.activeAttempt : undefined
+          if (attempt?.operations.some((entry) => entry.state === 'dispatching')) {
+            throw new Error('fsync fail before dispatch')
+          }
+          persisted = JSON.parse(JSON.stringify(state))
+        },
+      }))
+      failing.add(buyOp())
+      failing.commit('prepared only')
+      await expect(failing.push(humanApprover)).rejects.toThrow('fsync fail before dispatch')
+
+      // Fresh process restores the all-prepared attempt; the first discard
+      // durably applies its decision but the finalization snapshot fails.
+      const getGitState = vi.fn()
+        .mockRejectedValueOnce(new Error('snapshot offline'))
+        .mockResolvedValue(makeGitState())
+      const restored = TradingGit.restore(persisted!, makeConfig({ getGitState }))
+      const attemptId = restored.status().mutation?.activeAttempt?.attemptId
+      const discard = {
+        attemptId: attemptId!,
+        action: 'discard-never-dispatched' as const,
+        reason: 'durable state proves dispatch never began',
+        confirmation: attemptId!,
+        approver: humanApprover,
+      }
+      await expect(restored.resolveMutation(discard)).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+
+      // Retrying the SAME action completes: phase 1 already marked every
+      // operation definitely_rejected, which the retry accepts idempotently.
+      const resolved = await restored.resolveMutation(discard)
+      expect(resolved).toMatchObject({ resolved: true, readiness: 'ready' })
+      expect(restored.status().mutation?.activeAttempt).toBeUndefined()
+    })
+
+    it('bounds preflight before an attempt exists and leaves the approval pending', async () => {
+      const executeOperation = vi.fn()
+      const durable = new TradingGit(makeConfig({ executeOperation, mutationTimeoutMs: 10 }))
+      durable.add(buyOp())
+      const pending = durable.commit('bounded preflight')
+
+      await expect(durable.push(humanApprover, {
+        expectedHash: pending.hash,
+        preflight: () => new Promise<never>(() => {}),
+      })).rejects.toThrow('push preflight timed out')
+      expect(executeOperation).not.toHaveBeenCalled()
+      expect(durable.status()).toMatchObject({
+        pendingHash: pending.hash,
+        mutation: { readiness: 'ready' },
+      })
+      expect(durable.status().mutation?.activeAttempt).toBeUndefined()
+    })
+
+    it('bounds synthetic prepare without clearing an existing approval', async () => {
+      const durable = new TradingGit(makeConfig({ mutationTimeoutMs: 10 }))
+      durable.add(buyOp())
+      const pending = durable.commit('keep while prepare hangs')
+
+      await expect(durable.executeSyntheticMutation({
+        kind: 'emergency_cancel',
+        message: 'bounded prepare',
+        prepare: () => new Promise<never>(() => {}),
+        execute: vi.fn(),
+      })).rejects.toThrow('emergency_cancel prepare timed out')
+      expect(durable.status()).toMatchObject({
+        pendingHash: pending.hash,
+        mutation: { readiness: 'ready' },
+      })
+      expect(durable.status().mutation?.activeAttempt).toBeUndefined()
+    })
+
+    it('reports busy and fail-fast serializes every ledger writer while broker dispatch is in flight', async () => {
+      let enterDispatch!: () => void
+      let releaseDispatch!: (value: unknown) => void
+      const entered = new Promise<void>((resolve) => { enterDispatch = resolve })
+      const blockedResult = new Promise<unknown>((resolve) => { releaseDispatch = resolve })
+      const durable = new TradingGit(makeConfig({
+        executeOperation: vi.fn(async () => {
+          enterDispatch()
+          return blockedResult
+        }),
+      }))
+      durable.add(buyOp())
+      durable.commit('lease holder')
+      const push = durable.push(humanApprover)
+      await entered
+
+      expect(durable.status().mutation?.readiness).toBe('busy')
+      expect(() => durable.add(buyOp('MSFT'))).toThrow('Another account mutation')
+      await expect(durable.recordReconcile({
+        aliceId: 'mock-paper|CASH',
+        quantityDelta: new Decimal(1),
+        markPrice: new Decimal(1),
+        stateAfter: makeGitState(),
+        expectedHead: durable.status().head,
+      })).rejects.toThrow('Another account mutation')
+
+      releaseDispatch({ success: true, orderId: 'leased-1' })
+      await push
+      expect(durable.status().mutation?.readiness).toBe('ready')
+    })
+
+    it('keeps durable confirmed outcomes quarantined when the final state snapshot fails', async () => {
+      const durable = new TradingGit(makeConfig({
+        executeOperation: vi.fn().mockResolvedValue({ success: true, orderId: 'confirmed-1' }),
+        getGitState: vi.fn().mockRejectedValue(new Error('snapshot unavailable')),
+      }))
+      durable.add(buyOp())
+      durable.commit('snapshot may fail')
+
+      await expect(durable.push(humanApprover)).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+      expect(durable.status()).toMatchObject({
+        commitCount: 0,
+        pendingHash: null,
+        mutation: {
+          readiness: 'recovery_required',
+          activeAttempt: { operations: [{ state: 'confirmed' }] },
+        },
+      })
+    })
+
+    it('preserves allowlisted broker receipt metadata and fill evidence without account secrets', async () => {
+      const filled = new OrderState()
+      filled.status = 'Filled'
+      const durable = new TradingGit(makeConfig({
+        executeOperation: vi.fn().mockResolvedValue({
+          success: true,
+          orderId: 'venue-order-42',
+          orderState: filled,
+          execution: {
+            orderId: 42,
+            execId: 'exec-42',
+            time: '2026-07-10T12:34:56Z',
+            acctNumber: 'SECRET-ACCOUNT',
+            exchange: 'NASDAQ',
+            side: 'BOT',
+            shares: '0.125',
+            price: 123.456789,
+            permId: 9001,
+            clientId: 7,
+            cumQty: '0.125',
+            orderRef: 'alice-request-7',
+            modelCode: 'SECRET-MODEL',
+            submitter: 'SECRET-SUBMITTER',
+            lastLiquidity: 2,
+          },
+        }),
+        getGitState: vi.fn().mockRejectedValue(new Error('hold receipt in quarantine')),
+      }))
+      durable.add(buyOp())
+      durable.commit('receipt evidence')
+
+      await expect(durable.push(humanApprover)).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+
+      const operation = durable.status().mutation?.activeAttempt?.operations[0]
+      expect(operation?.result).toMatchObject({
+        status: 'filled',
+        filledQty: '0.125',
+        filledPrice: '123.456789',
+        receipt: {
+          executionId: 'exec-42',
+          executedAt: '2026-07-10T12:34:56Z',
+          brokerOrderId: '42',
+          permanentId: '9001',
+          clientId: '7',
+          orderRef: 'alice-request-7',
+          exchange: 'NASDAQ',
+          side: 'BOT',
+          cumulativeQty: '0.125',
+          lastLiquidity: '2',
+        },
+      })
+      const persisted = JSON.parse(JSON.stringify(durable.exportState())) as GitExportState
+      expect(JSON.stringify(persisted)).not.toContain('SECRET-ACCOUNT')
+      expect(JSON.stringify(persisted)).not.toContain('SECRET-MODEL')
+      expect(JSON.stringify(persisted)).not.toContain('SECRET-SUBMITTER')
+      const restored = TradingGit.restore(persisted, makeConfig())
+      expect(restored.status().mutation?.activeAttempt?.operations[0].result)
+        .toEqual(operation?.result)
+    })
+
+    it('linearizes reject before final commit so a failed finalization cannot resurrect approval', async () => {
+      let persisted: GitExportState | undefined
+      const onCommit = vi.fn((state: GitExportState) => {
+        const active = isMutationEnvelopeV1(state.mutation) ? state.mutation.activeAttempt : undefined
+        if (!active && state.commits.length === 1) throw new Error('reject finalization fsync failed')
+        persisted = JSON.parse(JSON.stringify(state))
+      })
+      const durable = new TradingGit(makeConfig({ onCommit }))
+      durable.add(buyOp())
+      durable.commit('reject me')
+
+      await expect(durable.reject('human said no', humanApprover)).rejects.toThrow('reject finalization fsync failed')
+      expect(persisted?.stagingArea).toEqual([])
+      expect(persisted?.pendingHash).toBeNull()
+      expect(isMutationEnvelopeV1(persisted?.mutation)
+        ? persisted.mutation.activeAttempt?.kind
+        : undefined).toBe('human_reject')
+
+      const restored = TradingGit.restore(persisted!, makeConfig())
+      expect(restored.status().mutation?.readiness).toBe('recovery_required')
+      await expect(restored.push(humanApprover)).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+    })
+
+    it('fails all writes closed for a future mutation schema while preserving reads', async () => {
+      const state: GitExportState = {
+        commits: [],
+        head: null,
+        stagingArea: [],
+        pendingMessage: null,
+        pendingHash: null,
+        mutation: { schemaVersion: 99, activeAttempt: { opaque: true } },
+      }
+      const future = TradingGit.restore(state, makeConfig())
+
+      expect(future.status().mutation).toMatchObject({
+        schemaVersion: 99,
+        readiness: 'unsupported_schema',
+        downgradeBlocked: true,
+      })
+      expect(future.log()).toEqual([])
+      expect(() => future.add(buyOp())).toThrow(/schema 99/i)
+      await expect(future.sync([
+        { orderId: 'o-1', symbol: 'AAPL', previousStatus: 'submitted', currentStatus: 'filled' },
+      ])).rejects.toThrow(/schema 99/i)
+    })
+
+    it('requires authenticated human re-review for a legacy pending approval', async () => {
+      const original = new TradingGit(makeConfig())
+      original.add(buyOp())
+      original.commit('legacy pending')
+      const legacy = JSON.parse(JSON.stringify(original.exportState())) as GitExportState
+      delete legacy.mutation
+
+      const executeOperation = vi.fn().mockResolvedValue({ success: true, orderId: 'reviewed' })
+      const restored = TradingGit.restore(legacy, makeConfig({ executeOperation }))
+      expect(restored.status().mutation?.readiness).toBe('legacy_review_required')
+      await expect(restored.push({ via: 'auto-push-paper', at: humanApprover.at }))
+        .rejects.toThrow(/human re-review/i)
+      await expect(restored.push()).rejects.toThrow(/human re-review/i)
+      expect(executeOperation).not.toHaveBeenCalled()
+
+      await restored.push(humanApprover)
+      expect(executeOperation).toHaveBeenCalledOnce()
+      expect(restored.status().mutation?.readiness).toBe('ready')
+    })
+
+    it('runs a zero-operation synthetic mutation as a durable audit commit with no broker call', async () => {
+      const execute = vi.fn()
+      const durable = new TradingGit(makeConfig())
+      const result = await durable.executeSyntheticMutation({
+        kind: 'emergency_cancel',
+        message: '[emergency-stop] HALT; cancelOrders=false',
+        approver: humanApprover,
+        prepare: async () => [],
+        execute,
+      })
+
+      expect(execute).not.toHaveBeenCalled()
+      expect(result.operationCount).toBe(0)
+      expect(durable.status()).toMatchObject({ commitCount: 1, mutation: { readiness: 'ready' } })
+      expect(durable.show(result.hash)?.message).toContain('cancelOrders=false')
+    })
+
+    it('retains uncertainty in the finalized audit after explicit human acknowledgement', async () => {
+      const durable = new TradingGit(makeConfig({
+        executeOperation: vi.fn().mockResolvedValue({ success: false, error: 'timeout' }),
+      }))
+      durable.add(buyOp())
+      durable.commit('uncertain order')
+      await expect(durable.push(humanApprover)).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+      const attemptId = durable.status().mutation?.activeAttempt?.attemptId
+
+      const resolution = await durable.resolveMutation({
+        attemptId: attemptId!,
+        action: 'acknowledge-uncertainty',
+        reason: 'operator checked venue and accepts unresolved historical outcome',
+        confirmation: attemptId!,
+        approver: humanApprover,
+      })
+
+      expect(resolution).toMatchObject({ resolved: true, readiness: 'ready' })
+      expect(durable.show(resolution.hash!)?.results[0]).toMatchObject({
+        success: false,
+        status: 'uncertain',
+      })
+      expect(durable.status().mutation?.activeAttempt).toBeUndefined()
+    })
+
+    it('keeps resolution decisions append-only across failed finalization and restart', async () => {
+      let persisted: GitExportState | undefined
+      const durable = new TradingGit(makeConfig({
+        executeOperation: vi.fn().mockResolvedValue({ success: false, error: 'ambiguous timeout' }),
+        getGitState: vi.fn().mockRejectedValue(new Error('snapshot still unavailable')),
+        onCommit: (state) => { persisted = JSON.parse(JSON.stringify(state)) },
+      }))
+      durable.add(buyOp())
+      durable.commit('append-only decisions')
+      await expect(durable.push(humanApprover)).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+      const attemptId = durable.status().mutation?.activeAttempt?.attemptId
+      const firstApprover = { ...humanApprover, fingerprint: 'first-reviewer' }
+
+      await expect(durable.resolveMutation({
+        attemptId: attemptId!,
+        action: 'acknowledge-uncertainty',
+        reason: 'first venue review',
+        confirmation: attemptId!,
+        approver: firstApprover,
+      })).rejects.toBeInstanceOf(MutationRecoveryRequiredError)
+      expect(isMutationEnvelopeV1(persisted?.mutation)
+        ? persisted.mutation.activeAttempt?.resolutions
+        : undefined).toHaveLength(1)
+
+      const restarted = TradingGit.restore(persisted!, makeConfig({
+        getGitState: vi.fn().mockResolvedValue(makeGitState()),
+      }))
+      const projected = restarted.status().mutation?.activeAttempt?.resolutions
+      projected![0].approver.fingerprint = 'tampered-projection'
+      expect(restarted.status().mutation?.activeAttempt?.resolutions?.[0].approver.fingerprint)
+        .toBe('first-reviewer')
+      const secondApprover = { ...humanApprover, fingerprint: 'second-reviewer' }
+      const resolved = await restarted.resolveMutation({
+        attemptId: attemptId!,
+        action: 'acknowledge-uncertainty',
+        reason: 'second venue review after restart',
+        confirmation: attemptId!,
+        approver: secondApprover,
+      })
+
+      expect(restarted.show(resolved.hash!)?.mutationAudit).toMatchObject({
+        initiator: humanApprover,
+        resolutions: [
+          { reason: 'first venue review', approver: firstApprover },
+          { reason: 'second venue review after restart', approver: secondApprover },
+        ],
+      })
+    })
+
+    it('supersedes an old approval during emergency handling instead of restoring it pushable', async () => {
+      const original = new TradingGit(makeConfig())
+      original.add(buyOp())
+      original.commit('legacy pending')
+      const legacy = JSON.parse(JSON.stringify(original.exportState())) as GitExportState
+      delete legacy.mutation
+      let persisted: GitExportState | undefined
+      const restored = TradingGit.restore(legacy, makeConfig({
+        onCommit: (state) => { persisted = JSON.parse(JSON.stringify(state)) },
+      }))
+
+      await restored.executeSyntheticMutation({
+        kind: 'emergency_cancel',
+        message: '[emergency-stop] HALT only',
+        approver: humanApprover,
+        prepare: async () => [],
+        execute: vi.fn(),
+      })
+      const restarted = TradingGit.restore(persisted!, makeConfig())
+      expect(restarted.status()).toMatchObject({
+        staged: [],
+        pendingMessage: null,
+        pendingHash: null,
+        mutation: { readiness: 'ready' },
+      })
+      const emergencyCommit = restarted.show(restarted.status().head!)
+      expect(emergencyCommit?.results).toContainEqual(expect.objectContaining({
+        status: 'user-rejected',
+        error: expect.stringContaining('Superseded by emergency_cancel'),
+      }))
+      await expect(restarted.push({ via: 'auto-push-paper', at: humanApprover.at }))
+        .rejects.toThrow('Nothing to push')
     })
   })
 
@@ -588,7 +1417,7 @@ describe('TradingGit', () => {
       const second = persistedGit.commit('thesis: trim AAPL')
       await persistedGit.push()
 
-      expect(onCommit).toHaveBeenCalledTimes(6)
+      expect(onCommit).toHaveBeenCalledTimes(12)
       const persisted = JSON.parse(JSON.stringify(onCommit.mock.calls[onCommit.mock.calls.length - 1][0]))
       const restored = TradingGit.restore(persisted, config)
       const commit = restored.show(second.hash)!
@@ -773,6 +1602,7 @@ describe('TradingGit', () => {
         quantityDelta: new Decimal('1.0093'),
         markPrice: new Decimal('80569.90'),
         stateAfter: makeGitState(),
+        expectedHead: git.status().head,
       })
 
       const exported = JSON.parse(JSON.stringify(git.exportState()))
@@ -922,29 +1752,70 @@ describe('TradingGit', () => {
 
   describe('sync', () => {
     it('creates a sync commit for order updates', async () => {
-      const state = makeGitState()
-      const result = await git.sync(
-        [
-          {
-            orderId: 'order-1',
-            symbol: 'AAPL',
-            previousStatus: 'submitted',
-            currentStatus: 'filled',
-            filledPrice: '155',
-            filledQty: '10',
-          },
-        ],
-        state,
-      )
+      git.add(buyOp('AAPL'))
+      git.commit('resting order')
+      await git.push()
+      const result = await git.sync([
+        {
+          orderId: 'order-1',
+          symbol: 'AAPL',
+          previousStatus: 'submitted',
+          currentStatus: 'filled',
+          filledPrice: '155',
+          filledQty: '10',
+        },
+      ])
 
       expect(result.updatedCount).toBe(1)
       expect(result.hash).toHaveLength(8)
-      expect(git.status().commitCount).toBe(1)
+      expect(git.status().commitCount).toBe(2)
     })
 
     it('returns empty result for no updates', async () => {
-      const result = await git.sync([], makeGitState())
+      const result = await git.sync([])
       expect(result.updatedCount).toBe(0)
+    })
+
+    it('revalidates stale sync observations inside the ledger lease', async () => {
+      git.add(buyOp('AAPL'))
+      git.commit('resting order')
+      await git.push()
+      const update = {
+        orderId: 'order-1',
+        symbol: 'AAPL',
+        previousStatus: 'submitted' as const,
+        currentStatus: 'filled' as const,
+        filledPrice: '155',
+        filledQty: '10',
+      }
+      await git.sync([update])
+      const before = git.status().commitCount
+      const head = git.status().head
+
+      const stale = await git.sync([update])
+
+      expect(stale).toEqual({ hash: head, updatedCount: 0, updates: [] })
+      expect(git.status().commitCount).toBe(before)
+    })
+  })
+
+  describe('recordObservedOrders', () => {
+    it('revalidates a stale external-order observation inside the ledger lease', async () => {
+      git.add(buyOp('AAPL'))
+      git.commit('Alice order')
+      await git.push()
+      const staleOrder = new Order()
+      staleOrder.action = 'BUY'
+      staleOrder.orderType = 'LMT'
+      staleOrder.totalQuantity = new Decimal(10)
+      const before = git.status().commitCount
+
+      const result = await git.recordObservedOrders({
+        observed: [{ contract: makeContract(), order: staleOrder, orderId: 'order-1' }],
+      })
+
+      expect(result).toEqual({ hash: null, observed: 0 })
+      expect(git.status().commitCount).toBe(before)
     })
   })
 
@@ -989,17 +1860,14 @@ describe('TradingGit', () => {
       await gitP.push()
 
       // Sync to filled
-      await gitP.sync(
-        [{
-          orderId: 'lmt-1',
-          symbol: 'AAPL',
-          previousStatus: 'submitted',
-          currentStatus: 'filled',
-          filledPrice: '155',
-          filledQty: '10',
-        }],
-        makeGitState(),
-      )
+      await gitP.sync([{
+        orderId: 'lmt-1',
+        symbol: 'AAPL',
+        previousStatus: 'submitted',
+        currentStatus: 'filled',
+        filledPrice: '155',
+        filledQty: '10',
+      }])
 
       expect(gitP.getPendingOrderIds()).toHaveLength(0)
     })
@@ -1036,14 +1904,11 @@ describe('TradingGit', () => {
       expect(known.has('leg-sl')).toBe(true)
 
       // A later sync resolving a leg removes it from pending, keeps the rest.
-      await gitP.sync(
-        [{
-          orderId: 'leg-tp', symbol: 'AAPL',
-          previousStatus: 'submitted', currentStatus: 'filled',
-          filledPrice: '297', filledQty: '1',
-        }],
-        makeGitState(),
-      )
+      await gitP.sync([{
+        orderId: 'leg-tp', symbol: 'AAPL',
+        previousStatus: 'submitted', currentStatus: 'filled',
+        filledPrice: '297', filledQty: '1',
+      }])
       expect(gitP.getPendingOrderIds().map((p) => p.orderId).sort()).toEqual(['leg-sl', 'parent-1'])
     })
 
@@ -1058,13 +1923,10 @@ describe('TradingGit', () => {
       // One sync commit carrying TWO updates → operations[1] is undefined;
       // the pending scan crashed the whole UTA process on every boot once
       // such a commit was persisted in the journal.
-      await gitP.sync(
-        [
-          { orderId: 'o-1', symbol: 'AAPL', previousStatus: 'submitted', currentStatus: 'filled', filledPrice: '10', filledQty: '1' },
-          { orderId: 'o-2', symbol: 'MSFT', previousStatus: 'submitted', currentStatus: 'cancelled' },
-        ],
-        makeGitState(),
-      )
+      await gitP.sync([
+        { orderId: 'o-1', symbol: 'AAPL', previousStatus: 'submitted', currentStatus: 'filled', filledPrice: '10', filledQty: '1' },
+        { orderId: 'o-2', symbol: 'MSFT', previousStatus: 'submitted', currentStatus: 'cancelled' },
+      ])
 
       expect(() => gitP.getPendingOrderIds()).not.toThrow()
       expect(gitP.getPendingOrderIds()).toHaveLength(0)
@@ -1094,19 +1956,19 @@ describe('TradingGit', () => {
   describe('log — sync commit attribution', () => {
     it('renders one row per sync update, attributed by the update symbol', async () => {
       const gitS = new TradingGit(makeConfig({
-        executeOperation: vi.fn().mockResolvedValue({ success: true, orderId: 'o-1' }),
+        executeOperation: vi.fn()
+          .mockResolvedValueOnce({ success: true, orderId: 'o-1' })
+          .mockResolvedValueOnce({ success: true, orderId: 'o-2' }),
       }))
       gitS.add(buyOp('AAPL'))
-      gitS.commit('buy')
+      gitS.add(buyOp('TSLA'))
+      gitS.commit('two resting buys')
       await gitS.push()
 
-      await gitS.sync(
-        [
-          { orderId: 'o-1', symbol: 'AAPL', previousStatus: 'submitted', currentStatus: 'filled', filledPrice: '150', filledQty: '10' },
-          { orderId: 'o-2', symbol: 'TSLA', previousStatus: 'submitted', currentStatus: 'cancelled' },
-        ],
-        makeGitState(),
-      )
+      await gitS.sync([
+        { orderId: 'o-1', symbol: 'AAPL', previousStatus: 'submitted', currentStatus: 'filled', filledPrice: '150', filledQty: '10' },
+        { orderId: 'o-2', symbol: 'TSLA', previousStatus: 'submitted', currentStatus: 'cancelled' },
+      ])
 
       const [head] = gitS.log({ limit: 1 })
       expect(head.operations).toHaveLength(2)

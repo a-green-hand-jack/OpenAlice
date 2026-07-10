@@ -407,4 +407,81 @@ describe('tradingPush — gated agent execution', () => {
     expect(res.message).toMatch(/manual approval/)
     expect(res.pending[0].source).toBe('alpaca-paper')
   })
+
+  it('calls uta.push with the exact pendingHash observed from status, when AI trading is enabled', async () => {
+    let pushedWith: string | undefined
+    const account = {
+      id: 'alpaca-paper',
+      status: async () => ({
+        staged: [{ action: 'cancelOrder', orderId: 'ord-1' }],
+        pendingMessage: 'cancel stale order',
+        pendingHash: 'aaaa1111',
+      }),
+      push: async (hash: string) => {
+        pushedWith = hash
+        return { hash, message: 'cancel stale order', operationCount: 1, submitted: [], rejected: [] }
+      },
+    }
+    const manager = { resolve: async () => [account] } as never
+    const tools = createTradingTools(manager, () => true)
+
+    await run(tools.tradingPush, {})
+    expect(pushedWith).toBe('aaaa1111')
+  })
+})
+
+describe('tradingReject — bound to the reviewed pending hash', () => {
+  it('calls uta.reject with the pendingHash already observed on status (no re-fetch/prepare)', async () => {
+    let rejectedWith: [string, string | undefined] | undefined
+    const account = {
+      id: 'alpaca-paper',
+      status: async () => ({
+        staged: [{ action: 'cancelOrder', orderId: 'ord-1' }],
+        pendingMessage: 'cancel stale order',
+        pendingHash: 'aaaa1111',
+      }),
+      commit: async () => {
+        throw new Error('reject should not prepare a new commit when a pendingHash already exists')
+      },
+      reject: async (hash: string, reason?: string) => {
+        rejectedWith = [hash, reason]
+        return { hash, message: 'discarded', operationCount: 1 }
+      },
+    }
+    const manager = { resolve: async () => account, resolveOne: async () => account } as never
+    const tools = createTradingTools(manager)
+
+    await run(tools.tradingReject, { source: 'alpaca-paper', reason: 'wrong limit price' })
+    expect(rejectedWith).toEqual(['aaaa1111', 'wrong limit price'])
+  })
+
+  it('prepares a commit for its hash first when nothing is pending yet, then rejects with that hash', async () => {
+    let rejectedWith: [string, string | undefined] | undefined
+    const account = {
+      id: 'alpaca-paper',
+      status: async () => ({
+        staged: [{ action: 'cancelOrder', orderId: 'ord-1' }],
+        pendingMessage: null,
+        pendingHash: null,
+      }),
+      commit: async () => ({ hash: 'cccc3333', message: 'discarding staged operations', operationCount: 1 }),
+      reject: async (hash: string, reason?: string) => {
+        rejectedWith = [hash, reason]
+        return { hash, message: 'discarded', operationCount: 1 }
+      },
+    }
+    const manager = { resolveOne: async () => account } as never
+    const tools = createTradingTools(manager)
+
+    await run(tools.tradingReject, { source: 'alpaca-paper' })
+    expect(rejectedWith?.[0]).toBe('cccc3333')
+  })
+})
+
+describe('tool surface — no agent-facing mutation recovery capability', () => {
+  it('does not register any tool whose name looks like recovery/resolution', () => {
+    const tools = createTradingTools({ resolve: async () => [] } as never)
+    const suspicious = Object.keys(tools).filter((name) => /resolve|recover|mutation/i.test(name))
+    expect(suspicious).toEqual([])
+  })
 })

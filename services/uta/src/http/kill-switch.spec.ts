@@ -106,9 +106,11 @@ describe('POST /uta/:id/wallet/push approver identity', () => {
       orderType: 'MKT',
       totalQuantity: '1',
     })
-    uta.commit('human approved buy')
+    const pending = uta.commit('human approved buy')
 
-    const { status, body } = await post(routes, '/uta/mock-paper/wallet/push', {}, approverHeader())
+    const { status, body } = await post(routes, '/uta/mock-paper/wallet/push', {
+      expectedHash: pending.hash,
+    }, approverHeader())
 
     expect(status).toBe(200)
     const hash = (body as { hash: string }).hash
@@ -127,12 +129,15 @@ describe('POST /uta/:id/wallet/push approver identity', () => {
   })
 
   it('records loopback when UTA receives push without an Alice approver descriptor', async () => {
-    const { uta, routes, baseDir } = createUTA()
+    const { uta, broker, routes, baseDir } = createUTA()
     await uta.waitForConnect()
-    uta.stageCancelOrder({ orderId: 'order-to-cancel' })
-    uta.commit('cancel stale order')
+    const orderId = await placeRestingOrder(broker, 'AAPL')
+    uta.stageCancelOrder({ orderId })
+    const pending = uta.commit('cancel stale order')
 
-    const { status, body } = await post(routes, '/uta/mock-paper/wallet/push', {})
+    const { status, body } = await post(routes, '/uta/mock-paper/wallet/push', {
+      expectedHash: pending.hash,
+    })
 
     expect(status).toBe(200)
     const commit = uta.show((body as { hash: string }).hash)
@@ -141,6 +146,83 @@ describe('POST /uta/:id/wallet/push approver identity', () => {
       at: expect.any(String),
     })
     expect(commit?.approver?.fingerprint).toBeUndefined()
+  })
+})
+
+describe('POST /uta/:id/wallet/mutation/resolve', () => {
+  it('requires an authenticated human and preserves uncertainty in the final audit', async () => {
+    const { uta, broker, routes } = createUTA()
+    await uta.waitForConnect()
+    uta.stageCancelOrder({ orderId: 'unknown-at-venue' })
+    const pending = uta.commit('cancel order with ambiguous venue response')
+
+    const pushed = await post(
+      routes,
+      '/uta/mock-paper/wallet/push',
+      { expectedHash: pending.hash },
+      approverHeader(),
+    )
+    expect(pushed.status).toBe(409)
+    expect(pushed.body).toMatchObject({
+      code: 'MUTATION_RECOVERY_REQUIRED',
+      mutation: {
+        readiness: 'recovery_required',
+        activeAttempt: {
+          kind: 'push',
+          operations: [expect.objectContaining({ state: 'uncertain' })],
+        },
+      },
+    })
+    const attemptId = (pushed.body as {
+      mutation: { activeAttempt: { attemptId: string } }
+    }).mutation.activeAttempt.attemptId
+    expect(broker.callCount('cancelOrder')).toBe(1)
+
+    const retry = await post(routes, '/uta/mock-paper/wallet/push', {}, approverHeader())
+    expect(retry.status).toBe(409)
+    expect(retry.body).toMatchObject({
+      code: 'MUTATION_RECOVERY_REQUIRED',
+      mutation: { activeAttempt: { attemptId } },
+    })
+    expect(broker.callCount('cancelOrder')).toBe(1)
+
+    const anonymous = await post(routes, '/uta/mock-paper/wallet/mutation/resolve', {
+      attemptId,
+      confirmation: attemptId,
+      action: 'acknowledge-uncertainty',
+      reason: 'operator checked venue history',
+    })
+    expect(anonymous.status).toBe(403)
+
+    const staleConfirmation = await post(routes, '/uta/mock-paper/wallet/mutation/resolve', {
+      attemptId,
+      confirmation: randomUUID(),
+      action: 'acknowledge-uncertainty',
+      reason: 'operator checked venue history',
+    }, approverHeader())
+    expect(staleConfirmation.status).toBe(400)
+    expect(uta.status().mutation?.readiness).toBe('recovery_required')
+
+    const resolved = await post(routes, '/uta/mock-paper/wallet/mutation/resolve', {
+      attemptId,
+      confirmation: attemptId,
+      action: 'acknowledge-uncertainty',
+      reason: 'operator checked venue history',
+    }, approverHeader())
+    expect(resolved.status).toBe(200)
+    expect(resolved.body).toMatchObject({ attemptId, resolved: true, readiness: 'ready' })
+    expect(uta.status()).toMatchObject({
+      pendingMessage: null,
+      pendingHash: null,
+      mutation: { readiness: 'ready', downgradeBlocked: false },
+    })
+    const commit = uta.show((resolved.body as { hash: string }).hash)
+    expect(commit?.message).toContain('[resolved:acknowledge-uncertainty]')
+    expect(commit?.message).toContain('operator checked venue history')
+    expect(commit?.results).toEqual([
+      expect.objectContaining({ status: 'uncertain', success: false }),
+    ])
+    expectAliceApprover(commit?.approver)
   })
 })
 
@@ -218,7 +300,7 @@ describe('POST /uta/:id/emergency-stop', () => {
     ])
   })
 
-  it('continues after one broker cancel failure and keeps the failed order pending', async () => {
+  it('quarantines after an ambiguous broker cancel failure and does not call later orders', async () => {
     const { uta, broker, routes } = createUTA()
     await uta.waitForConnect()
     const orderIds = [
@@ -238,35 +320,30 @@ describe('POST /uta/:id/emergency-stop', () => {
       reason: 'partial cancel failure',
     })
 
-    expect(status).toBe(200)
-    expect(attempted).toEqual(orderIds)
+    expect(status).toBe(409)
+    expect(attempted).toEqual(orderIds.slice(0, 2))
     expect(body).toMatchObject({
       riskState: {
         state: 'HALT',
         reason: 'partial cancel failure',
       },
-      cancelResults: [
-        { orderId: orderIds[0], success: true, status: 'Cancelled' },
-        { orderId: orderIds[1], success: false, status: 'Rejected', error: 'venue cancel exploded' },
-        { orderId: orderIds[2], success: true, status: 'Cancelled' },
-      ],
+      code: 'MUTATION_RECOVERY_REQUIRED',
+      mutation: {
+        readiness: 'recovery_required',
+        downgradeBlocked: true,
+        activeAttempt: {
+          kind: 'emergency_cancel',
+          operations: [
+            expect.objectContaining({ state: 'confirmed' }),
+            expect.objectContaining({ state: 'uncertain', error: 'venue cancel exploded' }),
+            expect.objectContaining({ state: 'prepared' }),
+          ],
+        },
+      },
     })
     expect(uta.getRiskState().state).toBe('HALT')
-
-    const hash = (body as { hash: string }).hash
-    const commit = uta.show(hash)
-    expect(commit?.message).toContain('[emergency-stop] HALT; cancelled 2/3 open order(s)')
-    expect(commit?.results.filter((result) => result.success)).toHaveLength(2)
-    expect(commit?.results.filter((result) => !result.success)).toEqual([
-      expect.objectContaining({
-        action: 'emergencyCancelOrder',
-        orderId: orderIds[1],
-        success: false,
-        status: 'submitted',
-        error: 'venue cancel exploded',
-      }),
-    ])
-    expect(uta.getPendingOrderIds().map((order) => order.orderId)).toContain(orderIds[1])
+    expect(uta.status().pendingHash).toBeNull()
+    expect((await broker.getOpenOrders()).map((order) => order.orderId)).toEqual(orderIds.slice(1))
   })
 })
 
@@ -341,7 +418,7 @@ describe('POST /uta/:id/flatten', () => {
     expect(uta.getRiskState().state).toBe('HALT')
   })
 
-  it('continues after one broker close failure when flattening positions', async () => {
+  it('quarantines after an ambiguous broker close failure and does not close later positions', async () => {
     const { uta, broker, routes } = createUTA()
     await uta.waitForConnect()
     broker.setPositions([
@@ -359,29 +436,24 @@ describe('POST /uta/:id/flatten', () => {
 
     const { status, body } = await post(routes, '/uta/mock-paper/flatten', { confirm: 'FLATTEN' })
 
-    expect(status).toBe(200)
-    expect(attempted).toEqual(['AAPL', 'MSFT', 'NVDA'])
+    expect(status).toBe(409)
+    expect(attempted).toEqual(['AAPL', 'MSFT'])
     expect(body).toMatchObject({
-      results: [
-        { symbol: 'AAPL', quantity: '10', success: true, status: 'Filled' },
-        { symbol: 'MSFT', quantity: '2', success: false, status: 'Rejected', error: 'venue close exploded' },
-        { symbol: 'NVDA', quantity: '3', success: true, status: 'Filled' },
-      ],
+      code: 'MUTATION_RECOVERY_REQUIRED',
+      mutation: {
+        readiness: 'recovery_required',
+        activeAttempt: {
+          kind: 'flatten',
+          operations: [
+            expect.objectContaining({ state: 'confirmed' }),
+            expect.objectContaining({ state: 'uncertain', error: 'venue close exploded' }),
+            expect.objectContaining({ state: 'prepared' }),
+          ],
+        },
+      },
     })
-
-    const hash = (body as { hash: string }).hash
-    const commit = uta.show(hash)
-    expect(commit?.message).toContain('[flatten] closed 2/3 open position(s)')
-    expect(commit?.results.filter((result) => result.success)).toHaveLength(2)
-    expect(commit?.results.filter((result) => !result.success)).toEqual([
-      expect.objectContaining({
-        action: 'emergencyClosePosition',
-        success: false,
-        status: 'rejected',
-        error: 'venue close exploded',
-      }),
-    ])
-    expect((await broker.getPositions()).map((position) => position.contract.symbol)).toEqual(['MSFT'])
+    expect(uta.status().pendingHash).toBeNull()
+    expect((await broker.getPositions()).map((position) => position.contract.symbol)).toEqual(['MSFT', 'NVDA'])
   })
 })
 

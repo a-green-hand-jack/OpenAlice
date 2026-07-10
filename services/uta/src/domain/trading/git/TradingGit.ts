@@ -4,11 +4,18 @@
  * Unified git-like operation tracking for all trading accounts.
  */
 
-import { createHash } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import Decimal from 'decimal.js'
 import { Contract, Order, UNSET_DECIMAL, UNSET_DOUBLE } from '@traderalice/ibkr'
 import { OrderHelper } from '../OrderHelper.js'
-import type { ITradingGit, TradingGitConfig } from './interfaces.js'
+import type {
+  ITradingGit,
+  RejectOptions,
+  ResolveMutationParams,
+  PushOptions,
+  SyntheticMutationParams,
+  TradingGitConfig,
+} from './interfaces.js'
 import type {
   CommitHash,
   Operation,
@@ -30,14 +37,38 @@ import type {
   SimulatePriceChangeResult,
   OrderStatusUpdate,
   SyncResult,
-  PlaceOrderResult,
-  Position,
+  MutationAttemptKind,
+  MutationAttemptV1,
+  MutationEnvelope,
+  MutationOperationV1,
+  MutationResolveResult,
+  SanitizedExecutionReceipt,
 } from './types.js'
+import { MUTATION_SCHEMA_VERSION } from './types.js'
 import { getOperationSymbol } from './types.js'
+import { hasLocalNoDispatchProof } from '../guards/guard-pipeline.js'
+import {
+  AccountMutationCoordinator,
+  MutationRecoveryRequiredError,
+  PendingApprovalChangedError,
+} from './mutation-coordinator.js'
 
 /** secTypes whose price does NOT track the underlying 1:1 — excluded from
  *  symbol-level price simulation (they share the underlying's symbol). */
 const DERIVATIVE_SECTYPES = new Set(['OPT', 'FOP', 'WAR', 'IOPT', 'BAG'])
+const DEFAULT_MUTATION_TIMEOUT_MS = 30_000
+
+/**
+ * A broker dispatch outlived its timeout. This is NOT proof of non-acceptance
+ * — the request is still in flight at the venue — so it always classifies as
+ * `uncertain`, and the orphaned Promise blocks in-process resolution.
+ */
+export class DispatchTimeoutError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'DispatchTimeoutError'
+  }
+}
 
 function generateCommitHash(content: object): CommitHash {
   const hash = createHash('sha256')
@@ -53,6 +84,131 @@ function extractGuardVerdicts(value: unknown): GuardVerdict[] | undefined {
   return guardVerdicts as GuardVerdict[]
 }
 
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+/** Detach plain JSON data (approvers, contexts, resolutions) from caller-owned objects. */
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function decimalReceiptString(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.length > 0) return value
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return undefined
+}
+
+/**
+ * Persisted orderState is a strict allowlist of venue-status scalars. The raw
+ * IBKR OrderState carries account identifiers (orderAllocations[].account) and
+ * a dozen margin fields that must never reach commit.json / show / export.
+ */
+function sanitizeOrderState(value: unknown): OperationResult['orderState'] {
+  if (!value || typeof value !== 'object') return undefined
+  const source = value as Record<string, unknown>
+  const commission = finiteNumber(source.commissionAndFees)
+  const sanitized = {
+    ...(nonEmptyString(source.status) ? { status: nonEmptyString(source.status) } : {}),
+    ...(nonEmptyString(source.rejectReason) ? { rejectReason: nonEmptyString(source.rejectReason) } : {}),
+    ...(nonEmptyString(source.completedTime) ? { completedTime: nonEmptyString(source.completedTime) } : {}),
+    ...(nonEmptyString(source.completedStatus) ? { completedStatus: nonEmptyString(source.completedStatus) } : {}),
+    ...(commission !== undefined && commission !== UNSET_DOUBLE ? { commissionAndFees: commission } : {}),
+    ...(nonEmptyString(source.commissionAndFeesCurrency)
+      ? { commissionAndFeesCurrency: nonEmptyString(source.commissionAndFeesCurrency) }
+      : {}),
+  }
+  return Object.keys(sanitized).length > 0
+    ? sanitized as OperationResult['orderState']
+    : undefined
+}
+
+/** Bracket legs persist as exactly {orderId, kind} — nothing else survives. */
+function sanitizeLegs(value: unknown): OperationResult['legs'] {
+  if (!Array.isArray(value)) return undefined
+  const legs = value.flatMap((leg) => {
+    if (!leg || typeof leg !== 'object') return []
+    const source = leg as Record<string, unknown>
+    const orderId = nonEmptyString(source.orderId)
+      ?? (typeof source.orderId === 'number' && Number.isFinite(source.orderId)
+        ? String(source.orderId)
+        : undefined)
+    const kind = source.kind === 'takeProfit'
+      ? 'takeProfit' as const
+      : source.kind === 'stopLoss' ? 'stopLoss' as const : undefined
+    if (!orderId || !kind) return []
+    return [{ orderId, kind }]
+  })
+  return legs.length > 0 ? legs : undefined
+}
+
+/** Decimal / number / string quantities → lossless string, everything else dropped. */
+function quantityString(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.length > 0) return value
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  if (value && typeof value === 'object' && 'toFixed' in value
+    && typeof (value as { toFixed: unknown }).toFixed === 'function') {
+    try {
+      return (value as { toFixed: () => string }).toFixed()
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
+}
+
+/** Preserve useful venue acknowledgement fields without retaining account IDs or raw payloads. */
+function sanitizeExecutionReceipt(value: unknown): SanitizedExecutionReceipt | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const source = value as Record<string, unknown>
+  const receipt: SanitizedExecutionReceipt = {
+    ...(finiteNumber(source.orderId) !== undefined ? { orderId: finiteNumber(source.orderId) } : {}),
+    ...(nonEmptyString(source.execId) ? { execId: nonEmptyString(source.execId) } : {}),
+    ...(nonEmptyString(source.time) ? { time: nonEmptyString(source.time) } : {}),
+    ...(nonEmptyString(source.exchange) ? { exchange: nonEmptyString(source.exchange) } : {}),
+    ...(nonEmptyString(source.side) ? { side: nonEmptyString(source.side) } : {}),
+    ...(quantityString(source.shares) ? { shares: quantityString(source.shares) } : {}),
+    ...(finiteNumber(source.price) !== undefined ? { price: finiteNumber(source.price) } : {}),
+    ...(finiteNumber(source.permId) !== undefined ? { permId: finiteNumber(source.permId) } : {}),
+    ...(finiteNumber(source.clientId) !== undefined ? { clientId: finiteNumber(source.clientId) } : {}),
+    ...(typeof source.isLiquidation === 'boolean' ? { isLiquidation: source.isLiquidation } : {}),
+    ...(quantityString(source.cumQty) ? { cumQty: quantityString(source.cumQty) } : {}),
+    ...(finiteNumber(source.avgPrice) !== undefined ? { avgPrice: finiteNumber(source.avgPrice) } : {}),
+    ...(nonEmptyString(source.orderRef) ? { orderRef: nonEmptyString(source.orderRef) } : {}),
+    ...(finiteNumber(source.lastLiquidity) !== undefined
+      ? { lastLiquidity: finiteNumber(source.lastLiquidity) }
+      : {}),
+    ...(typeof source.isPriceRevisionPending === 'boolean'
+      ? { isPriceRevisionPending: source.isPriceRevisionPending }
+      : {}),
+  }
+  return Object.keys(receipt).length > 0 ? receipt : undefined
+}
+
+interface PreparedMutationParams {
+  kind: MutationAttemptKind
+  operations: Operation[]
+  message: string
+  hash: CommitHash
+  approver?: ApproverIdentity
+  context?: MutationAttemptV1['context']
+  execute: (operation: Operation) => Promise<unknown>
+  suspendedApproval?: MutationAttemptV1['suspendedApproval']
+}
+
+interface ExportStateOverrides {
+  commits?: GitCommit[]
+  head?: CommitHash | null
+  stagingArea?: Operation[]
+  pendingMessage?: string | null
+  pendingHash?: CommitHash | null
+  mutation?: MutationEnvelope | undefined
+}
+
 export class TradingGit implements ITradingGit {
   private stagingArea: Operation[] = []
   private pendingMessage: string | null = null
@@ -61,148 +217,385 @@ export class TradingGit implements ITradingGit {
   private head: CommitHash | null = null
   private currentRound: number | undefined = undefined
   private readonly config: TradingGitConfig
+  private readonly mutationCoordinator: AccountMutationCoordinator
+  private legacyReviewRequired = false
 
   constructor(config: TradingGitConfig) {
+    if (!config.onCommit && !config.allowEphemeralPersistence) {
+      throw new Error('TradingGit requires a synchronous durable persister; ephemeral mutation state is unsafe')
+    }
+    if (config.onCommit && config.onCommit.constructor?.name === 'AsyncFunction') {
+      throw new Error(
+        'TradingGit persister must be synchronous: an async onCommit would let broker dispatch '
+        + 'proceed before state reaches disk. Wrap durable writes in a synchronous function.',
+      )
+    }
     this.config = config
+    this.mutationCoordinator = new AccountMutationCoordinator({
+      schemaVersion: MUTATION_SCHEMA_VERSION,
+    })
   }
 
   // ==================== git add / commit / push ====================
 
   add(operation: Operation): AddResult {
-    this.stagingArea.push(operation)
-    this.emitStateChange()
+    this.assertLedgerWriteAllowed('stage')
+    if (this.pendingMessage !== null || this.pendingHash !== null) {
+      throw new Error('Pending approval already exists; push or reject it before staging another operation')
+    }
+    const storedOperation = TradingGit.cloneOperation(operation)
+    const nextStaging = [...this.stagingArea, storedOperation]
+    this.persistCandidate({ stagingArea: nextStaging })
+    this.stagingArea = nextStaging
     return {
       staged: true,
       index: this.stagingArea.length - 1,
-      operation,
+      operation: this.projectOperation(storedOperation),
     }
   }
 
   commit(message: string): CommitPrepareResult {
+    this.assertLedgerWriteAllowed('commit')
+    if (this.pendingMessage !== null || this.pendingHash !== null) {
+      throw new Error('Pending approval already exists; push or reject it before committing again')
+    }
     if (this.stagingArea.length === 0) {
       throw new Error('Nothing to commit: staging area is empty')
     }
 
     const timestamp = new Date().toISOString()
-    this.pendingHash = generateCommitHash({
+    const pendingHash = generateCommitHash({
       message,
       operations: this.stagingArea,
       timestamp,
       parentHash: this.head,
     })
+    this.persistCandidate({ pendingMessage: message, pendingHash })
+    this.pendingHash = pendingHash
     this.pendingMessage = message
-    this.emitStateChange()
 
     return {
       prepared: true,
-      hash: this.pendingHash,
+      hash: pendingHash,
       message,
       operationCount: this.stagingArea.length,
     }
   }
 
-  async push(approver?: ApproverIdentity): Promise<PushResult> {
-    if (this.stagingArea.length === 0) {
-      throw new Error('Nothing to push: staging area is empty')
+  async push(approver?: ApproverIdentity, options: PushOptions = {}): Promise<PushResult> {
+    if (this.legacyReviewRequired && !this.isAuthenticatedHumanApprover(approver)) {
+      throw new Error('Legacy pending approval requires an authenticated human re-review before push')
     }
-    if (this.pendingMessage === null || this.pendingHash === null) {
-      throw new Error('Nothing to push: please commit first')
-    }
-
-    const operations = [...this.stagingArea]
-    const message = this.pendingMessage
-    const hash = this.pendingHash
-
-    // Execute all operations
-    const results: OperationResult[] = []
-    for (const op of operations) {
-      try {
-        const raw = await this.config.executeOperation(op)
-        results.push(this.parseOperationResult(op, raw))
-      } catch (error) {
-        const guardVerdicts = extractGuardVerdicts(error)
-        results.push({
-          action: op.action,
-          success: false,
-          status: 'rejected',
-          error: error instanceof Error ? error.message : String(error),
-          ...(guardVerdicts ? { guardVerdicts } : {}),
-        })
+    return this.mutationCoordinator.withLease({
+      hasLegacyPending: this.hasLegacyPending(),
+      operation: 'push',
+    }, async () => {
+      if (options.expectedHash !== undefined && options.expectedHash !== this.pendingHash) {
+        throw new PendingApprovalChangedError(options.expectedHash, this.pendingHash)
       }
-    }
+      if (this.stagingArea.length === 0) {
+        throw new Error('Nothing to push: staging area is empty')
+      }
+      if (this.pendingMessage === null || this.pendingHash === null) {
+        throw new Error('Nothing to push: please commit first')
+      }
 
-    // Snapshot state after execution
-    const stateAfter = await this.config.getGitState()
+      const operations = [...this.stagingArea]
+      const message = this.pendingMessage
+      const hash = this.pendingHash
 
-    const commit: GitCommit = {
-      hash,
-      parentHash: this.head,
-      message,
-      operations,
-      results,
-      stateAfter,
-      timestamp: new Date().toISOString(),
-      ...(approver ? { approver } : {}),
-      round: this.currentRound,
-    }
+      if (options.preflight) {
+        await this.runMutationPhase('push preflight', () => options.preflight!({
+          hash,
+          message,
+          operations: operations.map((operation) => this.projectOperation(operation)),
+          approver,
+        }))
+      }
 
-    this.commits.push(commit)
-    this.head = hash
+      if (this.pendingHash !== hash || this.pendingMessage !== message) {
+        throw new PendingApprovalChangedError(hash, this.pendingHash)
+      }
 
-    // Clear staging
-    this.stagingArea = []
-    this.pendingMessage = null
-    this.pendingHash = null
-    await this.persistState()
-
-    const rejected = results.filter((r) => !r.success)
-    const submitted = results.filter((r) => r.success)
-
-    return { hash, message, operationCount: operations.length, submitted, rejected }
+      return this.executePreparedMutation({
+        kind: 'push',
+        operations,
+        message,
+        hash,
+        approver,
+        execute: this.config.executeOperation,
+      })
+    })
   }
 
-  async reject(reason?: string): Promise<RejectResult> {
-    if (this.stagingArea.length === 0) {
-      throw new Error('Nothing to reject: staging area is empty')
+  async reject(
+    reason?: string,
+    approver?: ApproverIdentity,
+    options: RejectOptions = {},
+  ): Promise<RejectResult> {
+    if (this.legacyReviewRequired && !this.isAuthenticatedHumanApprover(approver)) {
+      throw new Error('Legacy pending approval requires an authenticated human re-review before reject')
     }
-    if (this.pendingMessage === null || this.pendingHash === null) {
-      throw new Error('Nothing to reject: please commit first')
-    }
+    return this.mutationCoordinator.withLease({
+      hasLegacyPending: this.hasLegacyPending(),
+      operation: 'reject',
+    }, async () => {
+      if (options.expectedHash !== undefined && options.expectedHash !== this.pendingHash) {
+        throw new PendingApprovalChangedError(options.expectedHash, this.pendingHash)
+      }
+      if (this.stagingArea.length === 0) {
+        throw new Error('Nothing to reject: staging area is empty')
+      }
+      if (this.pendingMessage === null || this.pendingHash === null) {
+        throw new Error('Nothing to reject: please commit first')
+      }
 
-    const operations = [...this.stagingArea]
-    const message = `[rejected] ${this.pendingMessage}${reason ? ` — ${reason}` : ''}`
-    const hash = this.pendingHash
+      const operations = [...this.stagingArea]
+      const message = `[rejected] ${this.pendingMessage}${reason ? ` — ${reason}` : ''}`
+      const hash = this.pendingHash
+      const attempt = this.createAttempt({
+        kind: 'human_reject',
+        hash,
+        message,
+        operations,
+      })
+      const rejectedAttempt = {
+        ...attempt,
+        ...(approver ? { approver: cloneJson(approver) } : {}),
+        operations: attempt.operations.map((entry) => ({
+          ...entry,
+          state: 'definitely_rejected' as const,
+          result: {
+            action: entry.operation.action,
+            success: false,
+            status: 'user-rejected' as const,
+            error: reason || 'Rejected by user',
+          },
+          evidence: { type: 'human-reject', reason: reason || 'Rejected by user' },
+        })),
+      }
 
-    const results: OperationResult[] = operations.map((op) => ({
-      action: op.action,
-      success: false,
-      status: 'user-rejected' as const,
-      error: reason || 'Rejected by user',
-    }))
+      // Phase 1 linearizes the human decision while clearing the replayable
+      // legacy approval fields. A crash before phase 2 cannot resurrect it.
+      this.persistAttempt(rejectedAttempt, { clearLegacyApproval: true })
 
-    const stateAfter = await this.config.getGitState()
+      let stateAfter: GitState
+      try {
+        stateAfter = await this.runMutationPhase('reject final snapshot', this.config.getGitState)
+      } catch (error) {
+        throw new MutationRecoveryRequiredError(
+          rejectedAttempt.attemptId,
+          `Rejected mutation ${rejectedAttempt.attemptId} is durable but final state snapshot failed: ${error instanceof Error ? error.message : String(error)}`,
+          error,
+        )
+      }
+      this.finalizeAttempt(rejectedAttempt, stateAfter)
+      return { hash, message, operationCount: operations.length }
+    })
+  }
 
-    const commit: GitCommit = {
-      hash,
-      parentHash: this.head,
-      message,
-      operations,
-      results,
-      stateAfter,
-      timestamp: new Date().toISOString(),
-      round: this.currentRound,
-    }
+  async executeSyntheticMutation(params: SyntheticMutationParams): Promise<PushResult> {
+    return this.mutationCoordinator.withLease({
+      hasLegacyPending: this.hasLegacyPending(),
+      operation: params.kind,
+    }, async () => {
+      // Enumeration happens inside the same account lease as dispatch. This
+      // prevents sync/reconcile writers from racing the synthetic snapshot.
+      const operations = await this.runMutationPhase(
+        `${params.kind} prepare`,
+        params.prepare,
+      )
+      const timestamp = new Date().toISOString()
+      const suspendedApproval = this.stagingArea.length > 0
+        ? {
+            operations: [...this.stagingArea],
+            message: this.pendingMessage,
+            hash: this.pendingHash,
+          }
+        : undefined
+      const hash = generateCommitHash({
+        kind: params.kind,
+        message: params.message,
+        operations,
+        suspendedApproval,
+        timestamp,
+        parentHash: this.head,
+      })
 
-    this.commits.push(commit)
-    this.head = hash
+      return this.executePreparedMutation({
+        kind: params.kind,
+        operations,
+        message: params.message,
+        hash,
+        approver: params.approver,
+        context: params.context,
+        execute: params.execute,
+        suspendedApproval,
+      })
+    })
+  }
 
-    // Clear staging
-    this.stagingArea = []
-    this.pendingMessage = null
-    this.pendingHash = null
-    await this.persistState()
+  async resolveMutation(params: ResolveMutationParams): Promise<MutationResolveResult> {
+    return this.mutationCoordinator.withLease({
+      allowActiveAttempt: true,
+      hasLegacyPending: this.hasLegacyPending(),
+      operation: 'resolve mutation',
+    }, async () => {
+      const active = this.mutationCoordinator.getActiveAttempt()
+      if (!active) throw new Error('No active mutation attempt to resolve')
+      if (params.attemptId !== active.attemptId || params.confirmation !== active.attemptId) {
+        throw new Error(`Mutation confirmation must exactly match active attempt ${active.attemptId}`)
+      }
+      if (!params.reason.trim()) throw new Error('Mutation resolution requires a non-empty reason')
+      if (params.approver.via !== 'alice-bff' || !params.approver.fingerprint) {
+        throw new Error('Mutation resolution requires an authenticated alice-bff approver fingerprint')
+      }
 
-    return { hash, message, operationCount: operations.length }
+      let resolvedAttempt = active
+      switch (params.action) {
+        case 'discard-never-dispatched': {
+          // Retry-idempotent: a first attempt that durably applied phase 1 but
+          // failed before finalization leaves every operation already
+          // definitely_rejected — accept that state and finish finalization.
+          const allPrepared = active.operations.every((entry) => entry.state === 'prepared')
+          const allDiscarded = active.operations.every((entry) => entry.state === 'definitely_rejected')
+          if (!allPrepared && !allDiscarded) {
+            throw new Error('discard-never-dispatched is allowed only when every operation is still prepared')
+          }
+          resolvedAttempt = allPrepared
+            ? this.updateAttemptOperations(active, (entry) => ({
+                ...entry,
+                state: 'definitely_rejected',
+                result: {
+                  action: entry.operation.action,
+                  success: false,
+                  status: 'user-rejected',
+                  error: params.reason,
+                },
+                evidence: {
+                  type: 'human-resolution',
+                  action: params.action,
+                  reason: params.reason,
+                  approverFingerprint: params.approver.fingerprint,
+                },
+                error: params.reason,
+              }))
+            : active
+          break
+        }
+        case 'acknowledge-uncertainty': {
+          if (!active.operations.some((entry) => entry.state === 'uncertain')) {
+            throw new Error('acknowledge-uncertainty requires at least one uncertain operation')
+          }
+          resolvedAttempt = this.updateAttemptOperations(active, (entry) => {
+            if (entry.state === 'prepared') {
+              return {
+                ...entry,
+                state: 'definitely_rejected',
+                result: {
+                  action: entry.operation.action,
+                  success: false,
+                  status: 'user-rejected',
+                  error: 'Not dispatched after an earlier uncertain outcome',
+                },
+                evidence: {
+                  type: 'human-resolution',
+                  action: params.action,
+                  reason: params.reason,
+                  approverFingerprint: params.approver.fingerprint,
+                },
+              }
+            }
+            if (entry.state !== 'uncertain') return entry
+            return {
+              ...entry,
+              // Deliberately remain uncertain. Human acknowledgement releases
+              // quarantine; it is not evidence of broker acceptance/rejection.
+              state: 'uncertain',
+              result: {
+                ...entry.result,
+                action: entry.operation.action,
+                success: false,
+                status: 'uncertain',
+                error: entry.error ?? 'Broker acceptance remains unknown',
+              },
+              evidence: {
+                type: 'human-resolution',
+                action: params.action,
+                reason: params.reason,
+                approverFingerprint: params.approver.fingerprint,
+                outcome: 'still-uncertain',
+              },
+            }
+          })
+          break
+        }
+        case 'finalize-known-outcomes': {
+          // `prepared` is a known outcome too: it never dispatched (e.g. ops
+          // after a timed-out one whose late settlement upgraded it to
+          // confirmed). Only genuine uncertainty blocks this action.
+          if (active.operations.some((entry) =>
+            entry.state !== 'confirmed' && entry.state !== 'definitely_rejected' && entry.state !== 'prepared')) {
+            throw new Error('finalize-known-outcomes requires every operation to have a known terminal outcome')
+          }
+          resolvedAttempt = this.updateAttemptOperations(active, (entry) => {
+            if (entry.state !== 'prepared') return entry
+            return {
+              ...entry,
+              state: 'definitely_rejected',
+              result: {
+                action: entry.operation.action,
+                success: false,
+                status: 'user-rejected',
+                error: 'Never dispatched; discarded during finalize-known-outcomes',
+              },
+              evidence: {
+                type: 'human-resolution',
+                action: params.action,
+                reason: params.reason,
+                approverFingerprint: params.approver.fingerprint,
+              },
+            }
+          })
+          break
+        }
+      }
+
+      const resolution = {
+        action: params.action,
+        reason: params.reason,
+        approver: cloneJson(params.approver),
+        at: new Date().toISOString(),
+      }
+      resolvedAttempt = {
+        ...resolvedAttempt,
+        updatedAt: resolution.at,
+        resolutions: [...(active.resolutions ?? []), resolution],
+      }
+      // The human decision is itself durable before any snapshot/finalization
+      // work. A retry may append another decision, but can never erase this one.
+      this.persistAttempt(resolvedAttempt, { clearLegacyApproval: true })
+      let stateAfter: GitState
+      try {
+        stateAfter = await this.runMutationPhase('resolution final snapshot', this.config.getGitState)
+      } catch (error) {
+        throw new MutationRecoveryRequiredError(
+          active.attemptId,
+          `Mutation ${active.attemptId} resolution is durable but final state snapshot failed: ${error instanceof Error ? error.message : String(error)}`,
+          error,
+        )
+      }
+      this.finalizeAttempt(resolvedAttempt, stateAfter, params.approver, {
+        action: params.action,
+        reason: params.reason,
+      })
+      return {
+        attemptId: active.attemptId,
+        hash: active.hash,
+        resolved: true,
+        readiness: 'ready',
+      }
+    })
   }
 
   /**
@@ -222,57 +615,64 @@ export class TradingGit implements ITradingGit {
     quantityDelta: Decimal
     markPrice: Decimal
     stateAfter: GitState
+    /**
+     * Head observed when the caller took the broker snapshot its drift
+     * decision is based on. If the ledger has advanced since (a sync recorded
+     * a fill, a push landed), the decision is stale — the write is refused
+     * with a null no-op and the next reconcile pass recomputes fresh drift.
+     */
+    expectedHead: CommitHash | null
     message?: string
-  }): Promise<CommitHash> {
-    const { aliceId, quantityDelta, markPrice, stateAfter } = params
-    const timestamp = new Date().toISOString()
+  }): Promise<CommitHash | null> {
+    return this.withLedgerWriter('record reconcile', async () => {
+      if (this.head !== params.expectedHead) return null
+      const { aliceId, quantityDelta, markPrice, stateAfter } = params
+      const timestamp = new Date().toISOString()
 
-    const qtyStr = quantityDelta.toFixed()
-    const priceStr = markPrice.toFixed()
+      const qtyStr = quantityDelta.toFixed()
+      const priceStr = markPrice.toFixed()
 
-    const operation: Operation = {
-      action: 'reconcileBalance',
-      aliceId,
-      quantityDelta: qtyStr,
-      markPrice: priceStr,
-    }
+      const operation: Operation = {
+        action: 'reconcileBalance',
+        aliceId,
+        quantityDelta: qtyStr,
+        markPrice: priceStr,
+      }
 
-    const result: OperationResult = {
-      action: 'reconcileBalance',
-      success: true,
-      status: 'filled',
-      filledQty: quantityDelta.abs().toFixed(),
-      filledPrice: priceStr,
-    }
+      const result: OperationResult = {
+        action: 'reconcileBalance',
+        success: true,
+        status: 'filled',
+        filledQty: quantityDelta.abs().toFixed(),
+        filledPrice: priceStr,
+      }
 
-    const direction = quantityDelta.gte(0) ? 'observed' : 'released'
-    const message = params.message
-      ?? `reconcile: ${direction} ${quantityDelta.abs().toFixed()} ${aliceId} @ ${priceStr}`
+      const direction = quantityDelta.gte(0) ? 'observed' : 'released'
+      const message = params.message
+        ?? `reconcile: ${direction} ${quantityDelta.abs().toFixed()} ${aliceId} @ ${priceStr}`
 
-    const hash = generateCommitHash({
-      message,
-      operations: [operation],
-      timestamp,
-      parentHash: this.head,
+      const hash = generateCommitHash({
+        message,
+        operations: [operation],
+        timestamp,
+        parentHash: this.head,
+      })
+
+      const commit: GitCommit = {
+        hash,
+        parentHash: this.head,
+        message,
+        operations: [operation],
+        results: [result],
+        stateAfter,
+        timestamp,
+        round: this.currentRound,
+      }
+
+      this.appendCommitDurably(commit)
+
+      return hash
     })
-
-    const commit: GitCommit = {
-      hash,
-      parentHash: this.head,
-      message,
-      operations: [operation],
-      results: [result],
-      stateAfter,
-      timestamp,
-      round: this.currentRound,
-    }
-
-    this.commits.push(commit)
-    this.head = hash
-
-    await this.persistState()
-
-    return hash
   }
 
   /**
@@ -285,159 +685,50 @@ export class TradingGit implements ITradingGit {
    */
   async recordObservedOrders(params: {
     observed: Array<{ contract: Contract; order: Order; orderId: string }>
-    stateAfter: GitState
-  }): Promise<CommitHash> {
-    const { observed, stateAfter } = params
-    const timestamp = new Date().toISOString()
+  }): Promise<{ hash: CommitHash | null; observed: number }> {
+    return this.withLedgerWriter('record observed orders', async () => {
+      const known = this.getKnownOrderIds()
+      const observed = params.observed.filter((entry) => !known.has(entry.orderId))
+      if (observed.length === 0) return { hash: null, observed: 0 }
+      // Snapshot INSIDE the ledger lease: a push finishing between a
+      // caller-captured snapshot and this commit would otherwise persist the
+      // newest commit with stale pending orders.
+      const stateAfter = await this.runMutationPhase(
+        'observed orders state snapshot',
+        this.config.getGitState,
+      )
+      const timestamp = new Date().toISOString()
 
-    const operations: Operation[] = observed.map((o) => ({
-      action: 'observeExternalOrder',
-      contract: o.contract,
-      order: o.order,
-    }))
-    const results: OperationResult[] = observed.map((o) => ({
-      action: 'observeExternalOrder',
-      success: true,
-      orderId: o.orderId,
-      status: 'submitted',
-    }))
+      const operations: Operation[] = observed.map((o) => ({
+        action: 'observeExternalOrder',
+        contract: o.contract,
+        order: o.order,
+      }))
+      const results: OperationResult[] = observed.map((o) => ({
+        action: 'observeExternalOrder',
+        success: true,
+        orderId: o.orderId,
+        status: 'submitted',
+      }))
 
-    const message = `[observed] ${observed.length} external order(s) not placed through Alice`
-    const hash = generateCommitHash({ message, operations, timestamp, parentHash: this.head })
+      const message = `[observed] ${observed.length} external order(s) not placed through Alice`
+      const hash = generateCommitHash({ message, operations, timestamp, parentHash: this.head })
 
-    const commit: GitCommit = {
-      hash,
-      parentHash: this.head,
-      message,
-      operations,
-      results,
-      stateAfter,
-      timestamp,
-      round: this.currentRound,
-    }
+      const commit: GitCommit = {
+        hash,
+        parentHash: this.head,
+        message,
+        operations,
+        results,
+        stateAfter,
+        timestamp,
+        round: this.currentRound,
+      }
 
-    this.commits.push(commit)
-    this.head = hash
+      this.appendCommitDurably(commit)
 
-    await this.persistState()
-
-    return hash
-  }
-
-  /**
-   * Record a manual emergency-stop cancellation pass as one synthetic commit.
-   * These broker calls intentionally bypass stage/commit/push because HALT
-   * makes that pipeline read-only. The commit is still the audit narrative.
-   */
-  async recordEmergencyStop(params: {
-    reason: string
-    cancelOrders: boolean
-    cancellations: Array<{ orderId: string; contract: Contract; order?: Order; result: PlaceOrderResult }>
-    stateAfter: GitState
-    approver?: ApproverIdentity
-  }): Promise<CommitHash> {
-    const timestamp = new Date().toISOString()
-    const { cancellations, stateAfter } = params
-
-    const operations: Operation[] = cancellations.map((c) => ({
-      action: 'emergencyCancelOrder',
-      orderId: c.orderId,
-      contract: c.contract,
-      ...(c.order ? { order: c.order } : {}),
-    }))
-    const results: OperationResult[] = cancellations.map((c) => ({
-      action: 'emergencyCancelOrder',
-      success: c.result.success === true,
-      orderId: c.result.orderId ?? c.orderId,
-      status: c.result.success === true
-        ? (c.result.orderState ? this.mapOrderStatus(c.result.orderState) : 'cancelled')
-        : 'submitted',
-      ...(c.result.orderState ? { orderState: c.result.orderState } : {}),
-      ...(c.result.error ? { error: c.result.error } : {}),
-      raw: c.result,
-    }))
-
-    const cancelled = results.filter((r) => r.success).length
-    const attempted = results.length
-    const message = params.cancelOrders
-      ? `[emergency-stop] HALT; cancelled ${cancelled}/${attempted} open order(s) — ${params.reason}`
-      : `[emergency-stop] HALT; cancelOrders=false — ${params.reason}`
-    const hash = generateCommitHash({ message, operations, results, timestamp, parentHash: this.head })
-
-    const commit: GitCommit = {
-      hash,
-      parentHash: this.head,
-      message,
-      operations,
-      results,
-      stateAfter,
-      timestamp,
-      ...(params.approver ? { approver: params.approver } : {}),
-      round: this.currentRound,
-    }
-
-    this.commits.push(commit)
-    this.head = hash
-
-    await this.persistState()
-
-    return hash
-  }
-
-  /**
-   * Record a manual flatten pass as one synthetic commit. Like
-   * recordEmergencyStop, this is a human-only broker-level escape hatch that
-   * does not enter the guarded trading-as-git execution pipeline.
-   */
-  async recordFlatten(params: {
-    positions: Array<{ position: Position; result: PlaceOrderResult }>
-    stateAfter: GitState
-    approver?: ApproverIdentity
-  }): Promise<CommitHash> {
-    const timestamp = new Date().toISOString()
-    const { positions, stateAfter } = params
-
-    const operations: Operation[] = positions.map(({ position }) => ({
-      action: 'emergencyClosePosition',
-      contract: position.contract,
-      quantity: position.quantity,
-    }))
-    const results: OperationResult[] = positions.map(({ position, result }) => ({
-      action: 'emergencyClosePosition',
-      success: result.success === true,
-      orderId: result.orderId,
-      status: result.success === true
-        ? (result.orderState ? this.mapOrderStatus(result.orderState) : 'filled')
-        : 'rejected',
-      filledQty: position.quantity.abs().toFixed(),
-      ...(result.orderState ? { orderState: result.orderState } : {}),
-      ...(result.error ? { error: result.error } : {}),
-      raw: result,
-    }))
-
-    const closed = results.filter((r) => r.success).length
-    const attempted = results.length
-    const message = `[flatten] closed ${closed}/${attempted} open position(s)`
-    const hash = generateCommitHash({ message, operations, results, timestamp, parentHash: this.head })
-
-    const commit: GitCommit = {
-      hash,
-      parentHash: this.head,
-      message,
-      operations,
-      results,
-      stateAfter,
-      timestamp,
-      ...(params.approver ? { approver: params.approver } : {}),
-      round: this.currentRound,
-    }
-
-    this.commits.push(commit)
-    this.head = hash
-
-    await this.persistState()
-
-    return hash
+      return { hash, observed: observed.length }
+    })
   }
 
   /** Every broker orderId the log has ever seen — observation diffs against this. */
@@ -592,6 +883,7 @@ export class TradingGit implements ITradingGit {
       pendingHash: this.pendingHash,
       head: this.head,
       commitCount: this.commits.length,
+      mutation: this.projectMutationStatus(),
     }
   }
 
@@ -599,32 +891,36 @@ export class TradingGit implements ITradingGit {
   // raw Order instances stay private to staging / push internals, never
   // observed by external callers (UI, MCP, c.json, on-disk commit.json).
   private projectOperation(op: Operation): Operation {
-    if (op.action === 'placeOrder' || op.action === 'observeExternalOrder') {
-      return { ...op, order: OrderHelper.toWire(op.order) as unknown as Order }
+    const projected = TradingGit.cloneOperation(op)
+    if (projected.action === 'placeOrder' || projected.action === 'observeExternalOrder') {
+      return { ...projected, order: OrderHelper.toWire(projected.order) as unknown as Order }
     }
-    if (op.action === 'emergencyCancelOrder') {
-      return op.order ? { ...op, order: OrderHelper.toWire(op.order) as unknown as Order } : op
+    if (projected.action === 'emergencyCancelOrder') {
+      return projected.order
+        ? { ...projected, order: OrderHelper.toWire(projected.order) as unknown as Order }
+        : projected
     }
-    if (op.action === 'modifyOrder') {
-      return { ...op, changes: OrderHelper.toWire(op.changes) as unknown as Partial<Order> }
+    if (projected.action === 'modifyOrder') {
+      return { ...projected, changes: OrderHelper.toWire(projected.changes) as unknown as Partial<Order> }
     }
-    return op
+    return projected
   }
 
   private projectCommit(commit: GitCommit): GitCommit {
-    return { ...commit, operations: commit.operations.map((op) => this.projectOperation(op)) }
+    return {
+      ...commit,
+      operations: commit.operations.map((op) => this.projectOperation(op)),
+      results: commit.results.map((result) => this.sanitizeOperationResult(result)),
+      ...(commit.mutationAudit
+        ? { mutationAudit: JSON.parse(JSON.stringify(commit.mutationAudit)) as GitCommit['mutationAudit'] }
+        : {}),
+    }
   }
 
   // ==================== Serialization ====================
 
   exportState(): GitExportState {
-    return {
-      commits: this.commits.map((c) => this.projectCommit(c)),
-      head: this.head,
-      stagingArea: this.stagingArea.map((op) => this.projectOperation(op)),
-      pendingMessage: this.pendingMessage,
-      pendingHash: this.pendingHash,
-    }
+    return this.buildExportState()
   }
 
   static restore(state: GitExportState, config: TradingGitConfig): TradingGit {
@@ -632,20 +928,18 @@ export class TradingGit implements ITradingGit {
     git.commits = state.commits.map(TradingGit.rehydrateCommit)
     git.head = state.head
     TradingGit.restoreTransientState(git, state)
+    const restoredEnvelope = TradingGit.rehydrateMutationEnvelope(state.mutation)
+    const legacyReviewRequired = state.mutation === undefined
+      && git.stagingArea.length > 0
+      && git.pendingMessage !== null
+      && git.pendingHash !== null
+    // replaceEnvelope normalizes crashed `dispatching` operations to
+    // `uncertain` on every entry — restore gets the quarantine for free.
+    git.mutationCoordinator.replaceEnvelope(
+      restoredEnvelope ?? (legacyReviewRequired ? undefined : { schemaVersion: MUTATION_SCHEMA_VERSION }),
+    )
+    git.legacyReviewRequired = legacyReviewRequired
     return git
-  }
-
-  private emitStateChange(): void {
-    const result = this.config.onCommit?.(this.exportState())
-    if (result) {
-      void Promise.resolve(result).catch((error) => {
-        console.error('[TradingGit] Failed to persist git state after state change', error)
-      })
-    }
-  }
-
-  private async persistState(): Promise<void> {
-    await this.config.onCommit?.(this.exportState())
   }
 
   private static restoreTransientState(git: TradingGit, state: GitExportState): void {
@@ -663,7 +957,7 @@ export class TradingGit implements ITradingGit {
 
     let stagingArea: Operation[]
     try {
-      stagingArea = (state.stagingArea ?? []).map(TradingGit.rehydrateOperation)
+      stagingArea = (state.stagingArea ?? []).map(TradingGit.cloneOperation)
     } catch (error) {
       console.error('[TradingGit] Dropped malformed transient approval state during restore: stagingArea could not be rehydrated', error)
       return
@@ -709,9 +1003,21 @@ export class TradingGit implements ITradingGit {
   private static rehydrateCommit(commit: GitCommit): GitCommit {
     return {
       ...commit,
-      operations: commit.operations.map(TradingGit.rehydrateOperation),
+      operations: commit.operations.map(TradingGit.cloneOperation),
       stateAfter: TradingGit.rehydrateGitState(commit.stateAfter),
     }
+  }
+
+  private static cloneOperation(op: Operation): Operation {
+    let cloneable: Operation = op
+    if (op.action === 'placeOrder' || op.action === 'observeExternalOrder') {
+      cloneable = { ...op, order: OrderHelper.toWire(op.order) as unknown as Order }
+    } else if (op.action === 'emergencyCancelOrder' && op.order) {
+      cloneable = { ...op, order: OrderHelper.toWire(op.order) as unknown as Order }
+    } else if (op.action === 'modifyOrder') {
+      cloneable = { ...op, changes: OrderHelper.toWire(op.changes) as unknown as Partial<Order> }
+    }
+    return TradingGit.rehydrateOperation(JSON.parse(JSON.stringify(cloneable)) as Operation)
   }
 
   private static rehydrateOperation(op: Operation): Operation {
@@ -818,42 +1124,51 @@ export class TradingGit implements ITradingGit {
 
   // ==================== Sync ====================
 
-  async sync(updates: OrderStatusUpdate[], currentState: GitState): Promise<SyncResult> {
+  async sync(updates: OrderStatusUpdate[]): Promise<SyncResult> {
     if (updates.length === 0) {
       return { hash: this.head ?? '', updatedCount: 0, updates: [] }
     }
 
-    const hash = generateCommitHash({
-      updates,
-      timestamp: new Date().toISOString(),
-      parentHash: this.head,
+    return this.withLedgerWriter('sync orders', async () => {
+      const pendingIds = new Set(this.getPendingOrderIds().map((entry) => entry.orderId))
+      const applicable = updates.filter((update) => pendingIds.has(update.orderId))
+      if (applicable.length === 0) {
+        return { hash: this.head ?? '', updatedCount: 0, updates: [] }
+      }
+      // Snapshot INSIDE the ledger lease — see recordObservedOrders.
+      const currentState = await this.runMutationPhase(
+        'sync state snapshot',
+        this.config.getGitState,
+      )
+      const hash = generateCommitHash({
+        updates: applicable,
+        timestamp: new Date().toISOString(),
+        parentHash: this.head,
+      })
+
+      const commit: GitCommit = {
+        hash,
+        parentHash: this.head,
+        message: `[sync] ${applicable.slice(0, 3).map((u) => `${u.symbol} ${u.currentStatus}`).join(', ')}${applicable.length > 3 ? ` +${applicable.length - 3} more` : ''}`,
+        operations: [{ action: 'syncOrders' as const }],
+        results: applicable.map((u) => ({
+          action: 'syncOrders' as const,
+          success: true,
+          orderId: u.orderId,
+          symbol: u.symbol,
+          status: u.currentStatus,
+          filledQty: u.filledQty,
+          filledPrice: u.filledPrice,
+        })),
+        stateAfter: currentState,
+        timestamp: new Date().toISOString(),
+        round: this.currentRound,
+      }
+
+      this.appendCommitDurably(commit)
+
+      return { hash, updatedCount: applicable.length, updates: applicable }
     })
-
-    const commit: GitCommit = {
-      hash,
-      parentHash: this.head,
-      message: `[sync] ${updates.slice(0, 3).map((u) => `${u.symbol} ${u.currentStatus}`).join(', ')}${updates.length > 3 ? ` +${updates.length - 3} more` : ''}`,
-      operations: [{ action: 'syncOrders' as const }],
-      results: updates.map((u) => ({
-        action: 'syncOrders' as const,
-        success: true,
-        orderId: u.orderId,
-        symbol: u.symbol,
-        status: u.currentStatus,
-        filledQty: u.filledQty,
-        filledPrice: u.filledPrice,
-      })),
-      stateAfter: currentState,
-      timestamp: new Date().toISOString(),
-      round: this.currentRound,
-    }
-
-    this.commits.push(commit)
-    this.head = hash
-
-    await this.persistState()
-
-    return { hash, updatedCount: updates.length, updates }
   }
 
   getPendingOrderIds(): Array<{ orderId: string; symbol: string; localSymbol?: string; aliceId?: string }> {
@@ -862,6 +1177,21 @@ export class TradingGit implements ITradingGit {
     // sync row for a leg lives in a newer commit and wins (first-seen-wins
     // over a newest-first scan).
     const orderStatus = new Map<string, string>()
+    const activeAttempt = this.mutationCoordinator.getActiveAttempt()
+
+    // The final broker snapshot is taken before the attempt becomes a commit.
+    // Treat its durable receipts as the newest status so a just-submitted
+    // resting order (and bracket legs) is included in stateAfter.
+    for (const entry of activeAttempt?.operations ?? []) {
+      const result = entry.result
+      if (!result) continue
+      if (result.orderId && !orderStatus.has(result.orderId)) {
+        orderStatus.set(result.orderId, result.status)
+      }
+      for (const leg of result.legs ?? []) {
+        if (!orderStatus.has(leg.orderId)) orderStatus.set(leg.orderId, 'submitted')
+      }
+    }
 
     for (let i = this.commits.length - 1; i >= 0; i--) {
       for (const result of this.commits[i].results) {
@@ -913,6 +1243,30 @@ export class TradingGit implements ITradingGit {
           })
           seen.add(orderId)
         }
+      }
+    }
+
+    for (const entry of activeAttempt?.operations ?? []) {
+      const result = entry.result
+      if (!result) continue
+      const operation = entry.operation
+      const hasContract = 'contract' in operation
+      const symbol = getOperationSymbol(operation)
+      const localSymbol = hasContract ? operation.contract.localSymbol || undefined : undefined
+      const aliceId = hasContract ? operation.contract.aliceId || undefined : undefined
+      const candidates = [
+        ...(result.orderId ? [result.orderId] : []),
+        ...(result.legs ?? []).map((leg) => leg.orderId),
+      ]
+      for (const orderId of candidates) {
+        if (seen.has(orderId) || orderStatus.get(orderId) !== 'submitted') continue
+        pending.push({
+          orderId,
+          symbol,
+          ...(localSymbol ? { localSymbol } : {}),
+          ...(aliceId ? { aliceId } : {}),
+        })
+        seen.add(orderId)
       }
     }
 
@@ -1097,6 +1451,661 @@ export class TradingGit implements ITradingGit {
 
   // ==================== Internal ====================
 
+  /**
+   * Bounded read-only phases (preflight, prepare, snapshots). Broker DISPATCH
+   * never goes through here — it uses runBrokerDispatch, whose timeout
+   * registers the orphaned call instead of silently dropping it.
+   */
+  private async runMutationPhase<T>(phase: string, task: () => Promise<T>): Promise<T> {
+    const timeoutMs = this.mutationTimeoutMs()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`${phase} timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
+      timer.unref?.()
+    })
+
+    try {
+      return await Promise.race([Promise.resolve().then(task), timeout])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  private hasLegacyPending(): boolean {
+    return this.legacyReviewRequired
+      && this.stagingArea.length > 0
+      && this.pendingMessage !== null
+      && this.pendingHash !== null
+  }
+
+  private isAuthenticatedHumanApprover(approver: ApproverIdentity | undefined): boolean {
+    return approver?.via === 'alice-bff' && Boolean(approver.fingerprint)
+  }
+
+  private assertLedgerWriteAllowed(operation: string): void {
+    this.mutationCoordinator.assertLedgerWriteAllowed(operation)
+  }
+
+  private withLedgerWriter<T>(operation: string, task: () => Promise<T>): Promise<T> {
+    return this.mutationCoordinator.withLease({
+      hasLegacyPending: this.hasLegacyPending(),
+      operation,
+    }, task)
+  }
+
+  private projectMutationStatus(): NonNullable<GitStatus['mutation']> {
+    return this.mutationCoordinator.getStatus(this.hasLegacyPending())
+  }
+
+  private buildExportState(overrides: ExportStateOverrides = {}): GitExportState {
+    const hasMutationOverride = Object.prototype.hasOwnProperty.call(overrides, 'mutation')
+    const mutation = hasMutationOverride
+      ? overrides.mutation
+      : this.mutationCoordinator.getEnvelope()
+    const commits = overrides.commits ?? this.commits
+    const head = Object.prototype.hasOwnProperty.call(overrides, 'head') ? overrides.head! : this.head
+    const stagingArea = overrides.stagingArea ?? this.stagingArea
+    const pendingMessage = Object.prototype.hasOwnProperty.call(overrides, 'pendingMessage')
+      ? overrides.pendingMessage!
+      : this.pendingMessage
+    const pendingHash = Object.prototype.hasOwnProperty.call(overrides, 'pendingHash')
+      ? overrides.pendingHash!
+      : this.pendingHash
+
+    return {
+      commits: commits.map((commit) => this.projectCommit(commit)),
+      head,
+      stagingArea: stagingArea.map((operation) => this.projectOperation(operation)),
+      pendingMessage,
+      pendingHash,
+      ...(mutation ? { mutation: this.projectMutationEnvelope(mutation) } : {}),
+    }
+  }
+
+  private projectMutationEnvelope(envelope: MutationEnvelope): MutationEnvelope {
+    if (envelope.schemaVersion !== MUTATION_SCHEMA_VERSION) {
+      return JSON.parse(JSON.stringify(envelope)) as MutationEnvelope
+    }
+    const activeAttempt = envelope.activeAttempt as MutationAttemptV1 | undefined
+    if (!activeAttempt) return { schemaVersion: MUTATION_SCHEMA_VERSION }
+    const projected: MutationEnvelope = {
+      schemaVersion: MUTATION_SCHEMA_VERSION,
+      activeAttempt: {
+        ...activeAttempt,
+        operations: activeAttempt.operations.map((entry) => ({
+          ...entry,
+          operation: this.projectOperation(entry.operation),
+          ...(entry.result ? { result: this.sanitizeOperationResult(entry.result) } : {}),
+        })),
+        ...(activeAttempt.suspendedApproval ? {
+          suspendedApproval: {
+            ...activeAttempt.suspendedApproval,
+            operations: activeAttempt.suspendedApproval.operations.map((operation) =>
+              this.projectOperation(operation)),
+          },
+        } : {}),
+      },
+    }
+    return JSON.parse(JSON.stringify(projected)) as MutationEnvelope
+  }
+
+  /**
+   * The single durability boundary: synchronous, throwing, never thenable.
+   * If the persister returns a Promise, durability is deferred past the point
+   * this method returns — memory can no longer be trusted, so the coordinator
+   * is poisoned exactly as for a thrown persistence error.
+   */
+  private persistCandidate(overrides: ExportStateOverrides): void {
+    try {
+      const result = this.config.onCommit?.(this.buildExportState(overrides)) as unknown
+      if (result !== null && typeof result === 'object' && typeof (result as PromiseLike<unknown>).then === 'function') {
+        throw new Error(
+          'TradingGit persister must be synchronous: onCommit returned a thenable, so the write '
+          + 'may complete after broker dispatch. Persistence state is now unknown; restart required.',
+        )
+      }
+    } catch (error) {
+      this.handlePersistenceFailure(error, overrides.mutation)
+      throw error
+    }
+  }
+
+  private handlePersistenceFailure(error: unknown, candidateEnvelope?: MutationEnvelope): void {
+    this.mutationCoordinator.poison(error)
+    const candidateAttempt = candidateEnvelope?.schemaVersion === MUTATION_SCHEMA_VERSION
+      ? candidateEnvelope.activeAttempt as MutationAttemptV1 | undefined
+      : undefined
+    const attempt = candidateAttempt ?? this.mutationCoordinator.getActiveAttempt()
+    // Deliberately no error.message here: persister errors can embed arbitrary
+    // context (paths, URLs, upstream SDK payloads). Log stable classification
+    // fields only; the full error propagates to the caller for handling.
+    console.error('[TradingGit] CRITICAL mutation persistence failure', {
+      accountId: this.config.accountId ?? 'unknown',
+      pendingHash: attempt?.hash ?? this.pendingHash ?? undefined,
+      attemptId: attempt?.attemptId ?? undefined,
+      recovery: 'restart-and-resolve-before-any-further-write',
+      errorName: error instanceof Error ? error.name : typeof error,
+      errorCode: error && typeof error === 'object' && 'code' in error
+        ? String((error as { code: unknown }).code)
+        : undefined,
+    })
+  }
+
+  private appendCommitDurably(commit: GitCommit): void {
+    const commits = [...this.commits, commit]
+    this.persistCandidate({ commits, head: commit.hash })
+    this.commits = commits
+    this.head = commit.hash
+  }
+
+  private createAttempt(params: {
+    kind: MutationAttemptKind
+    hash: CommitHash
+    message: string
+    operations: Operation[]
+    approver?: ApproverIdentity
+    context?: MutationAttemptV1['context']
+    suspendedApproval?: MutationAttemptV1['suspendedApproval']
+  }): MutationAttemptV1 {
+    const now = new Date().toISOString()
+    const attemptId = randomUUID()
+    return {
+      attemptId,
+      kind: params.kind,
+      hash: params.hash,
+      message: params.message,
+      approver: params.approver ? cloneJson(params.approver) : { via: 'loopback', at: now },
+      createdAt: now,
+      updatedAt: now,
+      ...(params.context ? { context: cloneJson(params.context) } : {}),
+      // Ownership boundary: everything stored in the durable attempt is a
+      // private copy. A caller (or the broker) mutating its own objects after
+      // this point cannot rewrite the recorded intent or finalized audit.
+      operations: params.operations.map((operation, index) => ({
+        operationId: `${attemptId}:${index}`,
+        index,
+        operation: TradingGit.cloneOperation(operation),
+        state: 'prepared',
+        updatedAt: now,
+      })),
+      ...(params.suspendedApproval ? {
+        suspendedApproval: {
+          operations: params.suspendedApproval.operations.map(TradingGit.cloneOperation),
+          message: params.suspendedApproval.message,
+          hash: params.suspendedApproval.hash,
+        },
+      } : {}),
+    }
+  }
+
+  private updateAttemptOperations(
+    attempt: MutationAttemptV1,
+    update: (operation: MutationOperationV1) => MutationOperationV1,
+  ): MutationAttemptV1 {
+    const updatedAt = new Date().toISOString()
+    return {
+      ...attempt,
+      updatedAt,
+      operations: attempt.operations.map((operation) => {
+        const updated = update(operation)
+        return updated === operation ? operation : { ...updated, updatedAt }
+      }),
+    }
+  }
+
+  private persistAttempt(
+    attempt: MutationAttemptV1,
+    options: { clearLegacyApproval: boolean },
+  ): void {
+    const envelope: MutationEnvelope = {
+      schemaVersion: MUTATION_SCHEMA_VERSION,
+      activeAttempt: attempt,
+    }
+    const overrides: ExportStateOverrides = {
+      mutation: envelope,
+      ...(options.clearLegacyApproval ? {
+        stagingArea: [],
+        pendingMessage: null,
+        pendingHash: null,
+      } : {}),
+    }
+    try {
+      this.persistCandidate(overrides)
+    } catch (error) {
+      throw new MutationRecoveryRequiredError(
+        attempt.attemptId,
+        `Failed to durably persist mutation ${attempt.attemptId}: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+      )
+    }
+    this.mutationCoordinator.replaceEnvelope(envelope)
+    if (options.clearLegacyApproval) {
+      this.stagingArea = []
+      this.pendingMessage = null
+      this.pendingHash = null
+    }
+  }
+
+  private async executePreparedMutation(params: PreparedMutationParams): Promise<PushResult> {
+    let attempt = this.createAttempt(params)
+    this.persistAttempt(attempt, { clearLegacyApproval: true })
+
+    for (const prepared of attempt.operations) {
+      attempt = this.transitionAttemptOperation(attempt, prepared.index, {
+        state: 'dispatching',
+        result: undefined,
+        evidence: { type: 'durable-before-broker-dispatch' },
+        error: undefined,
+      })
+
+      const operation = attempt.operations[prepared.index].operation
+      // The broker receives its own copy: venue SDKs mutate the objects they
+      // are handed (e.g. assigning orderId onto the Order), which must never
+      // rewrite the durable attempt record.
+      const dispatchOperation = TradingGit.cloneOperation(operation)
+      let terminal: Pick<MutationOperationV1, 'state' | 'result' | 'evidence' | 'error'>
+      try {
+        const raw = await this.runBrokerDispatch(
+          attempt,
+          attempt.operations[prepared.index].operationId,
+          params.kind,
+          () => params.execute(dispatchOperation),
+        )
+        terminal = this.classifyMutationOutcome(operation, raw)
+      } catch (error) {
+        terminal = this.classifyMutationError(operation, error)
+      }
+
+      attempt = this.transitionAttemptOperation(attempt, prepared.index, terminal)
+      if (terminal.state === 'uncertain') {
+        throw new MutationRecoveryRequiredError(
+          attempt.attemptId,
+          `Broker acceptance is uncertain for mutation attempt ${attempt.attemptId}; human resolution is required`,
+        )
+      }
+    }
+
+    let stateAfter: GitState
+    try {
+      stateAfter = await this.runMutationPhase('mutation final snapshot', this.config.getGitState)
+    } catch (error) {
+      if (attempt.operations.length === 0) {
+        // Zero-operation attempts (HALT-only emergency stop, flatten with no
+        // positions) made no venue call — there is nothing uncertain to
+        // quarantine. Blocking here would turn an unreachable broker into a
+        // recovery lockout for the containment action itself. Fall back to
+        // the last known snapshot and finalize with a degraded-state marker.
+        this.finalizeAttempt(attempt, this.lastKnownGitState(), undefined, undefined, {
+          stateAfterDegraded: true,
+        })
+        return {
+          hash: attempt.hash,
+          message: attempt.message,
+          operationCount: 0,
+          submitted: [],
+          rejected: [],
+        }
+      }
+      throw new MutationRecoveryRequiredError(
+        attempt.attemptId,
+        `Mutation ${attempt.attemptId} has durable outcomes but final state snapshot failed: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+      )
+    }
+
+    this.finalizeAttempt(attempt, stateAfter)
+    const results = attempt.operations.map((entry) => this.resultForMutationEntry(entry))
+    return {
+      hash: attempt.hash,
+      message: attempt.message,
+      operationCount: attempt.operations.length,
+      submitted: results.filter((result) => result.success),
+      rejected: results.filter((result) => !result.success),
+    }
+  }
+
+  /**
+   * Run a broker dispatch under the configured timeout WITHOUT pretending the
+   * timeout cancels anything. On timeout the still-pending Promise is
+   * registered as an orphaned dispatch: the coordinator refuses resolution
+   * and any further mutation IN THIS PROCESS until a real restart — even if
+   * the orphaned call later settles (its outcome is still durably recorded as
+   * evidence for the post-restart human decision).
+   */
+  private async runBrokerDispatch(
+    attempt: MutationAttemptV1,
+    operationId: string,
+    kind: string,
+    task: () => Promise<unknown>,
+  ): Promise<unknown> {
+    const timeoutMs = this.mutationTimeoutMs()
+    const taskPromise = Promise.resolve().then(task)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeoutSentinel: unique symbol = Symbol('dispatch-timeout')
+    const timeout = new Promise<typeof timeoutSentinel>((resolve) => {
+      timer = setTimeout(() => resolve(timeoutSentinel), timeoutMs)
+      timer.unref?.()
+    })
+
+    let raw: unknown
+    try {
+      raw = await Promise.race([taskPromise, timeout])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+    if (raw !== timeoutSentinel) return raw
+
+    this.trackOrphanedDispatch(attempt.attemptId, operationId, taskPromise)
+    throw new DispatchTimeoutError(
+      `${kind} broker dispatch timed out after ${timeoutMs}ms; the venue request was NOT cancelled and may still take effect`,
+    )
+  }
+
+  private trackOrphanedDispatch(
+    attemptId: string,
+    operationId: string,
+    taskPromise: Promise<unknown>,
+  ): void {
+    this.mutationCoordinator.registerOrphanedDispatch({ attemptId, operationId })
+    const settle = (outcome: { ok: true; raw: unknown } | { ok: false; error: unknown }): void => {
+      void this.recordLateDispatchOutcome(attemptId, operationId, outcome)
+        .finally(() => this.mutationCoordinator.settleOrphanedDispatch(operationId))
+    }
+    taskPromise.then(
+      (value) => settle({ ok: true, raw: value }),
+      (error) => settle({ ok: false, error }),
+    )
+  }
+
+  /**
+   * A timed-out dispatch settled after all. Its outcome is real evidence
+   * (success = the venue accepted; typed local refusal = it never left), so
+   * record it durably on the still-quarantined attempt. This does NOT lift
+   * the restart requirement — the barrier is latched for the process
+   * lifetime; the evidence exists for the post-restart human decision.
+   */
+  private async recordLateDispatchOutcome(
+    attemptId: string,
+    operationId: string,
+    outcome: { ok: true; raw: unknown } | { ok: false; error: unknown },
+  ): Promise<void> {
+    try {
+      await this.mutationCoordinator.withLease({
+        allowActiveAttempt: true,
+        orphanBarrierExempt: true,
+        hasLegacyPending: this.hasLegacyPending(),
+        operation: 'record late broker outcome',
+      }, async () => {
+        const active = this.mutationCoordinator.getActiveAttempt()
+        if (!active || active.attemptId !== attemptId) return
+        const entry = active.operations.find((op) => op.operationId === operationId)
+        if (!entry || entry.state !== 'uncertain') return
+        const base = outcome.ok
+          ? this.classifyMutationOutcome(entry.operation, outcome.raw)
+          : this.classifyMutationError(entry.operation, outcome.error)
+        const next = this.updateAttemptOperations(active, (op) =>
+          op.operationId === operationId
+            ? {
+                ...op,
+                ...base,
+                evidence: {
+                  type: 'late-broker-outcome',
+                  settledState: base.state,
+                  inner: base.evidence,
+                },
+              }
+            : op)
+        this.persistAttempt(next, { clearLegacyApproval: true })
+      })
+    } catch (error) {
+      console.error('[TradingGit] failed to durably record a late broker outcome; quarantine holds', {
+        accountId: this.config.accountId ?? 'unknown',
+        attemptId,
+        operationId,
+        errorName: error instanceof Error ? error.name : typeof error,
+      })
+    }
+  }
+
+  private mutationTimeoutMs(): number {
+    const configured = this.config.mutationTimeoutMs
+    return configured !== undefined && Number.isFinite(configured) && configured > 0
+      ? configured
+      : DEFAULT_MUTATION_TIMEOUT_MS
+  }
+
+  private transitionAttemptOperation(
+    attempt: MutationAttemptV1,
+    index: number,
+    transition: Pick<MutationOperationV1, 'state' | 'result' | 'evidence' | 'error'>,
+  ): MutationAttemptV1 {
+    const current = this.mutationCoordinator.getActiveAttempt()
+    if (!current || current.attemptId !== attempt.attemptId) {
+      throw new MutationRecoveryRequiredError(attempt.attemptId, 'Active mutation attempt changed unexpectedly')
+    }
+    const next = this.updateAttemptOperations(current, (entry) =>
+      entry.index === index ? { ...entry, ...transition } : entry)
+    this.persistAttempt(next, { clearLegacyApproval: true })
+    return next
+  }
+
+  private classifyMutationOutcome(
+    operation: Operation,
+    raw: unknown,
+  ): Pick<MutationOperationV1, 'state' | 'result' | 'evidence' | 'error'> {
+    const parsed = this.sanitizeOperationResult(this.parseOperationResult(operation, raw))
+    if (hasLocalNoDispatchProof(raw)) {
+      return {
+        state: 'definitely_rejected',
+        result: parsed,
+        evidence: { type: 'typed-local-no-dispatch-proof' },
+        error: parsed.error,
+      }
+    }
+    if (parsed.success) {
+      return {
+        state: 'confirmed',
+        result: parsed,
+        evidence: { type: 'broker-success-receipt' },
+        error: undefined,
+      }
+    }
+
+    return {
+      state: 'uncertain',
+      result: { ...parsed, status: 'uncertain' },
+      evidence: { type: 'broker-failure-without-nonacceptance-proof' },
+      error: parsed.error ?? 'Broker acceptance is unknown',
+    }
+  }
+
+  private classifyMutationError(
+    operation: Operation,
+    error: unknown,
+  ): Pick<MutationOperationV1, 'state' | 'result' | 'evidence' | 'error'> {
+    const message = error instanceof Error ? error.message : String(error)
+    const guardVerdicts = extractGuardVerdicts(error)
+    const result: OperationResult = {
+      action: operation.action,
+      success: false,
+      status: hasLocalNoDispatchProof(error) ? 'rejected' : 'uncertain',
+      error: message,
+      ...(guardVerdicts ? { guardVerdicts } : {}),
+    }
+    if (hasLocalNoDispatchProof(error)) {
+      return {
+        state: 'definitely_rejected',
+        result,
+        evidence: { type: 'typed-local-no-dispatch-error' },
+        error: message,
+      }
+    }
+    return {
+      state: 'uncertain',
+      result,
+      evidence: {
+        type: error instanceof DispatchTimeoutError
+          ? 'dispatch-timeout-orphaned'
+          : 'unclassified-dispatch-error',
+      },
+      error: message,
+    }
+  }
+
+  private resultForMutationEntry(entry: MutationOperationV1): OperationResult {
+    return entry.result ?? {
+      action: entry.operation.action,
+      success: false,
+      status: entry.state === 'uncertain' ? 'uncertain' : 'rejected',
+      error: entry.error ?? `Mutation ended in ${entry.state}`,
+    }
+  }
+
+  private sanitizeOperationResult(result: OperationResult): OperationResult {
+    const { raw: _raw, execution, orderState: rawOrderState, legs: rawLegs, ...safe } = result
+    const receipt = sanitizeExecutionReceipt(execution)
+    const orderState = sanitizeOrderState(rawOrderState)
+    const legs = sanitizeLegs(rawLegs)
+    return {
+      ...safe,
+      ...(receipt ? { execution: receipt } : {}),
+      ...(orderState ? { orderState } : {}),
+      ...(legs ? { legs } : {}),
+      ...(safe.guardVerdicts ? {
+        guardVerdicts: safe.guardVerdicts.map((verdict) => ({
+          ...verdict,
+          ...(verdict.metrics ? { metrics: { ...verdict.metrics } } : {}),
+        })),
+      } : {}),
+    }
+  }
+
+  /** Most recent durable snapshot, for degraded zero-operation finalization. */
+  private lastKnownGitState(): GitState {
+    const last = this.commits[this.commits.length - 1]
+    if (last) return TradingGit.rehydrateGitState(cloneJson(last.stateAfter))
+    return {
+      netLiquidation: '0',
+      totalCashValue: '0',
+      unrealizedPnL: '0',
+      realizedPnL: '0',
+      positions: [],
+      pendingOrders: [],
+    }
+  }
+
+  private finalizeAttempt(
+    attempt: MutationAttemptV1,
+    stateAfter: GitState,
+    approverOverride?: ApproverIdentity,
+    resolution?: { action: ResolveMutationParams['action']; reason: string },
+    options: { stateAfterDegraded?: boolean } = {},
+  ): void {
+    const active = this.mutationCoordinator.getActiveAttempt()
+    if (!active || active.attemptId !== attempt.attemptId) {
+      throw new MutationRecoveryRequiredError(attempt.attemptId, 'Mutation finalization lost its active attempt')
+    }
+
+    const suspended = attempt.suspendedApproval
+    const supersededOperations = suspended?.operations ?? []
+    const supersededResults: OperationResult[] = supersededOperations.map((operation) => ({
+      action: operation.action,
+      success: false,
+      status: 'user-rejected',
+      error: `Superseded by ${attempt.kind} before broker dispatch`,
+    }))
+    const commit: GitCommit = {
+      hash: attempt.hash,
+      parentHash: this.head,
+      message: resolution
+        ? `${attempt.message} [resolved:${resolution.action}] ${resolution.reason}`
+        : attempt.message,
+      operations: [
+        ...attempt.operations.map((entry) => entry.operation),
+        ...supersededOperations,
+      ],
+      results: [
+        ...attempt.operations.map((entry) => this.resultForMutationEntry(entry)),
+        ...supersededResults,
+      ],
+      stateAfter,
+      timestamp: new Date().toISOString(),
+      approver: cloneJson(approverOverride ?? attempt.approver),
+      mutationAudit: {
+        schemaVersion: MUTATION_SCHEMA_VERSION,
+        attemptId: attempt.attemptId,
+        kind: attempt.kind,
+        message: attempt.message,
+        operationCount: attempt.operations.length,
+        initiator: cloneJson(attempt.approver),
+        ...(options.stateAfterDegraded ? { stateAfterDegraded: true as const } : {}),
+        ...(attempt.context ? { context: cloneJson(attempt.context) } : {}),
+        ...(suspended ? {
+          supersededApproval: {
+            hash: suspended.hash,
+            message: suspended.message,
+            operationCount: suspended.operations.length,
+          },
+        } : {}),
+        resolutions: cloneJson(attempt.resolutions ?? []),
+      },
+      round: this.currentRound,
+    }
+    const commits = [...this.commits, commit]
+    const finalEnvelope: MutationEnvelope = { schemaVersion: MUTATION_SCHEMA_VERSION }
+
+    try {
+      this.persistCandidate({
+        commits,
+        head: commit.hash,
+        stagingArea: [],
+        pendingMessage: null,
+        pendingHash: null,
+        mutation: finalEnvelope,
+      })
+    } catch (error) {
+      throw new MutationRecoveryRequiredError(
+        attempt.attemptId,
+        `Failed to durably finalize mutation ${attempt.attemptId}: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+      )
+    }
+
+    this.commits = commits
+    this.head = commit.hash
+    this.stagingArea = []
+    this.pendingMessage = null
+    this.pendingHash = null
+    this.mutationCoordinator.replaceEnvelope(finalEnvelope)
+    this.legacyReviewRequired = false
+  }
+
+  private static rehydrateMutationEnvelope(
+    envelope: GitExportState['mutation'],
+  ): GitExportState['mutation'] {
+    if (!envelope || envelope.schemaVersion !== MUTATION_SCHEMA_VERSION) return envelope
+    const activeAttempt = envelope.activeAttempt as MutationAttemptV1 | undefined
+    if (!activeAttempt) return envelope
+    return {
+      schemaVersion: MUTATION_SCHEMA_VERSION,
+      activeAttempt: {
+        ...activeAttempt,
+        operations: activeAttempt.operations.map((entry) => ({
+          ...entry,
+          operation: TradingGit.cloneOperation(entry.operation),
+        })),
+        ...(activeAttempt.suspendedApproval ? {
+          suspendedApproval: {
+            ...activeAttempt.suspendedApproval,
+            operations: activeAttempt.suspendedApproval.operations.map(TradingGit.cloneOperation),
+          },
+        } : {}),
+      },
+    }
+  }
+
   private parseOperationResult(op: Operation, raw: unknown): OperationResult {
     const rawObj = raw as Record<string, unknown>
 
@@ -1124,16 +2133,35 @@ export class TradingGit implements ITradingGit {
       }
     }
 
-    const orderId = rawObj.orderId as string | undefined
-    const orderState = rawObj.orderState as OperationResult['orderState']
-    const legs = rawObj.legs as OperationResult['legs']
+    const orderId = decimalReceiptString(rawObj.orderId)
+    // Sanitize at intake — the raw broker orderState/legs shapes never enter
+    // an OperationResult, even transiently.
+    const orderState = sanitizeOrderState(rawObj.orderState)
+    const legs = sanitizeLegs(rawObj.legs)
+    const execution = sanitizeExecutionReceipt(rawObj.execution)
+    const filledQty = decimalReceiptString(rawObj.filledQty)
+      ?? decimalReceiptString(rawObj.filledQuantity)
+      ?? execution?.shares
+      ?? execution?.cumQty
+    const filledPrice = decimalReceiptString(rawObj.filledPrice)
+      ?? decimalReceiptString(execution?.price)
+      ?? decimalReceiptString(execution?.avgPrice)
+
+    const fallbackStatus: OperationStatus = op.action === 'emergencyCancelOrder'
+      ? 'cancelled'
+      : op.action === 'emergencyClosePosition'
+        ? 'filled'
+        : this.mapOrderStatus(orderState)
 
     return {
       action: op.action,
       success: true,
-      orderId,
-      status: this.mapOrderStatus(orderState),
+      orderId: orderId ?? (op.action === 'emergencyCancelOrder' ? op.orderId : undefined),
+      status: orderState ? this.mapOrderStatus(orderState) : fallbackStatus,
       orderState,
+      ...(execution ? { execution } : {}),
+      ...(filledQty ? { filledQty } : {}),
+      ...(filledPrice ? { filledPrice } : {}),
       ...(Array.isArray(legs) && legs.length > 0 ? { legs } : {}),
       ...(guardVerdicts ? { guardVerdicts } : {}),
       raw,

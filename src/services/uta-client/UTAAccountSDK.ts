@@ -272,15 +272,27 @@ export class UTAAccountSDK {
 
   // ==================== Write / lifecycle (existing routes) ====================
 
-  async push(): Promise<PushResult> {
+  /**
+   * `expectedHash` is REQUIRED: it must be the pending hash the caller
+   * actually reviewed. Re-fetching "whatever is pending now" here would
+   * reintroduce the approve-A-dispatch-B TOCTOU this parameter closes —
+   * UTA refuses the push if the pending approval changed in between.
+   */
+  async push(expectedHash: string): Promise<PushResult> {
     this.assertVenueWritable()
-    return this.client.post<PushResult>(`/api/trading/uta/${encodeURIComponent(this.id)}/wallet/push`)
+    if (!expectedHash) throw new Error('push requires the reviewed pending approval hash')
+    return this.client.post<PushResult>(
+      `/api/trading/uta/${encodeURIComponent(this.id)}/wallet/push`,
+      { expectedHash },
+    )
   }
 
-  reject(reason?: string): Promise<RejectResult> {
+  /** Same contract as push(): the hash the caller reviewed, never re-fetched. */
+  async reject(expectedHash: string, reason?: string): Promise<RejectResult> {
+    if (!expectedHash) throw new Error('reject requires the reviewed pending approval hash')
     return this.client.post<RejectResult>(
       `/api/trading/uta/${encodeURIComponent(this.id)}/wallet/reject`,
-      reason !== undefined ? { reason } : undefined,
+      { expectedHash, ...(reason !== undefined ? { reason } : {}) },
     )
   }
 

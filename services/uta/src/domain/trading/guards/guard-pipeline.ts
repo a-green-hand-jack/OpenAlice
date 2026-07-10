@@ -10,6 +10,38 @@ import type { GuardVerdict, Operation } from '../git/types.js'
 import type { IBroker } from '../brokers/types.js'
 import type { OperationGuard, GuardContext, GuardEvaluation } from './types.js'
 
+/**
+ * Internal proof that a result was produced before the broker dispatcher was
+ * invoked. Generic `{ success: false }` broker responses do not carry this
+ * marker and therefore cannot be mistaken for proof of non-acceptance.
+ */
+export const NO_BROKER_DISPATCH = Symbol('openalice.no-broker-dispatch')
+
+export interface LocalNoDispatchProof {
+  noDispatchProof: typeof NO_BROKER_DISPATCH
+}
+
+export class LocalNoDispatchError extends Error implements LocalNoDispatchProof {
+  readonly noDispatchProof: typeof NO_BROKER_DISPATCH = NO_BROKER_DISPATCH
+}
+
+/** Mark a controlled local refusal without making the marker JSON-visible. */
+export function markNoBrokerDispatch<T extends object>(value: T): T & LocalNoDispatchProof {
+  Object.defineProperty(value, 'noDispatchProof', {
+    value: NO_BROKER_DISPATCH,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  })
+  return value as T & LocalNoDispatchProof
+}
+
+export function hasLocalNoDispatchProof(value: unknown): value is LocalNoDispatchProof {
+  return typeof value === 'object'
+    && value !== null
+    && (value as Partial<LocalNoDispatchProof>).noDispatchProof === NO_BROKER_DISPATCH
+}
+
 export function createGuardPipeline(
   dispatcher: (op: Operation) => Promise<unknown>,
   account: IBroker,
@@ -41,11 +73,11 @@ export function createGuardPipeline(
             reason: 'not evaluated after earlier guard rejection',
           })
         }
-        return {
+        return markNoBrokerDispatch({
           success: false,
           error: `[guard:${guard.name}] ${verdict.reason}`,
           guardVerdicts,
-        }
+        })
       }
     }
 

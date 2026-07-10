@@ -251,11 +251,39 @@ describe('UTA — sub-account write disambiguation', () => {
 
     uta.stagePlaceOrder(placeParams('spot'))
     expect(uta.commit('first').message).toBe('first [sub:spot]')
+    await uta.reject('finish first approval cycle')
 
     // Second cycle: the tracker was cleared by the first commit, so this stamps
     // only its own sub-account (not 'first's leftover 'spot' duplicated).
     uta.stagePlaceOrder(placeParams('spot'))
     expect(uta.commit('second').message).toBe('second [sub:spot]')
+  })
+
+  it('does not retain a sub-account tag when git staging rejects the operation', async () => {
+    const { uta } = createUTA(multiSubBroker())
+    await uta.listSubAccounts()
+    uta.stagePlaceOrder(placeParams('spot'))
+    uta.commit('first approval')
+
+    expect(() => uta.stagePlaceOrder(placeParams('spot'))).toThrow(/pending approval already exists/i)
+    await uta.reject('clear first approval')
+    uta.stageCancelOrder({ orderId: 'unrelated-order' })
+
+    expect(uta.commit('cancel unrelated order').message).toBe('cancel unrelated order')
+  })
+
+  it('clears transient sub-account intent when a synthetic risk action supersedes staging', async () => {
+    const { uta } = createUTA(multiSubBroker())
+    await uta.listSubAccounts()
+    uta.stagePlaceOrder(placeParams('spot'))
+
+    await uta.emergencyCancelAllOpenOrders({
+      reason: 'operator halted before approval',
+      cancelOrders: false,
+    })
+    uta.stageCancelOrder({ orderId: 'after-halt' })
+
+    expect(uta.commit('cancel after halt').message).toBe('cancel after halt')
   })
 })
 
@@ -345,15 +373,20 @@ describe('UTA — operation dispatch', () => {
 
       uta.git.add({ action: 'placeOrder', contract, order })
       uta.git.commit('buy AAPL')
-      const result = await uta.push()
-
-      expect(result.rejected).toHaveLength(1)
+      await expect(uta.push()).rejects.toThrow(/acceptance is uncertain/i)
+      expect(uta.status().mutation?.activeAttempt?.operations[0]).toMatchObject({
+        state: 'uncertain',
+        error: 'Insufficient funds',
+      })
     })
   })
 
   describe('closePosition', () => {
     it('calls broker.closePosition with contract and qty', async () => {
-      const spy = vi.spyOn(broker, 'closePosition')
+      const spy = vi.spyOn(broker, 'closePosition').mockResolvedValue({
+        success: true,
+        orderId: 'partial-close-1',
+      })
       const contract = makeContract({ symbol: 'AAPL' })
       uta.git.add({ action: 'closePosition', contract, quantity: new Decimal(5) })
       uta.git.commit('partial close AAPL')
@@ -366,7 +399,10 @@ describe('UTA — operation dispatch', () => {
     })
 
     it('passes undefined qty for full close', async () => {
-      const spy = vi.spyOn(broker, 'closePosition')
+      const spy = vi.spyOn(broker, 'closePosition').mockResolvedValue({
+        success: true,
+        orderId: 'full-close-1',
+      })
       const contract = makeContract({ symbol: 'AAPL' })
       uta.git.add({ action: 'closePosition', contract })
       uta.git.commit('close AAPL')
@@ -397,7 +433,10 @@ describe('UTA — operation dispatch', () => {
 
   describe('modifyOrder', () => {
     it('calls broker.modifyOrder with orderId and changes', async () => {
-      const spy = vi.spyOn(broker, 'modifyOrder')
+      const spy = vi.spyOn(broker, 'modifyOrder').mockResolvedValue({
+        success: true,
+        orderId: 'ord-123',
+      })
       const changes: Partial<Order> = { lmtPrice: 155, totalQuantity: new Decimal(20) } as any
       uta.git.add({ action: 'modifyOrder', orderId: 'ord-123', changes })
       uta.git.commit('modify order')
@@ -406,7 +445,7 @@ describe('UTA — operation dispatch', () => {
       expect(spy).toHaveBeenCalledTimes(1)
       const [orderId, passedChanges] = spy.mock.calls[0]
       expect(orderId).toBe('ord-123')
-      expect(passedChanges.lmtPrice).toBe(155)
+      expect(new Decimal(passedChanges.lmtPrice as Decimal.Value).toFixed()).toBe('155')
     })
   })
 })
@@ -427,8 +466,14 @@ describe('UTA — getState', () => {
 
     // Push a limit order to create a pending entry in git history
     uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'LMT', totalQuantity: '5', lmtPrice: '145' })
-    uta.commit('limit buy')
+    const prepared = uta.commit('limit buy')
     await uta.push()
+
+    // The final mutation snapshot is captured before the attempt is appended
+    // as a commit. Its durable receipt must still make this new resting order
+    // queryable, otherwise stateAfter silently omits the just-created order.
+    expect(uta.show(prepared.hash)?.stateAfter.pendingOrders).toHaveLength(1)
+    expect(uta.show(prepared.hash)?.stateAfter.pendingOrders[0].orderState.status).toBe('Submitted')
 
     const state = await uta.getState()
 
@@ -467,6 +512,32 @@ describe('UTA — getState', () => {
     const state = await uta.getState()
 
     expect(state.pendingOrders).toHaveLength(0)
+  })
+
+  it('keeps account and wallet-position reads available for an unknown future mutation schema', async () => {
+    const broker = new MockBroker()
+    broker.setPositions([makePosition({
+      avgCostSource: 'wallet',
+      quantity: new Decimal(2),
+      avgCost: '150',
+      marketPrice: '155',
+    })])
+    const savedState = {
+      commits: [],
+      head: null,
+      stagingArea: [],
+      pendingMessage: null,
+      pendingHash: null,
+      mutation: { schemaVersion: 99, activeAttempt: { opaque: true } },
+    } as never
+    const { uta } = createUTA(broker, { savedState })
+
+    await expect(uta.getPositions()).resolves.toHaveLength(1)
+    await expect(uta.getAccount()).resolves.toMatchObject({ unrealizedPnL: expect.any(String) })
+    expect(uta.status()).toMatchObject({
+      commitCount: 0,
+      mutation: { schemaVersion: 99, readiness: 'unsupported_schema', downgradeBlocked: true },
+    })
   })
 })
 
@@ -1814,5 +1885,62 @@ describe('UTA — connecting gate (non-blocking cold start)', () => {
     const { uta } = createUTA()
     await uta.waitForConnect()
     await expect(uta.getAccount()).resolves.toBeDefined()
+  })
+})
+
+// ==================== Mutation durability — zero-op degraded finalize / pre-call refusal ====================
+
+describe('UTA — emergency mutation durability', () => {
+  it('resolves a zero-operation emergency HALT even when the final broker snapshot fails, marking the commit degraded', async () => {
+    // cancelOrders:false is a local risk-tightening action: prepare() returns
+    // [] and never calls the broker at all. The only broker interaction is
+    // executePreparedMutation's post-mutation snapshot (_getState), which we
+    // fail here to exercise TradingGit's zero-operation degraded-finalize
+    // fallback (executePreparedMutation, TradingGit.ts ~line 1730-1750).
+    const { uta, broker } = createUTA()
+    await uta.waitForConnect()
+    broker.setFailMethod('getAccount')
+    broker.setFailMethod('getPositions')
+    broker.setFailMethod('getOrders')
+
+    const result = await uta.emergencyCancelAllOpenOrders({ reason: 'x', cancelOrders: false })
+
+    expect(result.cancelResults).toEqual([])
+    const commit = uta.show(result.hash)
+    expect(commit?.mutationAudit).toMatchObject({
+      kind: 'emergency_cancel',
+      stateAfterDegraded: true,
+    })
+    // A zero-venue-call action must not quarantine the account: readiness
+    // returns to ready, not recovery_required.
+    expect(uta.status().mutation?.readiness).toBe('ready')
+  })
+
+  it('classifies a pre-call local refusal during emergency cancel dispatch as definitely_rejected, not uncertain', async () => {
+    // The broker reports one open order with no orderId anywhere (neither the
+    // top-level OpenOrder.orderId nor order.orderId) — emergencyCancelAllOpenOrders's
+    // prepare() maps that to the '<missing-order-id>' sentinel, and execute()
+    // throws a typed LocalNoDispatchError BEFORE ever calling
+    // broker.cancelOrder. This is a pre-call refusal proof, so TradingGit's
+    // classifyMutationError must mark it definitely_rejected (typed
+    // no-dispatch evidence), not uncertain — the broker was never asked.
+    const { uta, broker } = createUTA()
+    await uta.waitForConnect()
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
+    const orphanOrder = makeOpenOrder({ contract })
+    delete (orphanOrder as { orderId?: string }).orderId
+    vi.spyOn(broker, 'getOpenOrders').mockResolvedValueOnce([orphanOrder])
+    const cancelSpy = vi.spyOn(broker, 'cancelOrder')
+
+    const result = await uta.emergencyCancelAllOpenOrders({ reason: 'orphan order', cancelOrders: true })
+
+    expect(cancelSpy).not.toHaveBeenCalled()
+    expect(result.cancelResults).toHaveLength(1)
+    expect(result.cancelResults[0]).toMatchObject({ success: false })
+    const commit = uta.show(result.hash)
+    expect(commit?.results[0]).toMatchObject({ success: false, status: 'rejected' })
+    expect(commit?.mutationAudit).toMatchObject({ kind: 'emergency_cancel' })
+    // A typed pre-call refusal resolves cleanly — no recovery quarantine.
+    expect(uta.status().mutation?.readiness).toBe('ready')
   })
 })

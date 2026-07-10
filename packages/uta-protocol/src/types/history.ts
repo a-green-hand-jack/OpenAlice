@@ -29,7 +29,13 @@ export interface HistoryContract {
   multiplier?: string
 }
 
-export type OrderHistoryStatus = 'submitted' | 'filled' | 'cancelled' | 'rejected' | 'user-rejected'
+export type OrderHistoryStatus =
+  | 'submitted'
+  | 'filled'
+  | 'cancelled'
+  | 'rejected'
+  | 'user-rejected'
+  | 'uncertain'
 
 export type OrderHistorySource = 'alice' | 'external'
 

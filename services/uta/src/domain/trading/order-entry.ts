@@ -32,7 +32,15 @@ export type OrderEntryPhase = 'stage' | 'commit' | 'push'
 
 export type OrderEntryResult =
   | { ok: true; result: PushResult }
-  | { ok: false; phase: OrderEntryPhase; error: string; code?: 'broker_mutation_denied' }
+  | {
+      ok: false
+      phase: OrderEntryPhase
+      error: string
+      code?: 'broker_mutation_denied'
+      /** The original thrown error, so transport layers can classify it
+       *  (e.g. mutation-conflict → 409) without string matching. */
+      cause?: unknown
+    }
 
 /**
  * Run stage → commit → push on the given UTA. The `stage` callback is
@@ -57,17 +65,20 @@ export async function executeOneShotOrder(
   }
 
   // Phase 2: commit
+  let committedHash: string
   try {
-    uta.commit(message)
+    const prepared = uta.commit(message)
+    committedHash = prepared.hash
   } catch (err) {
     // Roll back so the next attempt starts from an empty staging area.
     try { await uta.reject('auto-rollback after commit error') } catch { /* best effort */ }
     return failure('commit', err)
   }
 
-  // Phase 3: push
+  // Phase 3: push — bound to the exact hash phase 2 prepared, so a
+  // concurrently replaced approval can never be dispatched under this intent.
   try {
-    const result = await uta.push(approver)
+    const result = await uta.push(approver, { expectedHash: committedHash })
     return { ok: true, result }
   } catch (err) {
     return failure('push', err)
@@ -79,6 +90,7 @@ function failure(phase: OrderEntryPhase, err: unknown): Extract<OrderEntryResult
     ok: false,
     phase,
     error: errorMessage(err),
+    cause: err,
     ...(err instanceof BrokerMutationDeniedError ? { code: 'broker_mutation_denied' as const } : {}),
   }
 }

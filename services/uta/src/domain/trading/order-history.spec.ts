@@ -117,6 +117,28 @@ describe('projectOrderHistory', () => {
     expect(rows[0].status).toBe('rejected')
     expect(rows[0].error).toBe('price band')
   })
+
+  it('keeps human-acknowledged uncertainty distinct from rejection', () => {
+    const rows = projectOrderHistory([
+      commit(
+        [{ action: 'placeOrder', contract: contract(), order: limitBuy('0.01', '1700') }],
+        [{
+          action: 'placeOrder',
+          success: false,
+          status: 'uncertain',
+          error: 'venue acceptance remains unknown',
+        }],
+        'buy ETH [resolved:acknowledge-uncertainty] checked venue history',
+      ),
+    ])
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        status: 'uncertain',
+        error: 'venue acceptance remains unknown',
+      }),
+    ])
+  })
 })
 
 describe('projectTradeHistory', () => {

@@ -11,6 +11,15 @@ import { searchTradeableContracts } from '../domain/trading/contract-search.js'
 import { AUTHZ_LEVELS, type ApproverIdentity, type AssetClassHint } from '@traderalice/uta-protocol'
 import { executeOneShotOrder, type OrderEntryPhase } from '../domain/trading/order-entry.js'
 import { projectOrderHistory, projectTradeHistory } from '../domain/trading/order-history.js'
+import {
+  MUTATION_BUSY,
+  MUTATION_RECOVERY_REQUIRED,
+  MUTATION_UNSUPPORTED_SCHEMA,
+  MutationBusyError,
+  PendingApprovalChangedError,
+  MutationRecoveryRequiredError,
+  MutationUnsupportedSchemaError,
+} from '../domain/trading/git/mutation-coordinator.js'
 
 // ==================== Order entry schemas ====================
 //
@@ -79,6 +88,29 @@ const flattenSchema = z.object({
   confirm: z.literal('FLATTEN'),
 })
 
+const mutationResolveSchema = z.object({
+  attemptId: z.string().uuid(),
+  action: z.enum([
+    'discard-never-dispatched',
+    'acknowledge-uncertainty',
+    'finalize-known-outcomes',
+  ]),
+  reason: z.string().trim().min(1),
+  confirmation: z.string().min(1),
+})
+
+const pendingApprovalHash = z.string().regex(
+  /^[a-f0-9]{8}$/,
+  'Expected an 8-character pending approval hash',
+)
+
+const walletPushSchema = z.object({ expectedHash: pendingApprovalHash })
+
+const walletRejectSchema = z.object({
+  expectedHash: pendingApprovalHash,
+  reason: z.string().optional(),
+})
+
 /** HTTP status mapping for one-shot order pipeline failures. */
 const PHASE_STATUS: Record<OrderEntryPhase, 400 | 500> = {
   stage: 400,
@@ -95,6 +127,8 @@ async function runOneShot(
 ): Promise<Response> {
   const r = await executeOneShotOrder(uta, message, stage, approverFromRequest(c))
   if (r.ok) return c.json(r.result)
+  const conflict = mutationConflictDetails(uta, r.cause)
+  if (conflict) return c.json({ error: r.error, phase: r.phase, ...conflict }, 409)
   const status = r.code === 'broker_mutation_denied' ? 403 : PHASE_STATUS[r.phase]
   return c.json({ error: r.error, phase: r.phase }, status)
 }
@@ -129,6 +163,49 @@ function approverFromRequest(c: Context): ApproverIdentity {
     }
   } catch {
     return { via: 'loopback', at }
+  }
+}
+
+function isMutationConflict(error: unknown): error is
+  | MutationBusyError
+  | PendingApprovalChangedError
+  | MutationRecoveryRequiredError
+  | MutationUnsupportedSchemaError {
+  return error instanceof MutationBusyError
+    || error instanceof PendingApprovalChangedError
+    || error instanceof MutationRecoveryRequiredError
+    || error instanceof MutationUnsupportedSchemaError
+}
+
+type MutationConflictPayload = {
+  code: string
+  mutation: NonNullable<ReturnType<UnifiedTradingAccount['status']>['mutation']>
+}
+
+/**
+ * 409 decoration for a THROWN error. Only a typed mutation-conflict error maps
+ * to 409 — an unrelated failure while the account merely happens to be busy or
+ * quarantined must keep its own status code (403 denial, 500 broker error).
+ */
+function mutationConflictDetails(
+  uta: UnifiedTradingAccount,
+  error: unknown,
+): MutationConflictPayload | null {
+  if (!isMutationConflict(error)) return null
+  const mutation = uta.status().mutation
+  if (!mutation) return null
+  return { code: error.code, mutation }
+}
+
+/** Readiness payload for routes that refuse up-front, before acting. */
+function mutationReadinessDetails(uta: UnifiedTradingAccount): MutationConflictPayload | null {
+  const mutation = uta.status().mutation
+  if (!mutation) return null
+  switch (mutation.readiness) {
+    case 'busy': return { code: MUTATION_BUSY, mutation }
+    case 'recovery_required': return { code: MUTATION_RECOVERY_REQUIRED, mutation }
+    case 'unsupported_schema': return { code: MUTATION_UNSUPPORTED_SCHEMA, mutation }
+    default: return null
   }
 }
 
@@ -320,10 +397,12 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
         hash: result.hash,
       })
     } catch (err) {
+      const conflict = mutationConflictDetails(uta, err)
       return c.json({
         riskState,
         error: err instanceof Error ? err.message : String(err),
-      }, err instanceof BrokerMutationDeniedError ? 403 : 500)
+        ...(conflict ?? {}),
+      }, err instanceof BrokerMutationDeniedError ? 403 : conflict ? 409 : 500)
     }
   })
 
@@ -345,9 +424,13 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
         hash: result.hash,
       })
     } catch (err) {
+      const conflict = mutationConflictDetails(uta, err)
       return c.json(
-        { error: err instanceof Error ? err.message : String(err) },
-        err instanceof BrokerMutationDeniedError ? 403 : 500,
+        {
+          error: err instanceof Error ? err.message : String(err),
+          ...(conflict ?? {}),
+        },
+        err instanceof BrokerMutationDeniedError ? 403 : conflict ? 409 : 500,
       )
     }
   })
@@ -571,14 +654,37 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
   app.post('/uta/:id/wallet/reject', async (c) => {
     const uta = ctx.utaManager.get(c.req.param('id'))
     if (!uta) return c.json({ error: 'Account not found' }, 404)
-    if (!uta.status().pendingMessage) return c.json({ error: 'Nothing to reject' }, 400)
+    const status = uta.status()
+    if (status.mutation?.readiness === 'recovery_required'
+      || status.mutation?.readiness === 'unsupported_schema'
+      || status.mutation?.readiness === 'busy') {
+      const conflict = mutationReadinessDetails(uta)
+      return c.json({
+        error: 'Mutation recovery required before rejecting another approval',
+        ...(conflict ?? {}),
+      }, 409)
+    }
+    if (!status.pendingMessage) return c.json({ error: 'Nothing to reject' }, 400)
+    const approver = approverFromRequest(c)
+    if (status.mutation?.readiness === 'legacy_review_required'
+      && (approver.via !== 'alice-bff' || !approver.fingerprint)) {
+      return c.json({ error: 'Legacy approval requires authenticated human re-review' }, 403)
+    }
+    let body: z.infer<typeof walletRejectSchema>
     try {
-      const body = await c.req.json().catch(() => ({}))
-      const reason = typeof body.reason === 'string' ? body.reason : undefined
-      const result = await uta.reject(reason)
+      body = walletRejectSchema.parse(await c.req.json().catch(() => ({})))
+    } catch (err) {
+      return c.json({ error: err instanceof z.ZodError ? err.message : String(err) }, 400)
+    }
+    try {
+      const result = await uta.reject(body.reason, approver, { expectedHash: body.expectedHash })
       return c.json(result)
     } catch (err) {
-      return c.json({ error: String(err) }, 500)
+      const conflict = mutationConflictDetails(uta, err)
+      return c.json({
+        error: err instanceof Error ? err.message : String(err),
+        ...(conflict ?? {}),
+      }, conflict ? 409 : 500)
     }
   })
 
@@ -586,15 +692,67 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
   app.post('/uta/:id/wallet/push', async (c) => {
     const uta = ctx.utaManager.get(c.req.param('id'))
     if (!uta) return c.json({ error: 'Account not found' }, 404)
-    if (!uta.status().pendingMessage) return c.json({ error: 'Nothing to push' }, 400)
+    const status = uta.status()
+    if (status.mutation?.readiness === 'recovery_required'
+      || status.mutation?.readiness === 'unsupported_schema'
+      || status.mutation?.readiness === 'busy') {
+      const conflict = mutationReadinessDetails(uta)
+      return c.json({
+        error: 'Mutation recovery required before another push',
+        ...(conflict ?? {}),
+      }, 409)
+    }
+    if (!status.pendingMessage) return c.json({ error: 'Nothing to push' }, 400)
+    const approver = approverFromRequest(c)
+    if (status.mutation?.readiness === 'legacy_review_required'
+      && (approver.via !== 'alice-bff' || !approver.fingerprint)) {
+      return c.json({ error: 'Legacy approval requires authenticated human re-review' }, 403)
+    }
+    let body: z.infer<typeof walletPushSchema>
     try {
-      const result = await uta.push(approverFromRequest(c))
+      body = walletPushSchema.parse(await c.req.json().catch(() => ({})))
+    } catch (err) {
+      return c.json({ error: err instanceof z.ZodError ? err.message : String(err) }, 400)
+    }
+    try {
+      const result = await uta.push(approver, { expectedHash: body.expectedHash })
       return c.json(result)
     } catch (err) {
+      const conflict = mutationConflictDetails(uta, err)
       return c.json(
-        { error: err instanceof Error ? err.message : String(err) },
-        err instanceof BrokerMutationDeniedError ? 403 : 500,
+        {
+          error: err instanceof Error ? err.message : String(err),
+          ...(conflict ?? {}),
+        },
+        err instanceof BrokerMutationDeniedError ? 403 : conflict ? 409 : 500,
       )
+    }
+  })
+
+  // Human-only quarantine resolution. There is deliberately no agent tool for
+  // this route; the body must repeat the active attempt id to prevent a stale
+  // browser tab from resolving a newer mutation.
+  app.post('/uta/:id/wallet/mutation/resolve', async (c) => {
+    const uta = ctx.utaManager.get(c.req.param('id'))
+    if (!uta) return c.json({ error: 'Account not found' }, 404)
+    const approver = approverFromRequest(c)
+    if (approver.via !== 'alice-bff' || !approver.fingerprint) {
+      return c.json({ error: 'Authenticated Alice approval is required' }, 403)
+    }
+    let body: z.infer<typeof mutationResolveSchema>
+    try {
+      body = mutationResolveSchema.parse(await c.req.json().catch(() => ({})))
+    } catch (err) {
+      return c.json({ error: err instanceof z.ZodError ? err.message : String(err) }, 400)
+    }
+    try {
+      return c.json(await uta.resolveMutation({ ...body, approver }))
+    } catch (err) {
+      const conflict = mutationConflictDetails(uta, err)
+      return c.json({
+        error: err instanceof Error ? err.message : String(err),
+        ...(conflict ?? {}),
+      }, conflict ? 409 : 400)
     }
   })
 

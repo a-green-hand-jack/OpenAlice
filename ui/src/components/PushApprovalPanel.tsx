@@ -270,13 +270,13 @@ export function PushApprovalPanel() {
     return () => clearInterval(id)
   }, [poll])
 
-  const handlePush = useCallback(async (accountId: string) => {
+  const handlePush = useCallback(async (accountId: string, expectedHash: string) => {
     setPushing(accountId)
     setConfirmingPush(null)
     setError(null)
     setLastResult(null)
     try {
-      const data = await api.trading.walletPush(accountId)
+      const data = await api.trading.walletPush(accountId, expectedHash)
       setLastResult({ accountId, data })
       await poll()
     } catch (err) {
@@ -286,11 +286,11 @@ export function PushApprovalPanel() {
     }
   }, [poll])
 
-  const handleReject = useCallback(async (accountId: string) => {
+  const handleReject = useCallback(async (accountId: string, expectedHash: string) => {
     setRejecting(accountId)
     setError(null)
     try {
-      await api.trading.walletReject(accountId)
+      await api.trading.walletReject(accountId, expectedHash)
       await poll()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Reject failed')
@@ -570,8 +570,8 @@ function ReviewDetail({
   pushing: string | null
   rejecting: string | null
   onConfirmPush: (accountId: string | null) => void
-  onPush: (accountId: string) => void
-  onReject: (accountId: string) => void
+  onPush: (accountId: string, expectedHash: string) => void
+  onReject: (accountId: string, expectedHash: string) => void
   onDismissError: () => void
   onDismissResult: () => void
 }) {
@@ -591,6 +591,8 @@ function ReviewDetail({
   const isPending = item.kind === 'pending'
   const isStaged = item.kind === 'staged'
   const accountId = item.kind === 'history' ? item.accountId : item.account.id
+  const pendingHash = item.kind === 'pending' ? item.status.pendingHash : null
+  const confirmationKey = pendingHash ? `${accountId}:${pendingHash}` : null
   const title = itemTitle(item)
 
   return (
@@ -627,11 +629,11 @@ function ReviewDetail({
               </div>
               {isPending && (
                 <div className="flex shrink-0 items-center gap-2">
-                  {confirmingPush === accountId ? (
+                  {confirmationKey !== null && confirmingPush === confirmationKey ? (
                     <>
                       <button
                         type="button"
-                        onClick={() => onPush(accountId)}
+                        onClick={() => { if (pendingHash) void onPush(accountId, pendingHash) }}
                         disabled={pushing !== null}
                         className="btn-primary-sm"
                       >
@@ -649,16 +651,16 @@ function ReviewDetail({
                     <>
                       <button
                         type="button"
-                        onClick={() => onConfirmPush(accountId)}
-                        disabled={pushing !== null || rejecting !== null}
+                        onClick={() => confirmationKey && onConfirmPush(confirmationKey)}
+                        disabled={!confirmationKey || pushing !== null || rejecting !== null}
                         className="btn-primary-sm"
                       >
                         Approve & Push
                       </button>
                       <button
                         type="button"
-                        onClick={() => onReject(accountId)}
-                        disabled={pushing !== null || rejecting !== null}
+                        onClick={() => pendingHash && onReject(accountId, pendingHash)}
+                        disabled={!pendingHash || pushing !== null || rejecting !== null}
                         className="rounded-md border border-border px-3 py-1.5 text-[12px] font-medium text-text-muted transition-colors hover:border-red/50 hover:text-red disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {rejecting === accountId ? 'Rejecting...' : 'Reject'}

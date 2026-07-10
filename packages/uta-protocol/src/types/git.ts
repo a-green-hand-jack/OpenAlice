@@ -5,7 +5,7 @@
  * No more Record<string, unknown> type erasure.
  */
 
-import type { Contract, Order, OrderCancel, Execution, OrderState } from '@traderalice/ibkr'
+import type { Contract, Order, OrderCancel } from '@traderalice/ibkr'
 import type Decimal from 'decimal.js'
 import type { Position, OpenOrder, TpSlParams, PlaceOrderLeg, RiskStateInfo } from './broker.js'
 import type { AuthzAccountType, AuthzLevel } from './authz.js'
@@ -47,6 +47,7 @@ export type Operation =
       action: 'emergencyClosePosition'
       contract: Contract
       quantity: Decimal
+      side?: Position['side']
     }
   | { action: 'syncOrders' }
   | {
@@ -79,7 +80,13 @@ export type Operation =
 
 // ==================== Operation Result ====================
 
-export type OperationStatus = 'submitted' | 'filled' | 'rejected' | 'cancelled' | 'user-rejected'
+export type OperationStatus =
+  | 'submitted'
+  | 'filled'
+  | 'rejected'
+  | 'cancelled'
+  | 'user-rejected'
+  | 'uncertain'
 
 export type GuardVerdictStatus = 'pass' | 'reject' | 'skipped'
 
@@ -94,13 +101,52 @@ export interface GuardVerdict {
   metrics?: GuardMetrics
 }
 
+/**
+ * Strict allowlist of venue order-state scalars that may persist in
+ * commit.json. The raw broker OrderState (IBKR) carries account identifiers
+ * (orderAllocations[].account) and margin internals that must never be
+ * persisted or exported — sanitization happens before any result is stored.
+ */
+export interface SanitizedOrderState {
+  status?: string
+  rejectReason?: string
+  completedTime?: string
+  completedStatus?: string
+  commissionAndFees?: number
+  commissionAndFeesCurrency?: string
+}
+
+/**
+ * Strict allowlist of venue execution-receipt fields that may persist in
+ * commit.json. Deliberately NOT the raw IBKR Execution (which carries
+ * acctNumber and other account identifiers). Decimal quantities are stored
+ * as strings so they survive the JSON round-trip losslessly.
+ */
+export interface SanitizedExecutionReceipt {
+  orderId?: number
+  execId?: string
+  time?: string
+  exchange?: string
+  side?: string
+  shares?: string
+  price?: number
+  permId?: number
+  clientId?: number
+  isLiquidation?: boolean
+  cumQty?: string
+  avgPrice?: number
+  orderRef?: string
+  lastLiquidity?: number
+  isPriceRevisionPending?: boolean
+}
+
 export interface OperationResult {
   action: OperationAction
   success: boolean
   orderId?: string
   status: OperationStatus
-  execution?: Execution
-  orderState?: OrderState
+  execution?: SanitizedExecutionReceipt
+  orderState?: SanitizedOrderState
   /** Decimal as string — sub-satoshi fills must round-trip without loss. */
   filledQty?: string
   /** Decimal as string — see filledQty. */
@@ -139,6 +185,8 @@ export interface GitCommit {
   timestamp: string
   /** Human approval/trigger identity. Optional for pre-issue-31 commits. */
   approver?: ApproverIdentity
+  /** Durable mutation/recovery provenance. Optional for pre-Stage-1 commits. */
+  mutationAudit?: MutationCommitAuditV1
   round?: number
 }
 
@@ -162,6 +210,8 @@ export interface AddResult {
 export type PaperAutoPushSkipReason =
   | 'not_configured'
   | 'no_pending_commit'
+  | 'pending_approval_changed'
+  | 'mutation_recovery_required'
   | 'account_type_not_paper'
   | 'authz_below_paper'
   | 'risk_state_not_normal'
@@ -242,6 +292,258 @@ export interface RejectResult {
   operationCount: number
 }
 
+// ==================== Durable mutation attempts ====================
+
+/**
+ * Version of the crash-recovery envelope embedded in commit.json.
+ *
+ * This is deliberately independent from the broader UTA protocol version:
+ * an unresolved broker mutation must remain readable across application
+ * upgrades even when unrelated wire types change.
+ */
+export const MUTATION_SCHEMA_VERSION = 1 as const
+
+export type MutationAttemptKind =
+  | 'push'
+  | 'emergency_cancel'
+  | 'flatten'
+  | 'human_reject'
+
+/**
+ * `dispatching` is never replayable after a restart. A restored coordinator
+ * projects it as `uncertain`, because the process may have died after the
+ * venue accepted the request but before its receipt was persisted.
+ */
+export type MutationOperationState =
+  | 'prepared'
+  | 'dispatching'
+  | 'confirmed'
+  | 'definitely_rejected'
+  | 'uncertain'
+
+export interface MutationOperationV1 {
+  operationId: string
+  index: number
+  operation: Operation
+  state: MutationOperationState
+  /** Normalized broker/guard outcome. Never synthesize a broker receipt. */
+  result?: OperationResult
+  /** JSON-safe supporting evidence retained for recovery and audit. */
+  evidence?: unknown
+  error?: string
+  updatedAt?: string
+}
+
+/**
+ * A synthetic emergency mutation temporarily hides an existing approval from
+ * legacy readers. Finalization records these superseded operations as
+ * user-rejected audit rows; they are never restored to a pushable state.
+ */
+export interface MutationSuspendedApprovalV1 {
+  operations: Operation[]
+  message: string | null
+  hash: CommitHash | null
+}
+
+export interface MutationAttemptContextV1 {
+  reason?: string
+  cancelOrders?: boolean
+}
+
+export interface MutationAttemptV1 {
+  attemptId: string
+  kind: MutationAttemptKind
+  /** Stable hash of the attempted operation batch. */
+  hash: CommitHash
+  message: string
+  approver: ApproverIdentity
+  createdAt: string
+  updatedAt: string
+  operations: MutationOperationV1[]
+  suspendedApproval?: MutationSuspendedApprovalV1
+  context?: MutationAttemptContextV1
+  /** Append-only human decisions made while recovering this attempt. */
+  resolutions?: MutationResolutionRecordV1[]
+}
+
+export interface MutationResolutionRecordV1 {
+  action: MutationResolutionAction
+  reason: string
+  approver: ApproverIdentity
+  at: string
+}
+
+export interface MutationCommitAuditV1 {
+  schemaVersion: typeof MUTATION_SCHEMA_VERSION
+  attemptId: string
+  kind: MutationAttemptKind
+  message: string
+  operationCount: number
+  initiator: ApproverIdentity
+  /** Set when the post-mutation broker snapshot failed and stateAfter was
+   *  filled from the previous commit (zero-operation attempts only — e.g. a
+   *  HALT-only emergency stop while the broker is unreachable). */
+  stateAfterDegraded?: true
+  context?: MutationAttemptContextV1
+  supersededApproval?: {
+    hash: CommitHash | null
+    message: string | null
+    operationCount: number
+  }
+  resolutions: MutationResolutionRecordV1[]
+}
+
+export interface MutationEnvelopeV1 {
+  schemaVersion: typeof MUTATION_SCHEMA_VERSION
+  activeAttempt?: MutationAttemptV1
+}
+
+/**
+ * Unknown future envelopes are intentionally representable. Readers must
+ * inspect schemaVersion before touching activeAttempt and fail writes closed
+ * for versions they do not understand.
+ */
+export interface UnsupportedMutationEnvelope {
+  schemaVersion: number
+  activeAttempt?: unknown
+  [key: string]: unknown
+}
+
+export type MutationEnvelope = MutationEnvelopeV1 | UnsupportedMutationEnvelope
+
+export function isMutationEnvelopeV1(
+  envelope: MutationEnvelope | undefined,
+): envelope is MutationEnvelopeV1 {
+  return envelope?.schemaVersion === MUTATION_SCHEMA_VERSION
+}
+
+export type MutationReadiness =
+  | 'ready'
+  | 'legacy_review_required'
+  | 'busy'
+  | 'recovery_required'
+  | 'unsupported_schema'
+
+/** Status is a projection of persisted evidence, never permission to replay. */
+export interface MutationOperationResultProjection {
+  success: boolean
+  status: OperationStatus
+  orderId?: string
+  filledQty?: string
+  filledPrice?: string
+  /** Safe, allowlisted broker acknowledgement fields; never account identifiers or raw payloads. */
+  receipt?: MutationReceiptProjection
+  error?: string
+}
+
+export interface MutationReceiptProjection {
+  executionId?: string
+  executedAt?: string
+  brokerOrderId?: string
+  permanentId?: string
+  clientId?: string
+  orderRef?: string
+  exchange?: string
+  side?: string
+  cumulativeQty?: string
+  lastLiquidity?: string
+}
+
+/**
+ * Operator-safe description of the exact broker intent under quarantine.
+ * This intentionally excludes full Contract/Order objects and raw venue data.
+ */
+export interface MutationOperationTargetProjection {
+  action: OperationAction
+  symbol?: string
+  aliceId?: string
+  localSymbol?: string
+  orderId?: string
+  side?: string
+  orderType?: string
+  quantity?: string
+  cashQuantity?: string
+  limitPrice?: string
+  stopPrice?: string
+  takeProfitPrice?: string
+  stopLossPrice?: string
+  orderRef?: string
+}
+
+export type MutationEvidenceType =
+  | 'durable-before-broker-dispatch'
+  | 'broker-success-receipt'
+  | 'broker-failure-without-nonacceptance-proof'
+  | 'typed-local-no-dispatch-proof'
+  | 'typed-local-no-dispatch-error'
+  | 'unclassified-dispatch-error'
+  /** Dispatch outlived its timeout; the venue request was NOT cancelled and
+   *  may still take effect. Resolution is blocked in-process until restart
+   *  or until the orphaned call settles and its outcome is recorded. */
+  | 'dispatch-timeout-orphaned'
+  /** A timed-out dispatch later settled in this process; its real outcome
+   *  was durably recorded after the fact. */
+  | 'late-broker-outcome'
+  | 'recovered-dispatching'
+  | 'human-reject'
+  | 'human-resolution'
+
+export interface MutationEvidenceProjection {
+  type: MutationEvidenceType
+  action?: MutationResolutionAction
+  reason?: string
+  outcome?: 'still-uncertain'
+}
+
+export interface MutationOperationProjectionV1 {
+  operationId: string
+  index: number
+  action: OperationAction
+  symbol?: string
+  operation: MutationOperationTargetProjection
+  state: MutationOperationState
+  result?: MutationOperationResultProjection
+  evidence?: MutationEvidenceProjection
+  error?: string
+  updatedAt?: string
+}
+
+export interface MutationAttemptProjectionV1 {
+  attemptId: string
+  kind: MutationAttemptKind
+  hash: CommitHash
+  message: string
+  createdAt: string
+  updatedAt: string
+  context?: MutationAttemptContextV1
+  operations: MutationOperationProjectionV1[]
+  resolutions?: MutationResolutionRecordV1[]
+}
+
+export interface MutationStatusProjection {
+  schemaVersion: number
+  readiness: MutationReadiness
+  /** Set when recovery is blocked in this process (lost persistence ack, or a
+   *  timed-out broker call whose Promise is still in flight). Restart UTA,
+   *  reconcile against the venue, then resolve. */
+  restartRequired?: boolean
+  activeAttempt?: MutationAttemptProjectionV1
+  /** Older binaries must not be used while an attempt is unresolved. */
+  downgradeBlocked: boolean
+}
+
+export type MutationResolutionAction =
+  | 'discard-never-dispatched'
+  | 'acknowledge-uncertainty'
+  | 'finalize-known-outcomes'
+
+export interface MutationResolveResult {
+  attemptId: string
+  hash?: CommitHash
+  resolved: boolean
+  readiness: MutationReadiness
+}
+
 export interface GitStatus {
   staged: Operation[]
   pendingMessage: string | null
@@ -249,6 +551,7 @@ export interface GitStatus {
   head: CommitHash | null
   commitCount: number
   riskState?: RiskStateInfo
+  mutation?: MutationStatusProjection
 }
 
 export interface OperationSummary {
@@ -278,6 +581,8 @@ export interface GitExportState {
   pendingMessage?: string | null
   /** Awaiting-approval hash. Optional for pre-issue-15 commit.json files. */
   pendingHash?: CommitHash | null
+  /** Optional for all pre-durable-mutation commit.json files. */
+  mutation?: MutationEnvelope
 }
 
 // ==================== Sync ====================

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,6 +11,7 @@ import type { UtaEventSink, UtaLifecycleEventType } from './events.js'
 import {
   AUTO_PUSH_PAPER_VIA,
   assertPaperAutoPushAccountType,
+  resolvePaperAutoPushEligibility,
   tryAutoPushPaper,
 } from './paper-auto-push.js'
 
@@ -372,6 +373,140 @@ describe('paper auto-push', () => {
     const afterRestart = await tryAutoPushPaper({ uta: restarted, ...PAPER_INPUT })
     expect(afterRestart).toMatchObject({ status: 'skipped', reason: 'no_pending_commit' })
     expect(restartedBroker.callCount('placeOrder')).toBe(0)
+  })
+
+  it('binds a blocked policy preflight to the approved hash and rejects concurrent replacement writers', async () => {
+    const { uta, broker } = createUTA()
+    const approvedHash = stageAndCommitBuy(uta, 'approved A')
+    const originalGetPositions = broker.getPositions.bind(broker)
+    let enterPolicy!: () => void
+    let releasePolicy!: () => void
+    const policyEntered = new Promise<void>((resolve) => { enterPolicy = resolve })
+    const policyReleased = new Promise<void>((resolve) => { releasePolicy = resolve })
+    vi.spyOn(broker, 'getPositions').mockImplementationOnce(async () => {
+      enterPolicy()
+      await policyReleased
+      return originalGetPositions()
+    })
+
+    const autoPush = tryAutoPushPaper({ uta, ...PAPER_INPUT })
+    await policyEntered
+
+    expect(() => uta.stagePlaceOrder({
+      aliceId: 'mock-paper|MSFT',
+      action: 'BUY',
+      orderType: 'MKT',
+      totalQuantity: '2',
+      stopLoss: { price: '95' },
+    })).toThrow(/another account mutation|pending approval/i)
+    expect(() => uta.commit('replacement B')).toThrow(/another account mutation|pending approval/i)
+    expect(broker.callCount('placeOrder')).toBe(0)
+
+    releasePolicy()
+    const result = await autoPush
+    expect(result).toMatchObject({ status: 'pushed', hash: approvedHash })
+    expect(broker.callCount('placeOrder')).toBe(1)
+    expect(uta.show(approvedHash)?.operations).toHaveLength(1)
+    expect(uta.show(approvedHash)?.operations[0]).toMatchObject({
+      action: 'placeOrder',
+      contract: { symbol: 'AAPL' },
+    })
+    expect(uta.status().pendingHash).toBeNull()
+  })
+
+  it('reports a transiently busy mutation lease as push_in_flight, never as mutation_recovery_required', async () => {
+    // Regression for a real mislabel bug: resolvePaperAutoPushEligibility must
+    // treat status().mutation?.readiness === 'busy' as an in-flight lease
+    // (usually this very hash already dispatching), not as a recovery
+    // condition — mislabeling it would tell operators a healthy account needs
+    // human intervention.
+    const { uta, broker } = createUTA()
+    const hash = stageAndCommitBuy(uta, 'busy lease probe')
+    const originalGetPositions = broker.getPositions.bind(broker)
+    let enterPolicy!: () => void
+    let releasePolicy!: () => void
+    const policyEntered = new Promise<void>((resolve) => { enterPolicy = resolve })
+    const policyReleased = new Promise<void>((resolve) => { releasePolicy = resolve })
+    vi.spyOn(broker, 'getPositions').mockImplementationOnce(async () => {
+      enterPolicy()
+      await policyReleased
+      return originalGetPositions()
+    })
+
+    const autoPush = tryAutoPushPaper({ uta, ...PAPER_INPUT })
+    await policyEntered
+
+    expect(uta.status().mutation?.readiness).toBe('busy')
+    const resolved = resolvePaperAutoPushEligibility({ uta, ...PAPER_INPUT })
+    expect(resolved).toMatchObject({
+      ok: false,
+      result: { status: 'skipped', reason: 'push_in_flight', pendingHash: hash },
+    })
+
+    releasePolicy()
+    await autoPush
+  })
+
+  it('skips with mutation_recovery_required and no mutation field when readiness is recovery_required', async () => {
+    // Poison the mutation coordinator via a synchronous onCommit persistence
+    // failure during push's durable-before-broker-dispatch write — the
+    // account survives with an active attempt that requires human recovery.
+    let commitCalls = 0
+    const { uta, broker } = createUTA({
+      onCommit: () => {
+        commitCalls += 1
+        // Calls 1-2 are stage()/commit() — let them succeed so a pending
+        // approval exists. Call 3 is push()'s persistAttempt — fail it.
+        if (commitCalls >= 3) throw new Error('simulated persistence failure')
+      },
+    })
+    const hash = stageAndCommitBuy(uta, 'poisoned lease probe')
+
+    // The first attempt hits the persistence failure mid-push; TradingGit
+    // poisons the coordinator, and executePaperAutoPush's catch resolves it
+    // to a skip (readiness recovery_required) rather than propagating.
+    const firstAttempt = await tryAutoPushPaper({ uta, ...PAPER_INPUT })
+    expect(firstAttempt).toMatchObject({ status: 'skipped', reason: 'mutation_recovery_required' })
+    expect(uta.status().mutation?.readiness).toBe('recovery_required')
+    expect(broker.callCount('placeOrder')).toBe(0)
+
+    const result = await tryAutoPushPaper({ uta, ...PAPER_INPUT })
+    expect(result).toMatchObject({
+      status: 'skipped',
+      reason: 'mutation_recovery_required',
+      pendingHash: hash,
+    })
+    expect(result).not.toHaveProperty('mutation')
+    expect('mutation' in result).toBe(false)
+    expect(broker.callCount('placeOrder')).toBe(0)
+  })
+
+  it('never auto-pushes a pre-upgrade pending approval before human re-review', async () => {
+    const { uta } = createUTA()
+    const hash = stageAndCommitBuy(uta, 'legacy pending approval')
+    const legacyState = uta.exportGitState()
+    delete legacyState.mutation
+
+    const restartedBroker = new MockBroker()
+    const restarted = new UnifiedTradingAccount(restartedBroker, {
+      savedState: legacyState,
+      guardStateBaseDir: mkdtempSync(join(tmpdir(), 'openalice-paper-legacy-guard-')),
+      riskStateBaseDir: mkdtempSync(join(tmpdir(), 'openalice-paper-legacy-risk-')),
+    })
+
+    expect(restarted.status().mutation?.readiness).toBe('legacy_review_required')
+    const result = await tryAutoPushPaper({ uta: restarted, ...PAPER_INPUT })
+    expect(result).toMatchObject({
+      status: 'skipped',
+      reason: 'mutation_recovery_required',
+      pendingHash: hash,
+    })
+    // The `mutation` field was removed from PaperAutoPushResult entirely — a
+    // recovery-required skip must not carry it.
+    expect(result).not.toHaveProperty('mutation')
+    expect('mutation' in result).toBe(false)
+    expect(restartedBroker.callCount('placeOrder')).toBe(0)
+    expect(restarted.status().pendingHash).toBe(hash)
   })
 
   it('does not auto-push when the target account ceiling resolves to read_only', async () => {

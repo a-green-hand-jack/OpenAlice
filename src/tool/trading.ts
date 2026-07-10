@@ -896,10 +896,15 @@ ONLY if the operator has enabled "Allow AI to push trades" in Settings → Agent
           }
         }
         // AI trading enabled — execute for real. Each push() sends the committed
-        // operations to the broker. Per-account failures degrade individually.
-        const results = await Promise.all(pending.map(async ({ uta }) => {
+        // operations to the broker, bound to the exact hash surfaced in THIS
+        // tool call: if the pending approval changes between the status read
+        // above and the dispatch, UTA refuses instead of pushing unseen work.
+        const results = await Promise.all(pending.map(async ({ uta, status }) => {
           try {
-            return { source: uta.id, ...compactPushResult(await uta.push()) }
+            if (!status.pendingHash) {
+              return { source: uta.id, error: 'Pending approval has no hash; re-run tradingStatus and retry.' }
+            }
+            return { source: uta.id, ...compactPushResult(await uta.push(status.pendingHash)) }
           } catch (err) {
             return { source: uta.id, ...handleBrokerError(err) }
           }
@@ -920,9 +925,13 @@ ONLY if the operator has enabled "Allow AI to push trades" in Settings → Agent
           const status = await uta.status()
           if (status.staged.length === 0) return { message: 'Nothing staged to reject.' }
           // reject() requires a prepared commit — prepare one transparently
-          // so the AI's mental model stays "stage → reject = undo".
-          if (!status.pendingHash) await uta.commit(reason ?? 'discarding staged operations')
-          return { source: uta.id, ...await uta.reject(reason) }
+          // so the AI's mental model stays "stage → reject = undo". Either
+          // way the reject is bound to the exact hash this call observed or
+          // created; a concurrently replaced approval is refused, not
+          // silently discarded.
+          const expectedHash = status.pendingHash
+            ?? (await uta.commit(reason ?? 'discarding staged operations')).hash
+          return { source: uta.id, ...await uta.reject(expectedHash, reason) }
         } catch (err) {
           return handleBrokerError(err)
         }

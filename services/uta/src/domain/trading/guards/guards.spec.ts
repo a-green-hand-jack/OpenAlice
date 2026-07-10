@@ -16,7 +16,13 @@ import {
   portfolioGuardStatePath,
   type PortfolioGuardStateStore,
 } from './portfolio-state.js'
-import { createGuardPipeline } from './guard-pipeline.js'
+import {
+  createGuardPipeline,
+  hasLocalNoDispatchProof,
+  LocalNoDispatchError,
+  markNoBrokerDispatch,
+  NO_BROKER_DISPATCH,
+} from './guard-pipeline.js'
 import { resolveGuards, registerGuard } from './registry.js'
 import type { GuardContext, OperationGuard } from './types.js'
 import type { Operation } from '../git/types.js'
@@ -791,6 +797,19 @@ describe('createGuardPipeline', () => {
     expect(result.guardVerdicts).toEqual([
       { guard: 'deny-all', verdict: 'reject', reason: 'Denied!' },
     ])
+    expect(result.noDispatchProof).toBe(NO_BROKER_DISPATCH)
+    expect(hasLocalNoDispatchProof(result)).toBe(true)
+    expect(hasLocalNoDispatchProof({ success: false, error: result.error })).toBe(false)
+    expect(JSON.stringify(result)).not.toContain('noDispatchProof')
+  })
+
+  it('provides reusable typed proof for controlled refusals outside guards', () => {
+    const result = markNoBrokerDispatch({ success: false, error: 'missing local order id' })
+    const error = new LocalNoDispatchError('request rejected before broker dispatch')
+
+    expect(hasLocalNoDispatchProof(result)).toBe(true)
+    expect(hasLocalNoDispatchProof(error)).toBe(true)
+    expect(hasLocalNoDispatchProof(new Error(error.message))).toBe(false)
   })
 
   it('stops at first rejecting guard', async () => {
