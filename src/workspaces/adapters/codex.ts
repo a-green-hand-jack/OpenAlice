@@ -471,6 +471,13 @@ async function trustProjectCritical(abs: string, configPath: string, opts: Trust
     }
 
     // Match either single- or triple-bracket [projects."<path>"] headers.
+    // Note: a pre-fix (#124) entry may have been registered under the
+    // OLD non-canonical `resolve(cwd)` path (e.g. `/tmp/x` instead of the
+    // realpath `/private/tmp/x` on macOS). That legacy entry won't match this
+    // canonical header, so a second, canonical block can end up appended for
+    // the same real project. Accepted as harmless — codex only reads
+    // `trust_level` off whichever header matches its own (also realpath'd)
+    // cwd going forward, and this file is user-editable regardless.
     const headerEsc = abs.replace(/[\\"]/g, (c) => `\\${c}`);
     const headerRe = new RegExp(
       `^\\[projects\\."${headerEsc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"\\]\\s*$`,
@@ -491,8 +498,26 @@ async function trustProjectCritical(abs: string, configPath: string, opts: Trust
  * flag). If it already exists we wait; a lock older than `lockStaleMs` is a
  * crashed holder and gets reclaimed. Dependency-free, house style mirrors
  * `uta-supervisor/restart-trigger.ts` (atomic writes, bounded polling).
+ *
+ * Reclaim is race-free by construction: `rename()` is atomic, and a rename's
+ * source path can only ever be consumed by ONE caller. When several waiters
+ * independently observe the same stale lock (TOCTOU: they all `stat()` the
+ * same old mtime), they all attempt
+ * `rename(lockPath, <unique-per-waiter-tmp-name>)`. Exactly one succeeds —
+ * the filesystem serializes that for us — and only that winner deletes the
+ * dead lock and loops back to `open(wx)`; every other waiter's rename fails
+ * with ENOENT (the path is already gone) and it simply retries `open(wx)`
+ * too, contending fairly for the fresh lock the winner is about to create.
+ * This avoids the earlier bug where two racers could both `stat()` the same
+ * stale mtime, both reclaim via `rm`, and one's `rm` could delete the other's
+ * freshly-created live lock.
  */
-async function acquireConfigLock(
+// Exported for the concurrent-reclaim regression spec, which needs to fire
+// several racers directly against the SAME lock file without going through
+// `ensureTrustedProject`'s in-process promise queue (that queue already
+// fully serializes same-process callers, so it can never reproduce the
+// cross-process TOCTOU this lock is guarding against — see codex.trust-config.spec.ts).
+export async function acquireConfigLock(
   lockPath: string,
   configPath: string,
   opts: TrustProjectOptions,
@@ -505,19 +530,38 @@ async function acquireConfigLock(
   for (;;) {
     try {
       const handle = await open(lockPath, 'wx');
-      await handle.writeFile(`${process.pid} ${new Date().toISOString()}`, 'utf8');
+      try {
+        await handle.writeFile(`${process.pid} ${new Date().toISOString()}`, 'utf8');
+      } catch (err) {
+        // Successfully created the lock file but failed to write into it —
+        // don't leak the fd or leave an orphaned (empty but live) lock file
+        // behind for every future acquirer to trip over.
+        await handle.close().catch(() => undefined);
+        await rm(lockPath, { force: true }).catch(() => undefined);
+        throw err;
+      }
       return handle;
     } catch (err) {
       if (!isEEXIST(err)) throw err;
       // Contended — reclaim if the holder looks crashed, else wait.
+      let stale = false;
       try {
         const st = await stat(lockPath);
-        if (Date.now() - st.mtimeMs > staleMs) {
-          await rm(lockPath, { force: true });
-          continue; // retry immediately after reclaiming
-        }
+        stale = Date.now() - st.mtimeMs > staleMs;
       } catch {
         continue; // lock vanished between open and stat — retry immediately
+      }
+      if (stale) {
+        // Race-free reclaim — see doc comment above.
+        const reclaimTmp = `${lockPath}.reclaim.${process.pid}.${randomUUID()}`;
+        try {
+          await rename(lockPath, reclaimTmp);
+          await rm(reclaimTmp, { force: true });
+        } catch {
+          // Lost the reclaim race (source already gone) or another transient
+          // error — either way, fall through and retry acquisition.
+        }
+        continue;
       }
       if (Date.now() > deadline) {
         throw new Error(
@@ -531,7 +575,7 @@ async function acquireConfigLock(
   }
 }
 
-async function releaseConfigLock(handle: Awaited<ReturnType<typeof open>>, lockPath: string): Promise<void> {
+export async function releaseConfigLock(handle: Awaited<ReturnType<typeof open>>, lockPath: string): Promise<void> {
   try {
     await handle.close();
   } finally {

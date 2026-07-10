@@ -1,10 +1,10 @@
-import { mkdir, mkdtemp, open, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, realpath, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { ensureTrustedProject } from './codex.js';
+import { acquireConfigLock, ensureTrustedProject, releaseConfigLock } from './codex.js';
 
 /**
  * Issue #124: six concurrent workspace bootstraps each called
@@ -134,6 +134,58 @@ describe('codex ensureTrustedProject — concurrency + atomicity (issue #124)', 
     const result = await readFile(configPath, 'utf8');
     const abs = await realOrResolve(p);
     expect(result).toContain(projectHeader(abs));
+  });
+});
+
+/**
+ * Review finding (major, pre-merge hardening of #124): the earlier stale
+ * reclaim used `stat()` to detect staleness then a separate `rm()` to
+ * reclaim — a TOCTOU window where two racers could both observe the same
+ * stale mtime, both reclaim, and one's `rm` could delete the OTHER's
+ * freshly-created live lock, letting both into the critical section at
+ * once. The fix reclaims via `rename()`, which is atomic — only one racer's
+ * rename can ever consume the source path.
+ *
+ * `ensureTrustedProject`'s in-process promise queue already fully
+ * serializes same-process callers, so it can never reproduce this: the
+ * race only exists across independent lock acquirers (e.g. separate OS
+ * processes) that don't share that queue. This spec exercises
+ * `acquireConfigLock` directly — bypassing the queue — to simulate that.
+ */
+describe('acquireConfigLock — concurrent stale-lock reclaim (issue #124 review finding)', () => {
+  it('many racers contending on one stale lock never grant the lock to two callers at once', async () => {
+    const lockPath = `${configPath}.lock`;
+    // Seed a dead holder's lock, aged well past any reasonable staleMs.
+    await writeFile(lockPath, 'dead pid', 'utf8');
+    const past = new Date(Date.now() - 60_000);
+    await utimes(lockPath, past, past);
+
+    const RACERS = 8;
+    let activeHolders = 0;
+    let maxConcurrentHolders = 0;
+
+    const results = await Promise.allSettled(
+      Array.from({ length: RACERS }, () =>
+        (async () => {
+          const handle = await acquireConfigLock(lockPath, configPath, {
+            lockStaleMs: 10,
+            lockTimeoutMs: 5_000,
+            lockRetryMs: 5,
+          });
+          activeHolders++;
+          maxConcurrentHolders = Math.max(maxConcurrentHolders, activeHolders);
+          // Hold briefly so any mutual-exclusion violation would actually
+          // manifest as an overlap rather than being masked by fast timing.
+          await new Promise((r) => setTimeout(r, 5));
+          activeHolders--;
+          await releaseConfigLock(handle, lockPath);
+        })(),
+      ),
+    );
+
+    for (const r of results) expect(r.status).toBe('fulfilled');
+    expect(maxConcurrentHolders).toBe(1); // mutual exclusion held throughout the reclaim race
+    await expect(stat(lockPath)).rejects.toThrow(); // fully released — no orphaned lock file
   });
 });
 
