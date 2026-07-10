@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { createReadStream, existsSync, readFileSync } from 'node:fs';
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -392,38 +393,185 @@ async function firstLine(fp: string): Promise<string> {
   }
 }
 
+export interface TrustProjectOptions {
+  /** Override the shared codex config file. Default `~/.codex/config.toml`. */
+  configPath?: string;
+  /** Lock-acquisition budget before failing the bootstrap. Default 10s. */
+  lockTimeoutMs?: number;
+  /** A lock older than this is treated as stale and reclaimed. Default 30s. */
+  lockStaleMs?: number;
+  /** Poll interval while waiting for a contended lock. Default 50ms. */
+  lockRetryMs?: number;
+}
+
+export function defaultCodexConfigPath(): string {
+  return join(homedir(), '.codex', 'config.toml');
+}
+
+/**
+ * In-process serialization: one promise queue per config file. Six concurrent
+ * workspace bootstraps in the SAME Alice process (session pool / headless
+ * dispatch) all target one `~/.codex/config.toml`; without this they'd
+ * interleave read-modify-write and lose blocks. Keyed by the resolved config
+ * path so distinct config files never block each other.
+ */
+const trustConfigQueues = new Map<string, Promise<unknown>>();
+
 /**
  * Add (or no-op if present) a `[projects."<abs>"] trust_level = "trusted"`
- * entry to `~/.codex/config.toml`. Uses a minimal append-or-rewrite strategy
- * — we don't bring in a TOML library because the section grammar is simple
- * and we only ever touch one section per workspace.
+ * entry to `~/.codex/config.toml`. We don't bring in a TOML library because
+ * the section grammar is simple and we only ever APPEND one section per
+ * workspace — unrelated user config is preserved byte-for-byte.
+ *
+ * Concurrency safety (issue #124): six concurrent bootstraps used to do an
+ * uncoordinated read-modify-write of this shared file, so blocks were lost or
+ * the file ended up malformed TOML, stalling every Codex steward wake. This is
+ * now guarded on two layers — an in-process promise queue (same-process
+ * bootstraps) AND a cross-process `O_EXCL` lock file with stale-lock reclaim
+ * (different processes) — and the read-check-modify-write all happens inside
+ * the critical section so a block appended by a concurrent writer is never
+ * lost. Persistence is atomic (unique temp + fsync + rename), so a failure can
+ * never leave `config.toml` truncated.
  *
  * If the project is already present we leave the file alone, regardless of
  * what value it has (the user may have set `read_only` deliberately).
  */
-async function ensureTrustedProject(cwd: string): Promise<void> {
-  const abs = resolve(cwd);
-  const configPath = join(homedir(), '.codex', 'config.toml');
-
-  let existing = '';
+export async function ensureTrustedProject(cwd: string, opts: TrustProjectOptions = {}): Promise<void> {
+  const configPath = opts.configPath ?? defaultCodexConfigPath();
+  // Canonicalize before both registering AND comparing (macOS `/tmp` →
+  // `/private/tmp`) so a symlinked cwd doesn't register a second, divergent
+  // trust entry. The workspace dir may not exist yet on first bootstrap, so
+  // fall back to a plain resolve() when realpath can't stat it.
+  let abs: string;
   try {
-    existing = await readFile(configPath, 'utf8');
-  } catch (err) {
-    if (!isENOENT(err)) throw err;
-    await mkdir(dirname(configPath), { recursive: true });
+    abs = await realpath(cwd);
+  } catch {
+    abs = resolve(cwd);
   }
 
-  // Match either single- or triple-bracket [projects."<path>"] headers.
-  const headerEsc = abs.replace(/[\\"]/g, (c) => `\\${c}`);
-  const headerRe = new RegExp(
-    `^\\[projects\\."${headerEsc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"\\]\\s*$`,
-    'm',
-  );
-  if (headerRe.test(existing)) return; // already configured — don't clobber
+  const prev = trustConfigQueues.get(configPath) ?? Promise.resolve();
+  const run = prev.catch(() => undefined).then(() => trustProjectCritical(abs, configPath, opts));
+  trustConfigQueues.set(configPath, run.catch(() => undefined));
+  return run;
+}
 
-  const block = `\n[projects."${headerEsc}"]\ntrust_level = "trusted"\n`;
-  const next = existing.endsWith('\n') || existing.length === 0 ? existing + block : existing + '\n' + block;
-  await writeFile(configPath, next, 'utf8');
+/** Lock-guarded read-check-modify-write + atomic persist. */
+async function trustProjectCritical(abs: string, configPath: string, opts: TrustProjectOptions): Promise<void> {
+  const dir = dirname(configPath);
+  await mkdir(dir, { recursive: true });
+
+  const lockPath = `${configPath}.lock`;
+  const handle = await acquireConfigLock(lockPath, configPath, opts);
+  try {
+    let existing = '';
+    try {
+      existing = await readFile(configPath, 'utf8');
+    } catch (err) {
+      if (!isENOENT(err)) throw err;
+    }
+
+    // Match either single- or triple-bracket [projects."<path>"] headers.
+    const headerEsc = abs.replace(/[\\"]/g, (c) => `\\${c}`);
+    const headerRe = new RegExp(
+      `^\\[projects\\."${headerEsc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"\\]\\s*$`,
+      'm',
+    );
+    if (headerRe.test(existing)) return; // already configured — don't clobber
+
+    const block = `\n[projects."${headerEsc}"]\ntrust_level = "trusted"\n`;
+    const next = existing.endsWith('\n') || existing.length === 0 ? existing + block : existing + '\n' + block;
+    await atomicWrite(configPath, next);
+  } finally {
+    await releaseConfigLock(handle, lockPath);
+  }
+}
+
+/**
+ * Cross-process guard: create `<configPath>.lock` with `O_EXCL` (the `wx`
+ * flag). If it already exists we wait; a lock older than `lockStaleMs` is a
+ * crashed holder and gets reclaimed. Dependency-free, house style mirrors
+ * `uta-supervisor/restart-trigger.ts` (atomic writes, bounded polling).
+ */
+async function acquireConfigLock(
+  lockPath: string,
+  configPath: string,
+  opts: TrustProjectOptions,
+): Promise<Awaited<ReturnType<typeof open>>> {
+  const timeoutMs = opts.lockTimeoutMs ?? 10_000;
+  const staleMs = opts.lockStaleMs ?? 30_000;
+  const retryMs = opts.lockRetryMs ?? 50;
+  const deadline = Date.now() + timeoutMs;
+
+  for (;;) {
+    try {
+      const handle = await open(lockPath, 'wx');
+      await handle.writeFile(`${process.pid} ${new Date().toISOString()}`, 'utf8');
+      return handle;
+    } catch (err) {
+      if (!isEEXIST(err)) throw err;
+      // Contended — reclaim if the holder looks crashed, else wait.
+      try {
+        const st = await stat(lockPath);
+        if (Date.now() - st.mtimeMs > staleMs) {
+          await rm(lockPath, { force: true });
+          continue; // retry immediately after reclaiming
+        }
+      } catch {
+        continue; // lock vanished between open and stat — retry immediately
+      }
+      if (Date.now() > deadline) {
+        throw new Error(
+          `codex trust config: could not acquire lock ${lockPath} within ${timeoutMs}ms — ` +
+            `another codex bootstrap may be stuck. If none is running, delete ${lockPath} manually. ` +
+            `${configPath} was left unchanged.`,
+        );
+      }
+      await new Promise((r) => setTimeout(r, retryMs));
+    }
+  }
+}
+
+async function releaseConfigLock(handle: Awaited<ReturnType<typeof open>>, lockPath: string): Promise<void> {
+  try {
+    await handle.close();
+  } finally {
+    await rm(lockPath, { force: true });
+  }
+}
+
+/**
+ * Atomic persist: write the full contents to a UNIQUE temp file (pid + random
+ * suffix) in the same directory, fsync, then `rename` over the target. Never
+ * truncates the live file, so a crash mid-write can't leave malformed TOML.
+ */
+async function atomicWrite(targetPath: string, contents: string): Promise<void> {
+  const dir = dirname(targetPath);
+  const base = targetPath.slice(dir.length + 1) || 'config.toml';
+  const tmpPath = join(dir, `.${base}.${process.pid}.${randomUUID()}.tmp`);
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    handle = await open(tmpPath, 'w');
+    await handle.writeFile(contents, 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    await rename(tmpPath, targetPath);
+  } catch (err) {
+    if (handle) {
+      try {
+        await handle.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    await rm(tmpPath, { force: true }).catch(() => undefined);
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`codex trust config: failed to persist ${targetPath}: ${msg}. The file was left unchanged.`);
+  }
+}
+
+function isEEXIST(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: string }).code === 'EEXIST';
 }
 
 function isENOENT(err: unknown): boolean {
