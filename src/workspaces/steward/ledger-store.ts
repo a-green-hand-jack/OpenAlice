@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 
 import {
   parseStewardDecisionLedgerEntry,
+  parseStewardDecisionLedgerEntryLenient,
   type StewardDecisionLedgerEntry,
 } from './types.js';
 import { stewardLedgerPath } from './paths.js';
@@ -21,14 +22,29 @@ export interface InvalidLedgerLine {
   readonly error: string;
 }
 
+/** A wakeId that appears on more than one parsed ledger line. Issue #125 D3
+ *  makes exactly one terminal entry per wakeId the rule: the FIRST entry wins
+ *  (tamper-evident — a later append can never alter the recorded decision) and
+ *  every later duplicate is surfaced here as a violation. Reported, never
+ *  thrown, so the supervisor/reports can see it; the validator errors on it. */
+export interface DuplicateWakeEntry {
+  readonly wakeId: string;
+  /** 1-based line of the winning (first) entry for this wakeId. */
+  readonly firstLine: number;
+  /** 1-based line of the later duplicate that is being ignored. */
+  readonly duplicateLine: number;
+}
+
 /** The full result of parsing a ledger file: every line that parsed, plus
- *  every line that didn't (with why). {@link StewardLedgerStore.read} exposes
- *  only `entries` (its established, unchanged return shape); callers that
- *  want visibility into skipped lines use
+ *  every line that didn't (with why), plus every wakeId that appeared more than
+ *  once (D3). {@link StewardLedgerStore.read} exposes only `entries` (its
+ *  established, unchanged return shape); callers that want visibility into
+ *  skipped lines or duplicate wakes use
  *  {@link StewardLedgerStore.readDiagnostics} instead. */
 export interface ReadLedgerDiagnostics {
   readonly entries: StewardDecisionLedgerEntry[];
   readonly invalid: InvalidLedgerLine[];
+  readonly duplicates: DuplicateWakeEntry[];
 }
 
 export class StewardLedgerStore {
@@ -65,20 +81,26 @@ export class StewardLedgerStore {
     try {
       raw = await readFile(this.path(), 'utf8');
     } catch (err) {
-      if (isENOENT(err)) return { entries: [], invalid: [] };
+      if (isENOENT(err)) return { entries: [], invalid: [], duplicates: [] };
       throw err;
     }
 
-    const { entries: allEntries, invalid } = parseLedgerLines(raw);
+    const { entries: allEntries, invalid, duplicates } = parseLedgerLines(raw);
     let entries = allEntries;
     if (opts.wakeId) entries = entries.filter((entry) => entry.wakeId === opts.wakeId);
     if (opts.limit !== undefined && opts.limit > 0) entries = entries.slice(-opts.limit);
-    return { entries, invalid };
+    return { entries, invalid, duplicates };
   }
 
+  /**
+   * The single terminal entry for `wakeId`, or null. Issue #125 D3: FIRST-wins
+   * — the earliest entry in file order is authoritative and later duplicates
+   * are ignored here (and surfaced via {@link readDiagnostics}), so a post-hoc
+   * append can never alter the recorded decision.
+   */
   async findByWakeId(wakeId: string): Promise<StewardDecisionLedgerEntry | null> {
     const matches = await this.read({ wakeId });
-    return matches.at(-1) ?? null;
+    return matches.at(0) ?? null;
   }
 
   path(): string {
@@ -93,7 +115,9 @@ export function createStewardLedgerStore(workspaceDir: string): StewardLedgerSto
 /** Pure line-by-line parse of a raw ledger file's contents: every line that
  *  parses lands in `entries` (in file order); every line that doesn't lands
  *  in `invalid` with its 1-based line number and the parse error, and is
- *  skipped rather than aborting the rest of the file. */
+ *  skipped rather than aborting the rest of the file. Reads are LENIENT (issue
+ *  #125): a strict-v2 entry OR a legacy-v1 entry both parse. Every wakeId seen
+ *  more than once is recorded in `duplicates` (D3, first-wins). */
 function parseLedgerLines(raw: string): ReadLedgerDiagnostics {
   const lines = raw
     .split('\n')
@@ -102,14 +126,24 @@ function parseLedgerLines(raw: string): ReadLedgerDiagnostics {
 
   const entries: StewardDecisionLedgerEntry[] = [];
   const invalid: InvalidLedgerLine[] = [];
+  const duplicates: DuplicateWakeEntry[] = [];
+  const firstLineForWake = new Map<string, number>();
   lines.forEach((line, index) => {
     try {
-      entries.push(parseStewardDecisionLedgerEntry(JSON.parse(line)));
+      const entry = parseStewardDecisionLedgerEntryLenient(JSON.parse(line));
+      const lineNo = index + 1;
+      const firstLine = firstLineForWake.get(entry.wakeId);
+      if (firstLine === undefined) {
+        firstLineForWake.set(entry.wakeId, lineNo);
+      } else {
+        duplicates.push({ wakeId: entry.wakeId, firstLine, duplicateLine: lineNo });
+      }
+      entries.push(entry);
     } catch (err) {
       invalid.push({ line: index + 1, error: (err as Error).message });
     }
   });
-  return { entries, invalid };
+  return { entries, invalid, duplicates };
 }
 
 function isENOENT(err: unknown): boolean {

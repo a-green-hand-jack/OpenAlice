@@ -143,6 +143,24 @@ export class StewardSupervisor {
       warnings: state.warnings,
     });
 
+    // Issue #125 D3: exactly one terminal entry per wakeId. Reconciliation
+    // above already takes the first-wins entry; any later duplicate is a
+    // tamper-evident violation the supervisor surfaces (never a hard failure of
+    // the tick) so reports and operators can see it.
+    const { duplicates } = await ledgerStore.readDiagnostics();
+    const duplicateWarnings = duplicates.map(
+      (dup) =>
+        `duplicate ledger entry for wake ${dup.wakeId}: line ${dup.duplicateLine} ignored (first-wins line ${dup.firstLine})`,
+    );
+    if (duplicates.length > 0) {
+      await appendSupervisorEvent(this.workspaceDir, {
+        at: now,
+        type: 'ledger_duplicates',
+        duplicates,
+      });
+    }
+    const warnings = [...state.warnings, ...duplicateWarnings];
+
     const activeWakeIds = (await wakeStore.list())
       .filter((wake) => !isTerminal(wake.status))
       .map((wake) => wake.wakeId);
@@ -152,7 +170,7 @@ export class StewardSupervisor {
       transitions,
       activeWakeIds,
       cost: state.cost,
-      warnings: state.warnings,
+      warnings,
     };
   }
 }
