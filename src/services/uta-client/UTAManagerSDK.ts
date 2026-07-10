@@ -26,7 +26,6 @@ import type {
 } from '@traderalice/uta-protocol'
 import type { ContractDescription, Contract, ContractDetails } from '@traderalice/ibkr'
 import type { ReconnectResult } from '../../core/types.js'
-import { triggerUTARestart } from '../uta-supervisor/restart-trigger.js'
 import { UTAAccountSDK, NotImplementedInSDK } from './UTAAccountSDK.js'
 
 export interface UTAManagerSDKDeps {
@@ -165,33 +164,30 @@ export class UTAManagerSDK {
     return res.rates
   }
 
-  // ==================== Lifecycle — via Guardian restart ====================
+  // ==================== Lifecycle ====================
+  //
+  // Restart ownership moved to the trading-config route layer (issue #127).
+  // A logical account-config mutation triggers exactly ONE whole-UTA-process
+  // restart via `notifyUTAReload()` in `webui/routes/trading-config.ts`. These
+  // SDK methods used to ALSO touch the Guardian flag, which meant every
+  // mutation fired two restarts (route trigger + SDK trigger) spaced beyond
+  // Guardian's debounce window — two SIGTERM/respawn cycles per change. They no
+  // longer trigger a restart; they retain the `UTAManager` shape only, honoring
+  // the availability guard so lite/offline callers behave unchanged.
 
-  /** Reconnect a single UTA. SDK-side: we don't have account granularity
-   *  over the wire today, so this triggers a whole-UTA-process restart
-   *  via Guardian. UTA reads fresh `accounts.json` on respawn.
-   *
-   *  v1 trade-off: a single broker rotation restarts all brokers. Users
-   *  with multiple live UTAs see a brief reconnect window. Acceptable
-   *  for v1; finer-grained reconnect can land alongside per-UTA hot
-   *  reload in a future step. */
+  /** No-op beyond the availability guard. Whole-process restart on config
+   *  change is owned by the trading-config route (#127); the respawned UTA
+   *  reads fresh `accounts.json`, which reconnects every account. */
   async reconnectUTA(_id: string): Promise<ReconnectResult> {
     const unavailable = this.getUnavailableReason()
     if (unavailable) return { success: false, error: unavailable }
-    const r = await triggerUTARestart()
-    if (r.triggered && r.ready) return { success: true, message: 'UTA restarted' }
-    return { success: false, error: r.error ?? 'UTA restart did not complete' }
+    return { success: true, message: 'restart owned by trading-config route' }
   }
 
-  /** Same shape: triggers UTA restart so the new process picks up the
-   *  caller-side write to `accounts.json`. */
+  /** No-op beyond the availability guard. See `reconnectUTA`: config-change
+   *  restart is owned by the trading-config route (#127). */
   async removeUTA(_id: string): Promise<void> {
     if (this.getUnavailableReason()) return
-    await triggerUTARestart().catch((err) => {
-      // Best-effort — config-route caller has already deleted from disk;
-      // not blocking the response on UTA respawn completion.
-      console.warn('[uta-sdk] removeUTA restart trigger failed:', err instanceof Error ? err.message : err)
-    })
   }
 
   // ==================== Search ====================

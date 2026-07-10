@@ -868,6 +868,8 @@ curl -sS "$UTA/__uta/health" | jq .
 
 Guardian watches `data/control/restart-uta.flag` and restarts UTA when it appears (`scripts/guardian/dev.ts:9-12`, `154-162`; flag watcher implementation in `scripts/guardian/shared.ts:430-475`; restart function in `scripts/guardian/shared.ts:394-421`).
 
+A logical account-config mutation through `/api/trading/config` (create / update / delete) triggers **exactly one** restart. The route layer (`notifyUTAReload()` in `src/webui/routes/trading-config.ts`) is the single owner of restart-on-config-change; the `UTAManagerSDK` lifecycle methods no longer also touch the flag (this used to double-fire — issue #127). Concurrent or batched mutations coalesce into at most one in-flight + one trailing restart (`triggerUTARestart` in `src/services/uta-supervisor/restart-trigger.ts`), never one-per-mutation. Each restart is a brief (~1–2s) window where `/api/trading/*` requests hit a restarting UTA; startup-path == restart-path, so the respawned UTA reads the freshly-written `accounts.json`.
+
 ### 7.4 Workspace packages
 
 In dev, Guardian sets `NODE_OPTIONS=--conditions=openalice-source` (`scripts/guardian/dev.ts:72-79`). The workspace packages expose their TypeScript source under the `openalice-source` condition (`packages/uta-protocol/package.json:6-11`; `packages/ibkr/package.json:6-11`; `packages/opentypebb/package.json:6-16`). TypeScript configs know the same custom condition (`tsconfig.json:17`; `services/uta/tsconfig.json:17`), and the UTA tsup config notes the dev-vs-dist resolver split (`services/uta/tsup.config.ts:11-20`).

@@ -46,11 +46,6 @@ interface HealthBody {
   utas?: number
 }
 
-let restartQueue: Promise<TriggerResult> = Promise.resolve({
-  triggered: false,
-  ready: true,
-})
-
 async function fetchHealth(url: string): Promise<HealthBody | null> {
   try {
     const res = await fetch(url)
@@ -59,11 +54,51 @@ async function fetchHealth(url: string): Promise<HealthBody | null> {
   } catch { return null }
 }
 
-export async function triggerUTARestart(opts: TriggerOpts = {}): Promise<TriggerResult> {
-  const current = restartQueue.catch(() => ({ triggered: false, ready: false }))
-    .then(() => triggerUTARestartOnce(opts))
-  restartQueue = current
-  return current
+// ==================== Coalescing restart scheduler (issue #127) ====================
+//
+// At most one restart runs at a time. While one is in flight, all further
+// requests collapse into a SINGLE trailing restart that fires once the
+// in-flight one settles. A burst of N config mutations therefore produces at
+// most two restart generations — the in-flight one plus one trailing restart
+// that picks up the final on-disk `accounts.json` — never N. This is a
+// defense-in-depth coalescer: the primary fix for the double-restart is single
+// ownership at the trading-config route layer, but coalescing bounds bursts and
+// concurrent callers regardless of who triggers them.
+
+let inFlight: Promise<TriggerResult> | null = null
+let trailing: Promise<TriggerResult> | null = null
+let trailingOpts: TriggerOpts | null = null
+
+export function triggerUTARestart(opts: TriggerOpts = {}): Promise<TriggerResult> {
+  if (!inFlight) {
+    inFlight = driveRestart(opts)
+    return inFlight
+  }
+  // A restart is already running. Register (or refresh) the single trailing
+  // restart; every concurrent caller receives the same trailing promise, so
+  // the whole burst collapses to one follow-up run.
+  trailingOpts = opts
+  if (!trailing) {
+    trailing = inFlight
+      .catch(() => undefined)
+      .then(() => {
+        const nextOpts = trailingOpts ?? {}
+        trailing = null
+        trailingOpts = null
+        inFlight = driveRestart(nextOpts)
+        return inFlight
+      })
+  }
+  return trailing
+}
+
+/** Run one restart generation and release the in-flight slot when it settles. */
+async function driveRestart(opts: TriggerOpts): Promise<TriggerResult> {
+  try {
+    return await triggerUTARestartOnce(opts)
+  } finally {
+    inFlight = null
+  }
 }
 
 async function triggerUTARestartOnce(opts: TriggerOpts = {}): Promise<TriggerResult> {
