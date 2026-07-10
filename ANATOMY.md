@@ -29,6 +29,11 @@ state, or ownership.
   [docs/steward-persistent-loop-implementation.zh.md](docs/steward-persistent-loop-implementation.zh.md).
   For the runtime information-flow diagram and performance-test market matrix,
   see [docs/trading-agent-runtime-and-market-testing.zh.md](docs/trading-agent-runtime-and-market-testing.zh.md).
+  The current acceptance snapshot is
+  [docs/appendix/steward-v7-spark-baseline-20260710.md](docs/appendix/steward-v7-spark-baseline-20260710.md):
+  isolated-stack v7 Spark completed 60/60 wakes, but the prompt is not frozen
+  because one guard-feasible bull cell still fails; shared-stack bootstrap is
+  blocked by the Codex trust-config concurrency defect tracked in #124.
   Persistent sessions expose an explicit server-side PTY input seam for future
   steward wake injection; see `src/workspaces/persistent-session.ts` and
   `src/workspaces/session-pool.ts`. The first manual persistent-steward wake
@@ -43,6 +48,14 @@ state, or ownership.
   seam from `src/workspaces/schedule/scanner.ts:203-220` into
   `src/workspaces/service.ts:650-913`; ordinary scheduled issues still run
   headless.
+
+- Codex workspace bootstrap has one remaining shared-state ownership hazard:
+  `src/workspaces/adapters/codex.ts:404-426` registers each cwd by rewriting the
+  user-level `~/.codex/config.toml`. The 2026-07-10 six-way steward test proved
+  that concurrent calls can lose project blocks or produce malformed TOML.
+  Until #124 lands, do not treat `capabilities.parallelPerCwd` as proof that
+  concurrent *fresh bootstrap* is isolated; use distinct homes or serialize
+  bootstrap before launching parallel Codex workspaces.
 
 - UTA is the co-located broker carrier under `services/uta/`. Its process entry
   is `services/uta/src/main.ts:40`, its account manager starts at
@@ -102,6 +115,9 @@ state, or ownership.
   `.alice/steward/wakes/*.json`, `.alice/steward/locks/*.json`,
   `.alice/steward/state.json`, and `.alice/steward/supervisor.jsonl` while
   reading `.alice/steward/ledger/decisions.jsonl`.
+  The 2026-07-10 audit found that `pendingHash`, `actions`, and duplicate-wake
+  revision semantics are not yet strict enough for a hard audit gate; #125 owns
+  that contract rather than UTA trading state.
   The default root is `src/workspaces/config.ts:107-109`.
 
 - Secrets are not stored in plaintext data files after sealing. The machine key

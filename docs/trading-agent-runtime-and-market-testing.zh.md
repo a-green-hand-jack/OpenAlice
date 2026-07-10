@@ -1,9 +1,10 @@
 # Trading Agent Runtime 与市场测试设计
 
-> 状态：工作说明稿（2026-07-09）。本文件解释 trading-agent 在 OpenAlice
+> 状态：运行与测试真源（2026-07-10）。本文件解释 trading-agent 在 OpenAlice
 > workspace 里的结构、信息流、输出流，以及下一阶段为了提高 performance 应采用的
 > 真实市场测试环境。它不改变 prompt、wake schema 或 UTA 行为，只把当前系统和实验方向
-> 讲清楚。
+> 讲清楚。2026-07-10 的 v7 Spark baseline 见 §8 和
+> [appendix/steward-v7-spark-baseline-20260710.md](appendix/steward-v7-spark-baseline-20260710.md)。
 
 ## 1. 一句话
 
@@ -226,7 +227,28 @@ cells。应该分层扩展，让“真实市场信息”和“安全可控执行
 开发集和验收集要分开。开发集用于 prompt/行为调参；验收集必须 holdout，且只在定版后跑，
 否则我们会把 agent 调成“会背这几个窗口”的系统。
 
-## 8. 这一阶段的建议结论
+## 8. 2026-07-10 v7 Spark baseline
+
+在 `jieke/dev@e32efb84` 上，明确指定 `gpt-5.3-codex-spark` 跑完 legacy + dev
+共 10 个 cell、每格 6 周：60/60 wake 完成，正式 isolated-stack 结果中没有
+timeout、stuck、账户锁泄漏、默认 AAPL 污染或 cell-end 三方对账失败。raw verdict
+为 7/10；排除两个在当前 guard 下无法达到 +25% 的 observation-only bull cell 后，
+为 7/8 gateable pass。NVDA +17.7% / maxDD 0% 是唯一 freeze-blocking behavior
+failure，所以 holdout 仍封存。
+
+这轮同时证明「isolated stack 能跑」不等于「shared stack 已无摩擦」。六个 workspace
+同时 bootstrap 的两次测试都在 week 1 被 Codex trust-config 并发写竞争阻断：共享
+配置丢失 trust block/变成畸形 TOML，六个 session 全部 `stuck`。这是 launcher
+基础设施缺陷 #124；修复并重跑前，shared-stack independence 不能宣称通过。
+
+本轮还暴露了 ledger 语义需要收紧：成功 auto-push 后 ledger `pendingHash` 与终态
+UTA 的「无 pending approval」含义不一致，`actions` 存在多种 shape，重复 wakeId
+entry 的 validator 行为未定义。这些字段在澄清前只能作为软审计信息，不能作为新的
+UTA 权威或 performance gate。
+它们跟踪于 #125；同轮观察到的一次 config mutation 两次 UTA restart 的放大问题
+跟踪于 #127。
+
+## 9. 这一阶段的建议结论
 
 performance 阶段的第一目标不是让 agent 在一个 crypto 牛市 cell 上赚最多，而是让它在
 丰富、真实、可复现的环境里形成稳定的 regime-aware 行为：

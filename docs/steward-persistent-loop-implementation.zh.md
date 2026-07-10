@@ -1,5 +1,14 @@
 # Persistent Steward 最小实现方案
 
+> 版本：v0.8（2026-07-10）——PR #122 合入后的 v7 Spark baseline 已完成：
+> isolated-stack 10 cells × 6 weeks 共 60/60 wake `done`，exact contract、三方对账、
+> cleanup 均通过；但 NVDA 仍低于 bull gate，prompt 不冻结、holdout 不打开。
+> shared-stack 六路测试两次被 Codex adapter 对共享 trust config 的并发写竞争阻断，
+> 记录为 #124；ledger 语义和 restart amplification 分别记录为 #125/#127。
+> 此结果把剩余工作明确拆为 launcher 基础设施、ledger 语义契约和
+> trading policy performance 三类；不得再用 prompt 调参掩盖确定性基础设施缺陷。
+> 证据摘要见
+> [appendix/steward-v7-spark-baseline-20260710.md](appendix/steward-v7-spark-baseline-20260710.md)。
 > 版本：v0.7（2026-07-09）——issue #109：`StewardSupervisor.tick()` 此前只能被
 > `POST /:id/steward/supervisor/tick` 手动触发，全仓库唯一真实调用者是
 > `tools/campaigns/run-cell.mjs` 自己的外部轮询，进程内没有任何定时器/cron/UI

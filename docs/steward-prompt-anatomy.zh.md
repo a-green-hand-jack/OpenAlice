@@ -25,7 +25,7 @@
 | **v4** | performance tuning + ledger 自校验 | **`src/workspaces/templates/steward/files/instruction.md`** | 同左 + 新建 workspace 的 `.alice/steward/validate-ledger.mjs` | **已实现（2026-07-10）；dev baseline 已跑** | 针对 2026-07-09 dev baseline：bull cells 参与不足（小仓位/过度保守）且 low-signal chop/FX wake 偶发写出 schema-invalid ledger 后被 supervisor 视为未完成直到 timeout。v4 在 Participation Bias 中加入「清晰 uptrend 下 meaningful starter position」尺寸语义（flat + NORMAL risk + high conviction 通常 25-60% notional，而非 5-10% toe-hold），并在 Wake Loop 第 6 步要求写完 ledger 后运行 workspace-local `validate-ledger.mjs <wakeId>`，明确 `checklist`/`thesis`/`actions`/`pendingHash`/`invalidation`/`cost` 必须是顶层字段，schema-invalid line 不算完成 marker。Full dev baseline 证明 timeout/ledger 问题消失，但 bull behavior 仍不达标：NVDA 有首仓但不加仓，0700.HK 正常回撤中过早离场。 |
 | **v5** | winner management + pullback discipline | **`src/workspaces/templates/steward/files/instruction.md`** | 同左 + `.alice/steward/validate-ledger.mjs` | **已实现（2026-07-10）；targeted regression failed** | 针对 v4 full dev baseline 的行为缺口：在 Participation Bias 中补充「盈利趋势仓位要重新评估当前 notional，不足且可控风险时可顺势加仓」「健康 uptrend 的正常 pullback / 临时浮亏不等于 invalidation」「低波动漂移不等于高置信 uptrend」，并在 Risk Discipline 中明确只允许给盈利或持平且 thesis 仍有效的仓位加仓，且必须先/同时上移 stop。Targeted regression 显示方向不够窄：NVDA 学会加仓但贴近 max-position guard 后触发 READ_ONLY；0700.HK 仍被 pullback 洗出；SPY low-vol chop 过早参与。 |
 | **v6** | guard headroom + stricter trend filter | **`src/workspaces/templates/steward/files/instruction.md`** | 同左 + `.alice/steward/validate-ledger.mjs` | **已实现（2026-07-10）；targeted regression partial / failed bull threshold** | 在 v5 基础上把 starter range 收窄为 25-45%，加仓目标收在 50-55% notional 而不是贴近 60% hard guard；明确若 mark-to-market 把敞口推近/超过 guard，应 trim 回 guard 下方而不是等 READ_ONLY；把 pullback hold 条件写成「在原 stop/risk budget 内、仍高于 swing support、且未超过约 8% adverse move」；把 low-vol chop 过滤写硬：1-4% 的一两周窄幅 drift 不足以使用 meaningful starter。Targeted regression 修掉 NVDA READ_ONLY（+17.0%，仍低于 +25% bull 阈值）并让 SPY PASS，但暴露 0700.HK 的 default-contract/AAPL 污染。 |
-| **v7** | campaign tradable contract binding | **`src/workspaces/templates/steward/files/instruction.md`** + `tools/campaigns/run-cell.mjs` | wake `marketContext.tradeableAliceId` | **已实现（2026-07-10）；targeted regression pending** | v6 targeted 暴露出非 prompt-policy 摩擦：MockBroker 空搜索会返回默认 `AAPL`，agent 在 0700.HK cell 中读 `ASSET-K` tape 却尝试交易默认 `AAPL`，导致 stopLoss 被按错 entry 估算后反复 paper-policy denied。v7 在 campaign wake 中显式传 `tradeableAliceId: <acctId>|<codename>` / `tradeableNativeKey`，并在 Wake Loop 第 1 步要求若该字段存在，order/position 命令必须使用该 exact aliceId，不能用 blank search/default/example contracts。 |
+| **v7** | campaign tradable contract binding | **`src/workspaces/templates/steward/files/instruction.md`** + `tools/campaigns/run-cell.mjs` | wake `marketContext.tradeableAliceId` | **已实现；targeted + 10-cell 六周 baseline 已完成（2026-07-10）；尚未冻结 holdout** | v6 targeted 暴露出非 prompt-policy 摩擦：MockBroker 空搜索会返回默认 `AAPL`，agent 在 0700.HK cell 中读 `ASSET-K` tape 却尝试交易默认 `AAPL`。v7 显式传入并强制使用 exact `tradeableAliceId`。后续 60/60 wake 证明 isolated-stack contract binding 已稳定、无 AAPL 污染；但 guard-feasible NVDA 仅 +17.7%，仍低于 +25% bull gate。六路 shared-stack 则被 Codex trust-config 并发写竞争阻断（#124），不是 prompt policy 失败。 |
 
 > **v2 验证结果（2026-07-07，paste 模式，3 个真实牛市匿名窗口）**：H1 = NVDA 42% / TSLA 65% / AMD 43%（均 ~50%），maxDD 全 0%。对比 pilot（v1）H1 仅 7-16%——**v2 把牛市参与度提升 3-5×，同时保住 H2 纪律（回撤 0%）**。即「行情好时参与、行情差时仍不冒大险」。12-cell（含 bear/chop）将复核 v2 是否破坏 H2。
 
@@ -391,3 +391,24 @@ bull 验收：NVDA +18.8% / maxDD 0%（仍低于 +25% 阈值），0700.HK +4.1% 
 maxDD 1.7%，SPY chop -0.9% / maxDD 1.8% PASS。结论：OpenAlice 基建摩擦已进一步
 剥离，下一步是 trading policy 本身的 bull participation / chop false-positive
 权衡，而不是 wake/ledger/contract plumbing。
+
+## 14. v7 完整 Spark baseline 与 shared-stack 审计（2026-07-10）
+
+PR #122 合入 `jieke/dev@e32efb84` 后，用明确指定的
+`gpt-5.3-codex-spark` 跑完 legacy + dev 共 10 个 cell、每格 6 周。正式结果为
+60/60 wake `done`，没有 timeout/stuck/account-lock leak，所有实际交易都使用 wake
+绑定的 exact `tradeableAliceId`，ledger/UTA/MockBroker 的 cell-end 状态一致。
+
+行为结果不是全绿：raw verdict 7/10；排除两个在当前 guard 下无法达到 +25% 的
+observation-only bull cell 后为 7/8。唯一 gateable failure 是 NVDA +17.7% / maxDD
+0%，仍低于 +25% bull gate。因此 v7 **不冻结、不打开 holdout**。这保持了实验纪律：
+holdout 没有参与 prompt 调参，也没有被本轮任何 agent 读取或运行。
+
+并行压力测试还给出一个新的确定性基础设施结论：六个 workspace 同时 bootstrap 时，
+Codex adapter 对共享 `~/.codex/config.toml` 做无锁、非原子的 read-modify-write，两个
+独立尝试都产生 trust block 丢失/畸形 TOML，使六个 fresh session 在 week 1 全部
+`stuck`。它属于 OpenAlice workspace launcher contract，跟踪于 #124；修好前不能把
+shared-stack campaign 的失败归因给 Spark 或 v7 prompt。
+
+完整矩阵、证据边界和下一 gate 见
+[appendix/steward-v7-spark-baseline-20260710.md](appendix/steward-v7-spark-baseline-20260710.md)。
