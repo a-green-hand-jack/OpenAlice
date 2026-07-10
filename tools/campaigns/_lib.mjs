@@ -145,6 +145,52 @@ export function regimeVerdict(regime, agentReturn, agentMaxDD, bhMaxDD) {
   return { pass: false, rule: 'unknown regime' };
 }
 
+/** Terminal wake statuses that MUST leave a decision-ledger entry (issue #134).
+ *  timeout/stuck are terminal but write no ledger entry. */
+export const LEDGER_BACKED_TERMINAL = new Set(['done', 'blocked', 'error']);
+
+/**
+ * Audit finalization set-equality (issue #134). A clean run's set of
+ * ledger-backed terminal wakes (`done|blocked|error` per-week status) must
+ * exactly equal the set of first-wins wakeIds in the exported final ledger. The
+ * original bug wrote a trustworthy-looking result claiming six done weeks while
+ * only five decisions survived in decisions.jsonl (the persistent session
+ * deleted and rebuilt the file). This makes that divergence a hard,
+ * deterministic audit failure instead of a silent inconsistency.
+ *
+ * @param {{ weeks?: Array<{ wakeId?: string, status?: string }>, ledgerEntries?: Array<{ wakeId?: string }> }} input
+ * @returns {{ valid: boolean, terminalLedgerBackedWakes: number, finalLedgerEntries: number, missingFromLedger: string[], extraInLedger: string[] }}
+ */
+export function auditFinalization({ weeks = [], ledgerEntries = [] } = {}) {
+  const terminalLedgerBacked = [];
+  const seenWake = new Set();
+  for (const w of weeks) {
+    if (w && typeof w.wakeId === 'string' && LEDGER_BACKED_TERMINAL.has(w.status) && !seenWake.has(w.wakeId)) {
+      seenWake.add(w.wakeId);
+      terminalLedgerBacked.push(w.wakeId);
+    }
+  }
+  const finalLedgerWakeIds = [];
+  const seenLedger = new Set();
+  for (const e of ledgerEntries) {
+    if (e && typeof e.wakeId === 'string' && !seenLedger.has(e.wakeId)) {
+      seenLedger.add(e.wakeId);
+      finalLedgerWakeIds.push(e.wakeId);
+    }
+  }
+  const finalSet = new Set(finalLedgerWakeIds);
+  const backedSet = new Set(terminalLedgerBacked);
+  const missingFromLedger = terminalLedgerBacked.filter((id) => !finalSet.has(id));
+  const extraInLedger = finalLedgerWakeIds.filter((id) => !backedSet.has(id));
+  return {
+    valid: missingFromLedger.length === 0 && extraInLedger.length === 0,
+    terminalLedgerBackedWakes: terminalLedgerBacked.length,
+    finalLedgerEntries: finalLedgerWakeIds.length,
+    missingFromLedger,
+    extraInLedger,
+  };
+}
+
 /**
  * Optimistic upper bound for a long-only weekly steward under the configured
  * max-position guard: enter at each weekly decision close with max allowed

@@ -11,6 +11,11 @@ export const DECISION_LEDGER_SCHEMA_VERSION = 2;
 export const DECISION_LEDGER_SCHEMA_VERSION_V1 = 1;
 export const STEWARD_LOCK_SCHEMA_VERSION = 1;
 export const STEWARD_STATE_SCHEMA_VERSION = 1;
+/** Current ledger-receipt version (issue #134). A receipt is the immutable
+ *  proof, captured the FIRST time the supervisor drove a ledger-backed wake to
+ *  a terminal state, that lets every later tick detect if that wake's
+ *  first-wins ledger entry later disappears or is mutated. */
+export const STEWARD_LEDGER_RECEIPT_SCHEMA_VERSION = 1;
 
 export const stewardWakeReasonSchema = z.enum([
   'scheduled_observe',
@@ -70,6 +75,29 @@ export const stewardWakeAttributionSchema = z.object({
 }).passthrough();
 export type StewardWakeAttribution = z.infer<typeof stewardWakeAttributionSchema>;
 
+// Ledger-integrity receipt (issue #134). Captured the FIRST time the supervisor
+// reconciles a wake to a ledger-backed terminal state (done|blocked|error), and
+// then treated as immutable. `fingerprint` is the canonical-JSON SHA-256 of the
+// first-wins ledger entry (see ledger-receipt.ts) — format/whitespace-invariant,
+// so a benign reformat never trips a false alarm, but a semantic edit or a
+// vanished line does. Later ticks and the generated validator compare the
+// current first-wins entry against this receipt to detect history that was
+// silently rewritten or deleted. `bootstrapped` marks a receipt back-filled from
+// a pre-#134 terminal wake's current entry (honest: we never had the original,
+// we adopted what was there once).
+export const stewardLedgerReceiptSchema = z.object({
+  version: z.literal(STEWARD_LEDGER_RECEIPT_SCHEMA_VERSION),
+  wakeId: z.string().min(1),
+  status: stewardLedgerStatusSchema,
+  decision: stewardDecisionSchema,
+  at: z.string().min(1),
+  accountId: z.string().min(1),
+  fingerprint: z.string().min(1),
+  recordedAt: z.string().min(1),
+  bootstrapped: z.boolean().optional(),
+}).passthrough();
+export type StewardLedgerReceipt = z.infer<typeof stewardLedgerReceiptSchema>;
+
 export const stewardWakeRecordSchema = z.object({
   version: z.literal(WAKE_SCHEMA_VERSION),
   wakeId: z.string().min(1),
@@ -83,6 +111,7 @@ export const stewardWakeRecordSchema = z.object({
   envelope: stewardWakeEnvelopeSchema,
   error: z.string().min(1).optional(),
   attribution: stewardWakeAttributionSchema.optional(),
+  ledgerReceipt: stewardLedgerReceiptSchema.optional(),
 }).passthrough();
 export type StewardWakeRecord = z.infer<typeof stewardWakeRecordSchema>;
 

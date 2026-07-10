@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import {
   WAKE_SCHEMA_VERSION,
   parseStewardWakeRecord,
+  type StewardLedgerReceipt,
   type StewardWakeAttribution,
   type StewardWakeEnvelope,
   type StewardWakeRecord,
@@ -26,6 +27,14 @@ export interface WakeStatusPatch {
   readonly error?: string | null;
   /** Terminal-outcome attribution (issue #132). `null` clears it. */
   readonly attribution?: StewardWakeAttribution | null;
+  /**
+   * Ledger-integrity receipt (issue #134). Set on the first terminal
+   * reconciliation of a ledger-backed wake (and once on bootstrap of a
+   * pre-#134 terminal wake). Treated as immutable thereafter — the supervisor
+   * never overwrites an existing receipt, so this only ever transitions
+   * absent → present.
+   */
+  readonly ledgerReceipt?: StewardLedgerReceipt;
   readonly now?: string;
 }
 
@@ -90,6 +99,12 @@ export class StewardWakeStore {
       delete candidate.attribution;
     } else if (patch.attribution !== undefined) {
       candidate.attribution = patch.attribution;
+    }
+    // A receipt is write-once: capture it if this wake has none yet, but never
+    // overwrite an existing one (issue #134 — the whole point is that the
+    // original terminal proof is immutable).
+    if (patch.ledgerReceipt !== undefined && candidate.ledgerReceipt === undefined) {
+      candidate.ledgerReceipt = patch.ledgerReceipt;
     }
     const next = parseStewardWakeRecord(candidate);
     await writeJsonAtomic(this.pathFor(wakeId), next);

@@ -17,6 +17,8 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { canonicalDecisionFingerprint } from '../../steward/ledger-receipt.js';
+
 const here = dirname(fileURLToPath(import.meta.url));
 const bootstrapPath = join(here, 'bootstrap.mjs');
 
@@ -176,5 +178,92 @@ describe('generated steward validate-ledger.mjs (issue #125 v2)', () => {
     ], 'wake-dup');
     expect(res.code).toBe(1);
     expect(res.stderr).toMatch(/exactly one is allowed/);
+  });
+});
+
+describe('generated steward validate-ledger.mjs integrity cross-check (issue #134)', () => {
+  async function writeWakeRecord(rec: Record<string, unknown>): Promise<void> {
+    const file = join(wsDir, '.alice', 'steward', 'wakes', `${encodeURIComponent(rec.wakeId as string)}.json`);
+    await writeFile(file, `${JSON.stringify(rec, null, 2)}\n`, 'utf8');
+  }
+
+  function terminalWakeRecord(wakeId: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      version: 1,
+      wakeId,
+      status: 'done',
+      createdAt: '2026-07-10T14:00:00.000Z',
+      injectedAt: '2026-07-10T14:00:05.000Z',
+      completedAt: '2026-07-10T14:01:23.000Z',
+      deadline: '2026-07-10T14:10:00.000Z',
+      sessionId: 'sess-1',
+      envelope: {
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      },
+      ...over,
+    };
+  }
+
+  it('passes the current wake when a prior terminal wake still matches its receipt (TS/JS fingerprint agreement)', async () => {
+    const prior = entry({ wakeId: 'wake-prior', thesis: 'prior decision' });
+    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
+    await writeWakeRecord(terminalWakeRecord('wake-prior', {
+      ledgerReceipt: {
+        version: 1,
+        wakeId: 'wake-prior',
+        status: 'done',
+        decision: 'no_trade',
+        at: prior.at,
+        accountId: prior.accountId,
+        fingerprint: canonicalDecisionFingerprint(prior),
+        recordedAt: '2026-07-10T14:02:00.000Z',
+      },
+    }));
+    const res = await runValidator([prior, current], 'wake-cur');
+    expect(res.stderr).toBe('');
+    expect(res.code).toBe(0);
+  });
+
+  it('fails the current wake when a prior terminal wake\'s ledger entry disappeared (regression 4)', async () => {
+    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
+    // A prior done wake exists, but its ledger line is gone — only the current
+    // wake's entry remains.
+    await writeWakeRecord(terminalWakeRecord('wake-prior'));
+    const res = await runValidator([current], 'wake-cur');
+    expect(res.code).toBe(1);
+    expect(res.stderr).toMatch(/terminal wake wake-prior .*has no ledger entry/);
+  });
+
+  it('fails the current wake when a prior terminal wake\'s ledger entry was mutated in place', async () => {
+    const original = entry({ wakeId: 'wake-prior', thesis: 'original prior decision' });
+    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
+    await writeWakeRecord(terminalWakeRecord('wake-prior', {
+      ledgerReceipt: {
+        version: 1,
+        wakeId: 'wake-prior',
+        status: 'done',
+        decision: 'no_trade',
+        at: original.at,
+        accountId: original.accountId,
+        fingerprint: canonicalDecisionFingerprint(original),
+        recordedAt: '2026-07-10T14:02:00.000Z',
+      },
+    }));
+    // Ledger now carries a REWRITTEN prior entry (different thesis + decision).
+    const mutated = entry({ wakeId: 'wake-prior', thesis: 'rewritten', decision: 'propose_trade' });
+    const res = await runValidator([mutated, current], 'wake-cur');
+    expect(res.code).toBe(1);
+    expect(res.stderr).toMatch(/fingerprint mismatch/);
+  });
+
+  it('ignores timeout/stuck wakes in the cross-check (they carry no ledger entry)', async () => {
+    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
+    await writeWakeRecord(terminalWakeRecord('wake-to', { status: 'timeout' }));
+    const res = await runValidator([current], 'wake-cur');
+    expect(res.stderr).toBe('');
+    expect(res.code).toBe(0);
   });
 });

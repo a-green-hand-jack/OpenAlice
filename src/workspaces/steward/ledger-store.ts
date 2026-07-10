@@ -1,12 +1,22 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+import { canonicalDecisionFingerprint } from './ledger-receipt.js';
 import {
   parseStewardDecisionLedgerEntry,
   parseStewardDecisionLedgerEntryLenient,
   type StewardDecisionLedgerEntry,
 } from './types.js';
 import { stewardLedgerPath } from './paths.js';
+
+/** The first-wins ledger entry for a wakeId together with the canonical
+ *  fingerprint (issue #134) of that exact entry. The fingerprint is derived
+ *  from the SAME parsed line the entry came from, so the receipt the supervisor
+ *  records and the entry it reconciles can never come from different lines. */
+export interface FirstWinsEntry {
+  readonly entry: StewardDecisionLedgerEntry;
+  readonly fingerprint: string;
+}
 
 export interface ReadLedgerOptions {
   readonly wakeId?: string;
@@ -101,6 +111,43 @@ export class StewardLedgerStore {
   async findByWakeId(wakeId: string): Promise<StewardDecisionLedgerEntry | null> {
     const matches = await this.read({ wakeId });
     return matches.at(0) ?? null;
+  }
+
+  /**
+   * The first-wins entry for `wakeId` AND its canonical fingerprint (issue
+   * #134), or null when no parseable entry exists. Selects the SAME line
+   * {@link findByWakeId} would (the earliest line that is valid JSON and parses
+   * leniently), then fingerprints that line's parsed value, so the recorded
+   * receipt and the reconciled entry are always the same line. Used by the
+   * supervisor to capture a receipt on the first terminal transition and to
+   * detect a later disappearance/mutation of that entry.
+   */
+  async firstWinsWithFingerprint(wakeId: string): Promise<FirstWinsEntry | null> {
+    let raw: string;
+    try {
+      raw = await readFile(this.path(), 'utf8');
+    } catch (err) {
+      if (isENOENT(err)) return null;
+      throw err;
+    }
+    const lines = raw.split('\n').map((line) => line.trim()).filter(Boolean);
+    for (const line of lines) {
+      let obj: unknown;
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!obj || typeof obj !== 'object' || (obj as { wakeId?: unknown }).wakeId !== wakeId) continue;
+      let entry: StewardDecisionLedgerEntry;
+      try {
+        entry = parseStewardDecisionLedgerEntryLenient(obj);
+      } catch {
+        continue;
+      }
+      return { entry, fingerprint: canonicalDecisionFingerprint(obj) };
+    }
+    return null;
   }
 
   path(): string {

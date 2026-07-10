@@ -2,13 +2,16 @@ import { appendFile, mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { buildStewardState, type StewardCostPolicyInput } from './cost.js';
-import { createStewardLedgerStore } from './ledger-store.js';
+import { buildLedgerReceipt } from './ledger-receipt.js';
+import { createStewardLedgerStore, type StewardLedgerStore } from './ledger-store.js';
 import { createStewardLockStore } from './lock-store.js';
 import { stewardStatePath, stewardSupervisorLogPath } from './paths.js';
 import { createStewardWakeStore } from './wake-store.js';
 import type { ContextTelemetry } from '../cli-adapter.js';
 import type {
   StewardCostSummary,
+  StewardLedgerReceipt,
+  StewardLedgerStatus,
   StewardState,
   StewardWakeAttribution,
   StewardWakeRecord,
@@ -59,25 +62,49 @@ export class StewardSupervisor {
     // warning here (not just a silent plain-timeout fallback), so campaign
     // reports and operators can see attribution silently went dark.
     const telemetryWarnings: string[] = [];
+    // Issue #134: ledger-integrity warnings from re-reconciling ALREADY-terminal
+    // ledger-backed wakes (a completed wake whose first-wins entry later
+    // disappeared or was mutated). Collected across the loop, surfaced in the
+    // tick result and as structured supervisor events.
+    const integrityWarnings: string[] = [];
     const wakes = await wakeStore.list();
 
     for (const wake of wakes) {
       if (isTerminal(wake.status)) {
         await lockStore.release(wake.envelope.accountId, wake.wakeId);
+        // Issue #134: a ledger-backed terminal wake (done|blocked|error) is NOT
+        // "finished business" — its first-wins ledger entry must still exist and
+        // match the receipt captured at completion. timeout/stuck wakes are not
+        // ledger-backed, so they're genuinely done here.
+        if (isLedgerBacked(wake.status)) {
+          const warning = await this.reconcileTerminalLedger(wake, wakeStore, ledgerStore, now);
+          if (warning) integrityWarnings.push(warning);
+        }
         continue;
       }
 
-      const ledgerEntry = await ledgerStore.findByWakeId(wake.wakeId);
-      if (ledgerEntry) {
+      const found = await ledgerStore.firstWinsWithFingerprint(wake.wakeId);
+      if (found) {
+        const ledgerEntry = found.entry;
         const nextStatus = ledgerEntry.status === 'done'
           ? 'done'
           : ledgerEntry.status === 'blocked'
             ? 'blocked'
             : 'error';
+        // Capture the immutable receipt as part of the very transition to
+        // terminal (issue #134). updateStatus never overwrites an existing
+        // receipt, so this is a no-op on any later re-reconcile.
+        const receipt = buildLedgerReceipt({
+          entry: ledgerEntry,
+          status: nextStatus,
+          fingerprint: found.fingerprint,
+          recordedAt: now,
+        });
         const updated = await wakeStore.updateStatus(wake.wakeId, nextStatus, {
           now,
           completedAt: ledgerEntry.at,
           error: nextStatus === 'error' ? ledgerEntry.completion.reason : null,
+          ledgerReceipt: receipt,
         });
         await lockStore.release(updated.envelope.accountId, updated.wakeId);
         transitions.push({
@@ -212,7 +239,13 @@ export class StewardSupervisor {
         invalid,
       });
     }
-    const warnings = [...state.warnings, ...duplicateWarnings, ...invalidWarnings, ...telemetryWarnings];
+    const warnings = [
+      ...state.warnings,
+      ...duplicateWarnings,
+      ...invalidWarnings,
+      ...telemetryWarnings,
+      ...integrityWarnings,
+    ];
 
     const activeWakeIds = (await wakeStore.list())
       .filter((wake) => !isTerminal(wake.status))
@@ -270,6 +303,113 @@ export class StewardSupervisor {
       };
     }
   }
+
+  /**
+   * Re-reconcile an ALREADY-terminal ledger-backed wake against the current
+   * ledger (issue #134). The first terminal transition recorded an immutable
+   * receipt (canonical fingerprint of the first-wins entry). Every later tick
+   * re-checks that the entry still exists and still matches:
+   *
+   *  - receipt present, entry gone      → `entry_missing` violation (a completed
+   *                                        decision was deleted from history);
+   *  - receipt present, fingerprint ≠   → `entry_mutated` violation (history was
+   *                                        rewritten in place);
+   *  - receipt present, fingerprint =   → clean, no event;
+   *  - receipt ABSENT (pre-#134 wake):
+   *      · entry present → back-fill a `bootstrapped` receipt once from the
+   *        current entry (honest: we adopt what's there, we never claim to have
+   *        the original);
+   *      · entry gone → `entry_missing_no_receipt` violation (a terminal wake
+   *        with no ledger entry AND no receipt to reconstruct — surfaced, never
+   *        fabricated).
+   *
+   * Returns a human-readable warning string on a violation (null otherwise) and
+   * writes a structured `ledger_integrity_violation` supervisor event so
+   * campaign reports and operators can see the loss deterministically.
+   */
+  private async reconcileTerminalLedger(
+    wake: StewardWakeRecord,
+    wakeStore: ReturnType<typeof createStewardWakeStore>,
+    ledgerStore: StewardLedgerStore,
+    now: string,
+  ): Promise<string | null> {
+    const status = wake.status as StewardLedgerStatus;
+    const found = await ledgerStore.firstWinsWithFingerprint(wake.wakeId);
+    const receipt = wake.ledgerReceipt;
+
+    if (receipt) {
+      if (!found) {
+        return this.reportIntegrityViolation(wake.wakeId, {
+          now,
+          kind: 'entry_missing',
+          status,
+          expectedFingerprint: receipt.fingerprint,
+          detail: `first-wins ledger entry for terminal wake ${wake.wakeId} (${status}) is gone; ` +
+            `it was recorded at ${receipt.recordedAt}`,
+        });
+      }
+      if (found.fingerprint !== receipt.fingerprint) {
+        return this.reportIntegrityViolation(wake.wakeId, {
+          now,
+          kind: 'entry_mutated',
+          status,
+          expectedFingerprint: receipt.fingerprint,
+          actualFingerprint: found.fingerprint,
+          detail: `first-wins ledger entry for terminal wake ${wake.wakeId} (${status}) changed since it was ` +
+            `recorded; the original decision has been rewritten`,
+        });
+      }
+      return null;
+    }
+
+    // No receipt: this wake reached terminal before #134 shipped (or in a
+    // workspace that predates it). Bootstrap exactly once from the current
+    // entry; if there is no entry to adopt, that is itself a violation we
+    // surface honestly rather than inventing history.
+    if (found) {
+      const bootstrapReceipt: StewardLedgerReceipt = buildLedgerReceipt({
+        entry: found.entry,
+        status,
+        fingerprint: found.fingerprint,
+        recordedAt: now,
+        bootstrapped: true,
+      });
+      await wakeStore.updateStatus(wake.wakeId, wake.status, { now, ledgerReceipt: bootstrapReceipt });
+      return null;
+    }
+
+    return this.reportIntegrityViolation(wake.wakeId, {
+      now,
+      kind: 'entry_missing_no_receipt',
+      status,
+      detail: `terminal wake ${wake.wakeId} (${status}) has no ledger entry and no receipt to reconcile ` +
+        `against; its completion evidence cannot be confirmed`,
+    });
+  }
+
+  private async reportIntegrityViolation(
+    wakeId: string,
+    info: {
+      readonly now: string;
+      readonly kind: 'entry_missing' | 'entry_mutated' | 'entry_missing_no_receipt';
+      readonly status: StewardLedgerStatus;
+      readonly detail: string;
+      readonly expectedFingerprint?: string;
+      readonly actualFingerprint?: string;
+    },
+  ): Promise<string> {
+    await appendSupervisorEvent(this.workspaceDir, {
+      at: info.now,
+      type: 'ledger_integrity_violation',
+      wakeId,
+      kind: info.kind,
+      status: info.status,
+      ...(info.expectedFingerprint ? { expectedFingerprint: info.expectedFingerprint } : {}),
+      ...(info.actualFingerprint ? { actualFingerprint: info.actualFingerprint } : {}),
+      detail: info.detail,
+    });
+    return `ledger integrity violation for wake ${wakeId}: ${info.detail}`;
+  }
 }
 
 export function createStewardSupervisor(workspaceDir: string): StewardSupervisor {
@@ -304,4 +444,11 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
 function isTerminal(status: StewardWakeRecord['status']): boolean {
   return status === 'done' || status === 'blocked' || status === 'error' ||
     status === 'stuck' || status === 'timeout';
+}
+
+/** A terminal status that MUST be backed by a decision-ledger entry (issue
+ *  #134). timeout/stuck are terminal but write no ledger entry, so they are
+ *  excluded from ledger-integrity reconciliation. */
+function isLedgerBacked(status: StewardWakeRecord['status']): boolean {
+  return status === 'done' || status === 'blocked' || status === 'error';
 }

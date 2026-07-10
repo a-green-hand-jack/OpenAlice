@@ -872,6 +872,139 @@ describe('StewardSupervisor', () => {
   });
 });
 
+describe('StewardSupervisor ledger integrity (issue #134)', () => {
+  async function seedInjectedWake(wakeId: string): Promise<void> {
+    const wakeStore = createStewardWakeStore(dir);
+    const lockStore = createStewardLockStore(dir);
+    await wakeStore.create({
+      wakeId,
+      deadline: '2026-07-08T14:03:00.000Z',
+      envelope,
+      now: '2026-07-08T14:00:00.000Z',
+    });
+    await wakeStore.updateStatus(wakeId, 'injected', {
+      now: '2026-07-08T14:00:05.000Z',
+      injectedAt: '2026-07-08T14:00:05.000Z',
+      sessionId: 'sess-integrity',
+    });
+    await lockStore.acquire({
+      accountId: envelope.accountId,
+      wakeId,
+      now: '2026-07-08T14:00:00.000Z',
+      expiresAt: '2026-07-08T14:03:00.000Z',
+    });
+  }
+
+  it('records an immutable receipt on the first terminal reconciliation', async () => {
+    const ledgerStore = createStewardLedgerStore(dir);
+    await seedInjectedWake('wake-r1');
+    await ledgerStore.append(ledgerEntry({ wakeId: 'wake-r1' }));
+
+    await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
+
+    const wake = await createStewardWakeStore(dir).get('wake-r1');
+    expect(wake?.status).toBe('done');
+    expect(wake?.ledgerReceipt).toMatchObject({
+      version: 1,
+      wakeId: 'wake-r1',
+      status: 'done',
+      decision: 'no_trade',
+    });
+    expect(typeof wake?.ledgerReceipt?.fingerprint).toBe('string');
+    expect(wake?.ledgerReceipt?.fingerprint.length).toBeGreaterThan(0);
+    expect(wake?.ledgerReceipt?.bootstrapped).toBeUndefined();
+  });
+
+  it('emits a ledger_integrity_violation when a completed wake\'s ledger line is deleted (issue #134 regression 1)', async () => {
+    const ledgerStore = createStewardLedgerStore(dir);
+    await seedInjectedWake('wake-del');
+    await ledgerStore.append(ledgerEntry({ wakeId: 'wake-del' }));
+
+    // Tick 1: transition to done + record receipt.
+    const first = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
+    expect(first.transitions[0]).toMatchObject({ wakeId: 'wake-del', to: 'done' });
+    expect(first.warnings.some((w) => w.includes('ledger integrity violation'))).toBe(false);
+
+    // The persistent session deletes and rebuilds the ledger from a later week,
+    // dropping wake-del's line entirely.
+    await writeFile(ledgerStore.path(), '', 'utf8');
+
+    // Tick 2: the terminal wake is re-reconciled and the loss is detected.
+    const second = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:05:00.000Z', isSessionRunning: () => true });
+    expect((await createStewardWakeStore(dir).get('wake-del'))?.status).toBe('done');
+    expect(second.warnings.some((w) => w.includes('ledger integrity violation for wake wake-del'))).toBe(true);
+    const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
+    expect(log).toContain('"type":"ledger_integrity_violation"');
+    expect(log).toContain('"kind":"entry_missing"');
+  });
+
+  it('emits a ledger_integrity_violation when the first-wins entry is mutated in place (issue #134 regression 2)', async () => {
+    const ledgerStore = createStewardLedgerStore(dir);
+    await seedInjectedWake('wake-mut');
+    await ledgerStore.append(ledgerEntry({ wakeId: 'wake-mut', thesis: 'original thesis' }));
+    await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
+
+    // A whitespace/format-only rewrite must NOT trip the alarm (requirement 7):
+    // re-serialize the same entry with indentation, on one line.
+    const original = ledgerEntry({ wakeId: 'wake-mut', thesis: 'original thesis' });
+    await writeFile(ledgerStore.path(), `${JSON.stringify(original, null, 2).replace(/\n/g, ' ')}\n`, 'utf8');
+    const reformat = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:04:00.000Z', isSessionRunning: () => true });
+    expect(reformat.warnings.some((w) => w.includes('ledger integrity violation'))).toBe(false);
+
+    // A SEMANTIC change (different thesis + decision) is a mutation.
+    await writeFile(
+      ledgerStore.path(),
+      `${JSON.stringify(ledgerEntry({ wakeId: 'wake-mut', thesis: 'rewritten thesis', decision: 'propose_trade' }))}\n`,
+      'utf8',
+    );
+    const mutated = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:05:00.000Z', isSessionRunning: () => true });
+    expect(mutated.warnings.some((w) => w.includes('ledger integrity violation for wake wake-mut'))).toBe(true);
+    const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
+    expect(log).toContain('"kind":"entry_mutated"');
+  });
+
+  it('bootstraps a receipt once for a pre-#134 terminal wake, then guards it', async () => {
+    const wakeStore = createStewardWakeStore(dir);
+    const ledgerStore = createStewardLedgerStore(dir);
+    // A wake that reached terminal BEFORE receipts existed: done, no receipt.
+    await wakeStore.create({ wakeId: 'wake-legacy', deadline: '2026-07-08T14:03:00.000Z', envelope, now: '2026-07-08T14:00:00.000Z' });
+    await wakeStore.updateStatus('wake-legacy', 'done', { now: '2026-07-08T14:01:00.000Z', completedAt: '2026-07-08T14:01:00.000Z' });
+    await ledgerStore.append(ledgerEntry({ wakeId: 'wake-legacy' }));
+    expect((await wakeStore.get('wake-legacy'))?.ledgerReceipt).toBeUndefined();
+
+    // Tick: back-fill a bootstrapped receipt, no violation.
+    const boot = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:02:00.000Z', isSessionRunning: () => true });
+    expect(boot.warnings.some((w) => w.includes('ledger integrity violation'))).toBe(false);
+    expect((await wakeStore.get('wake-legacy'))?.ledgerReceipt?.bootstrapped).toBe(true);
+
+    // Now deletion is caught against the bootstrapped receipt.
+    await writeFile(ledgerStore.path(), '', 'utf8');
+    const after = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:03:30.000Z', isSessionRunning: () => true });
+    expect(after.warnings.some((w) => w.includes('ledger integrity violation for wake wake-legacy'))).toBe(true);
+  });
+
+  it('surfaces honestly (never fabricates) a terminal wake with no receipt AND no ledger entry', async () => {
+    const wakeStore = createStewardWakeStore(dir);
+    await wakeStore.create({ wakeId: 'wake-orphan', deadline: '2026-07-08T14:03:00.000Z', envelope, now: '2026-07-08T14:00:00.000Z' });
+    await wakeStore.updateStatus('wake-orphan', 'done', { now: '2026-07-08T14:01:00.000Z', completedAt: '2026-07-08T14:01:00.000Z' });
+
+    const result = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:02:00.000Z', isSessionRunning: () => true });
+    expect(result.warnings.some((w) => w.includes('ledger integrity violation for wake wake-orphan'))).toBe(true);
+    expect((await wakeStore.get('wake-orphan'))?.ledgerReceipt).toBeUndefined();
+    const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
+    expect(log).toContain('"kind":"entry_missing_no_receipt"');
+  });
+
+  it('does not flag timeout/stuck terminal wakes (they carry no ledger entry)', async () => {
+    const wakeStore = createStewardWakeStore(dir);
+    await wakeStore.create({ wakeId: 'wake-to', deadline: '2026-07-08T14:03:00.000Z', envelope, now: '2026-07-08T14:00:00.000Z' });
+    await wakeStore.updateStatus('wake-to', 'timeout', { now: '2026-07-08T14:04:00.000Z', completedAt: '2026-07-08T14:04:00.000Z' });
+
+    const result = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:05:00.000Z', isSessionRunning: () => true });
+    expect(result.warnings.some((w) => w.includes('ledger integrity violation'))).toBe(false);
+  });
+});
+
 describe('StewardSupervisor timeout attribution (issue #132)', () => {
   async function seedTimedOutWake(): Promise<void> {
     const wakeStore = createStewardWakeStore(dir);
