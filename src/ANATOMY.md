@@ -43,8 +43,8 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   `<STEWARD_WAKE>` message at `src/workspaces/steward/injector.ts:5-28`.
   Per-account wake locks are in `src/workspaces/steward/lock-store.ts:25-88`;
   supervisor tick and cost state are in
-  `src/workspaces/steward/supervisor.ts:37-180` and
-  `src/workspaces/steward/cost.ts:14-57`. Scheduled steward wake routing starts
+  `src/workspaces/steward/supervisor.ts:37-191` and
+  `src/workspaces/steward/cost.ts:14-81`. Scheduled steward wake routing starts
   at `src/workspaces/issues/declaration.ts:84-117`, branches in
   `src/workspaces/schedule/scanner.ts:203-220` and
   `src/workspaces/schedule/scanner.ts:259-301`, then lands in

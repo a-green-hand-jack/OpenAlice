@@ -17,6 +17,7 @@ import {
   StewardLockConflictError,
   stewardStatePath,
   stewardSupervisorLogPath,
+  summarizeStewardCosts,
   WAKE_SCHEMA_VERSION,
   type StewardDecisionLedgerEntryV2,
   type StewardWakeEnvelope,
@@ -442,6 +443,64 @@ describe('StewardLedgerStore', () => {
       { wakeId: 'wake-dup', firstLine: 1, duplicateLine: 2 },
     ]);
   });
+
+  it('does not double-count a duplicate wakeId in cost aggregation (code review: cost.ts double-count)', async () => {
+    // The earlier D3 duplicate test above uses ledgerEntry()'s default null
+    // cost fields, which masks double-counting (null contributes 0 either
+    // way). This test uses real non-null numeric cost fields on BOTH the
+    // first entry and its later duplicate, so a naive entries.length /
+    // summed-over-every-line aggregation would inflate cost.entries and
+    // every USD field -- the exact state.json truth surface
+    // tools/campaigns/run-cell.mjs reads as ledgerReportedCostUsd.
+    const costFields = (overrides: Partial<Record<string, number>> = {}) => ({
+      model: 'codex',
+      inputTokens: 100,
+      outputTokens: 50,
+      modelCostUsd: 1,
+      allocatedServerCostUsd: 0.5,
+      tradingFeesUsd: 0.25,
+      estimatedSlippageUsd: 0.1,
+      totalEstimatedCostUsd: 1.85,
+      ...overrides,
+    });
+
+    const store = createStewardLedgerStore(dir);
+    const first = ledgerEntry({
+      wakeId: 'wake-cost-dup',
+      at: '2026-07-08T14:01:00.000Z',
+      cost: costFields(),
+    });
+    // A later duplicate carrying its OWN non-null cost -- must be excluded
+    // from aggregation entirely (first-wins), not just have its cost ignored.
+    const duplicate = ledgerEntry({
+      wakeId: 'wake-cost-dup',
+      at: '2026-07-08T14:05:00.000Z',
+      cost: costFields({ modelCostUsd: 999, totalEstimatedCostUsd: 999.85 }),
+    });
+    const other = ledgerEntry({
+      wakeId: 'wake-other',
+      at: '2026-07-08T14:02:00.000Z',
+      cost: costFields({ modelCostUsd: 2, totalEstimatedCostUsd: 2.85 }),
+    });
+
+    await mkdir(dirname(store.path()), { recursive: true });
+    await writeFile(
+      store.path(),
+      `${JSON.stringify(first)}\n${JSON.stringify(other)}\n${JSON.stringify(duplicate)}\n`,
+      'utf8',
+    );
+
+    // readDiagnostics().entries still returns all 3 raw lines (audit trail).
+    const allEntries = await store.read();
+    expect(allEntries).toHaveLength(3);
+
+    // Cost aggregation is first-wins per wakeId: 2 distinct wakes, and the
+    // duplicate's inflated 999 must never be counted.
+    const summary = summarizeStewardCosts(allEntries);
+    expect(summary.entries).toBe(2);
+    expect(summary.modelCostUsd).toBeCloseTo(1 + 2);
+    expect(summary.totalEstimatedCostUsd).toBeCloseTo(1.85 + 2.85);
+  });
 });
 
 describe('StewardLockStore', () => {
@@ -766,5 +825,49 @@ describe('StewardSupervisor', () => {
     expect(result.warnings.some((w) => w.includes('duplicate ledger entry for wake wake-v1'))).toBe(true);
     const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
     expect(log).toContain('"type":"ledger_duplicates"');
+  });
+
+  it('surfaces an invalid (unparseable) ledger line as a warning + event (code review: silent invalid lines)', async () => {
+    const wakeStore = createStewardWakeStore(dir);
+    const lockStore = createStewardLockStore(dir);
+    const ledgerStore = createStewardLedgerStore(dir);
+
+    // wake-invalid: its ledger line is missing `decision`, so it never
+    // reconciles via findByWakeId -- without this fix it would just sit
+    // `injected` until timeout with no visible cause.
+    await wakeStore.create({
+      wakeId: 'wake-invalid',
+      deadline: '2026-07-08T14:03:00.000Z',
+      envelope,
+      now: '2026-07-08T14:00:00.000Z',
+    });
+    await wakeStore.updateStatus('wake-invalid', 'injected', {
+      now: '2026-07-08T14:00:05.000Z',
+      injectedAt: '2026-07-08T14:00:05.000Z',
+      sessionId: 'session-invalid',
+    });
+    await lockStore.acquire({
+      accountId: envelope.accountId,
+      wakeId: 'wake-invalid',
+      now: '2026-07-08T14:00:00.000Z',
+      expiresAt: '2026-07-08T14:03:00.000Z',
+    });
+
+    const badEntry = { ...ledgerEntry({ wakeId: 'wake-invalid' }) } as Record<string, unknown>;
+    delete badEntry.decision;
+
+    await mkdir(dirname(ledgerStore.path()), { recursive: true });
+    await writeFile(ledgerStore.path(), `${JSON.stringify(badEntry)}\n`, 'utf8');
+
+    const result = await createStewardSupervisor(dir).tick({
+      now: '2026-07-08T14:01:30.000Z',
+      isSessionRunning: () => true,
+    });
+
+    // Not reconciled (no parseable ledger entry), but the cause is now visible.
+    expect((await wakeStore.get('wake-invalid'))?.status).toBe('injected');
+    expect(result.warnings.some((w) => w.startsWith('invalid ledger line 1:'))).toBe(true);
+    const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
+    expect(log).toContain('"type":"ledger_invalid_lines"');
   });
 });

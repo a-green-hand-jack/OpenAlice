@@ -11,9 +11,33 @@ export interface StewardCostPolicyInput {
   readonly costPolicy?: Record<string, unknown>;
 }
 
-export function summarizeStewardCosts(
+/**
+ * First-wins de-duplication by `wakeId`, preserving file order. Issue #125
+ * D3: a later duplicate entry for the same wake is a tamper-evident violation
+ * that must never alter recorded truth — including the aggregate cost/state
+ * surface (`state.json`, consumed downstream e.g. as `ledgerReportedCostUsd`
+ * by `tools/campaigns/run-cell.mjs`). `readDiagnostics().entries` intentionally
+ * still returns every parsed line (audit trails want to see the duplicate
+ * attempt); this is the single seam cost aggregation goes through so it can
+ * never double-count one wake.
+ */
+function firstWinsByWakeId(
   entries: readonly StewardDecisionLedgerEntry[],
+): StewardDecisionLedgerEntry[] {
+  const seen = new Set<string>();
+  const result: StewardDecisionLedgerEntry[] = [];
+  for (const entry of entries) {
+    if (seen.has(entry.wakeId)) continue;
+    seen.add(entry.wakeId);
+    result.push(entry);
+  }
+  return result;
+}
+
+export function summarizeStewardCosts(
+  allEntries: readonly StewardDecisionLedgerEntry[],
 ): StewardCostSummary {
+  const entries = firstWinsByWakeId(allEntries);
   const summary: StewardCostSummary = {
     entries: entries.length,
     inputTokens: 0,

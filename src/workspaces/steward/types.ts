@@ -73,7 +73,10 @@ export type StewardWakeRecord = z.infer<typeof stewardWakeRecordSchema>;
 
 export const stewardCompletionSchema = z.object({
   reason: z.string().trim().min(1),
-  evidenceRefs: z.array(z.string().min(1)),
+  // Non-empty, aligned with the generated validate-ledger.mjs's requirement
+  // (`entry.completion.evidenceRefs.length === 0` fails there) — both sides
+  // of the contract now enforce the same rule.
+  evidenceRefs: z.array(z.string().min(1)).min(1),
 }).passthrough();
 export type StewardCompletion = z.infer<typeof stewardCompletionSchema>;
 
