@@ -53,6 +53,12 @@ export class StewardSupervisor {
     const ledgerStore = createStewardLedgerStore(this.workspaceDir);
     const lockStore = createStewardLockStore(this.workspaceDir);
     const transitions: StewardSupervisorTransition[] = [];
+    // Issue #132 (PR #133 review): telemetry-degradation warnings collected
+    // across the loop below — a timed-out wake whose session IS tracked but
+    // whose rollout telemetry came back null/unreadable gets a distinct
+    // warning here (not just a silent plain-timeout fallback), so campaign
+    // reports and operators can see attribution silently went dark.
+    const telemetryWarnings: string[] = [];
     const wakes = await wakeStore.list();
 
     for (const wake of wakes) {
@@ -98,7 +104,11 @@ export class StewardSupervisor {
         // died because the session was context-poisoned, not merely slow —
         // distinct in the terminal metadata and the supervisor event so
         // campaign reports can count context overflows apart from timeouts.
-        const attribution = await this.classifyTimeout(wake.sessionId, opts.readContextTelemetry);
+        const { attribution, warning: telemetryWarning } = await this.classifyTimeout(
+          wake.sessionId,
+          opts.readContextTelemetry,
+        );
+        if (telemetryWarning) telemetryWarnings.push(telemetryWarning);
         const updated = await wakeStore.updateStatus(wake.wakeId, 'timeout', {
           now,
           completedAt: now,
@@ -129,6 +139,7 @@ export class StewardSupervisor {
               modelContextWindow: attribution.modelContextWindow,
             }
             : {}),
+          ...(telemetryWarning ? { telemetryWarning } : {}),
         });
         continue;
       }
@@ -201,7 +212,7 @@ export class StewardSupervisor {
         invalid,
       });
     }
-    const warnings = [...state.warnings, ...duplicateWarnings, ...invalidWarnings];
+    const warnings = [...state.warnings, ...duplicateWarnings, ...invalidWarnings, ...telemetryWarnings];
 
     const activeWakeIds = (await wakeStore.list())
       .filter((wake) => !isTerminal(wake.status))
@@ -219,32 +230,45 @@ export class StewardSupervisor {
   /**
    * Best-effort context-overflow check for a timed-out wake (issue #132).
    * Returns a `context_overflow` attribution when the session's latest
-   * telemetry has `input_tokens >= model_context_window`, else null. Never
-   * throws — a missing reader, no session, or a telemetry error all classify
-   * the timeout plainly.
+   * telemetry has `input_tokens >= model_context_window`. Never throws — a
+   * missing reader or no session classifies the timeout plainly with no
+   * warning (nothing was expected to be tracked); a telemetry read that
+   * throws OR resolves to `null` for a session that DOES have a tracked
+   * sessionId classifies plainly too, but returns a `warning` string (PR #133
+   * review) so the caller can surface that attribution silently went dark for
+   * a session it should have been able to check.
    */
   private async classifyTimeout(
     sessionId: string | null,
     readContextTelemetry: StewardSupervisorTickOptions['readContextTelemetry'],
-  ): Promise<StewardWakeAttribution | null> {
-    if (!sessionId || !readContextTelemetry) return null;
+  ): Promise<{ attribution: StewardWakeAttribution | null; warning: string | null }> {
+    if (!sessionId || !readContextTelemetry) return { attribution: null, warning: null };
     try {
       const telemetry = await readContextTelemetry(sessionId);
-      if (
-        telemetry &&
-        telemetry.modelContextWindow > 0 &&
-        telemetry.inputTokens >= telemetry.modelContextWindow
-      ) {
+      if (!telemetry) {
         return {
-          kind: 'context_overflow',
-          inputTokens: telemetry.inputTokens,
-          modelContextWindow: telemetry.modelContextWindow,
+          attribution: null,
+          warning: `context telemetry unavailable for session ${sessionId} (timeout attribution skipped)`,
         };
       }
-    } catch {
-      // telemetry is advisory only — fall back to a plain timeout
+      if (telemetry.modelContextWindow > 0 && telemetry.inputTokens >= telemetry.modelContextWindow) {
+        return {
+          attribution: {
+            kind: 'context_overflow',
+            inputTokens: telemetry.inputTokens,
+            modelContextWindow: telemetry.modelContextWindow,
+          },
+          warning: null,
+        };
+      }
+      return { attribution: null, warning: null };
+    } catch (err) {
+      return {
+        attribution: null,
+        warning: `context telemetry read failed for session ${sessionId}: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      };
     }
-    return null;
   }
 }
 

@@ -83,12 +83,32 @@ describe('evaluateStewardRotation', () => {
     expect(d.reason).toBe('under_threshold');
   });
 
-  it('reuses (telemetry_unavailable) when the adapter has no telemetry method', async () => {
+  it('reuses (telemetry_unavailable) when the adapter has no telemetry method, WITHOUT warning', async () => {
     const adapter = { id: 'claude' };
-    const d = await evaluateStewardRotation({ adapter, cwd: '/ws', sessionId: 's1', config: {} });
+    const onWarn = vi.fn();
+    const d = await evaluateStewardRotation({ adapter, cwd: '/ws', sessionId: 's1', config: {}, onWarn });
     expect(d.rotate).toBe(false);
     expect(d.reason).toBe('telemetry_unavailable');
+    // No readContextTelemetry at all is a known/expected omission (e.g.
+    // claude), not a degraded read — must not warn (issue #132 / PR #133 review).
+    expect(onWarn).not.toHaveBeenCalled();
   });
+
+  it(
+    'reuses and warns when the adapter resolves telemetry to null for the tracked session ' +
+      '(rollout genuinely absent/unlocatable — PR #133 review)',
+    async () => {
+      const adapter = { id: 'codex', readContextTelemetry: vi.fn(async () => null) };
+      const onWarn = vi.fn();
+      const d = await evaluateStewardRotation({ adapter, cwd: '/ws', sessionId: 's1', config: {}, onWarn });
+      expect(d.rotate).toBe(false);
+      expect(d.reason).toBe('telemetry_unavailable');
+      expect(onWarn).toHaveBeenCalledWith(
+        'steward.rotation_telemetry_unavailable',
+        expect.objectContaining({ sessionId: 's1', cwd: '/ws' }),
+      );
+    },
+  );
 
   it('reuses and warns when the telemetry read throws', async () => {
     const adapter = {

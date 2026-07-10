@@ -11,11 +11,11 @@
  */
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { readCodexContextTelemetry, readLastTokenCount } from './codex.js';
+import { findCodexRolloutById, readCodexContextTelemetry, readLastTokenCount } from './codex.js';
 
 let dir: string;
 
@@ -117,10 +117,24 @@ async function writeRollout(
   sessionCwd: string,
   bodyLines: string[],
 ): Promise<void> {
-  const now = new Date();
-  const y = String(now.getFullYear());
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
+  await writeRolloutAt(cwd, sessionId, sessionCwd, new Date(), bodyLines);
+}
+
+/** Same as {@link writeRollout} but at an explicit date, so tests can place a
+ *  rollout in an OLDER dated leaf than "today" (issue #132 / PR #133 review:
+ *  a steward session's rollout leaf is fixed at its OWN creation date, which
+ *  can fall arbitrarily far behind "now" for a long-lived persistent
+ *  session). */
+async function writeRolloutAt(
+  cwd: string,
+  sessionId: string,
+  sessionCwd: string,
+  at: Date,
+  bodyLines: string[],
+): Promise<void> {
+  const y = String(at.getFullYear());
+  const m = String(at.getMonth() + 1).padStart(2, '0');
+  const d = String(at.getDate()).padStart(2, '0');
   const leaf = join(cwd, '.codex', 'sessions', y, m, d);
   await mkdir(leaf, { recursive: true });
   const meta = JSON.stringify({
@@ -128,7 +142,7 @@ async function writeRollout(
     payload: { id: sessionId, cwd: sessionCwd },
   });
   await writeFile(
-    join(leaf, `rollout-2026-07-10T19-00-00-${sessionId}.jsonl`),
+    join(leaf, `rollout-${y}-${m}-${d}T19-00-00-${sessionId}.jsonl`),
     [meta, ...bodyLines, ''].join('\n'),
     'utf8',
   );
@@ -153,5 +167,62 @@ describe('readCodexContextTelemetry', () => {
 
   it('returns null when the on-disk directory does not exist', async () => {
     expect(await readCodexContextTelemetry(dir, 'sess-1')).toBeNull();
+  });
+
+  it(
+    'finds the tracked session rollout in an OLDER dated leaf even when a newer ' +
+      'foreign rollout exists (issue #132 PR #133 review — the old listOnDisk-based ' +
+      '2-leaf window would miss this)',
+    async () => {
+      const threeMonthsAgo = new Date();
+      threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+
+      // The TRACKED steward session's rollout — old, poisoned (past window).
+      await writeRolloutAt(dir, 'steward-session', dir, threeMonthsAgo, [
+        tokenCountLine(24345, 121600),
+        tokenCountLine(125765, 121600),
+      ]);
+      // An unrelated, newer rollout in the SAME (global) root — simulates any
+      // other codex session on the box writing today, which is what pushed
+      // the tracked session's leaf outside the old 2-leaf window.
+      await writeRollout(dir, 'unrelated-session', dir, [tokenCountLine(500, 121600)]);
+
+      const tel = await readCodexContextTelemetry(dir, 'steward-session');
+      expect(tel).not.toBeNull();
+      expect(tel!.inputTokens).toBe(125765);
+      expect(tel!.modelContextWindow).toBe(121600);
+    },
+  );
+
+  it('finds a rollout across a year boundary (December -> January)', async () => {
+    const target = resolve(dir);
+    const root = join(dir, '.codex', 'sessions');
+    // Simulate: tracked session created in a prior December, an unrelated
+    // session exists in the following January (root's newest leaf).
+    await writeRolloutAt(dir, 'dec-session', dir, new Date(2025, 11, 15), [
+      tokenCountLine(50000, 121600),
+    ]);
+    await writeRolloutAt(dir, 'jan-session', dir, new Date(2026, 0, 3), [
+      tokenCountLine(100, 121600),
+    ]);
+
+    const match = await findCodexRolloutById(root, target, 'dec-session');
+    expect(match).not.toBeNull();
+    expect(match!.sessionId).toBe('dec-session');
+  });
+
+  it('returns null once the maxLeaves cap is exhausted without finding the id', async () => {
+    const target = resolve(dir);
+    const root = join(dir, '.codex', 'sessions');
+    const farBack = new Date();
+    farBack.setFullYear(farBack.getFullYear() - 1);
+    // A newer leaf (visited first, newest-first) that does NOT contain the
+    // target id, plus the target's own much-older leaf — with the cap set to
+    // exactly 1 leaf, only the newer non-matching one is ever examined.
+    await writeRollout(dir, 'other-session', dir, [tokenCountLine(500, 121600)]);
+    await writeRolloutAt(dir, 'ancient-session', dir, farBack, [tokenCountLine(1000, 121600)]);
+
+    const match = await findCodexRolloutById(root, target, 'ancient-session', 1);
+    expect(match).toBeNull();
   });
 });

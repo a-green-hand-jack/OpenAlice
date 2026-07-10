@@ -941,10 +941,10 @@ describe('StewardSupervisor timeout attribution (issue #132)', () => {
     expect(log).not.toContain('"attribution":"context_overflow"');
   });
 
-  it('falls back to a plain timeout when the telemetry read throws', async () => {
+  it('falls back to a plain timeout AND warns when the telemetry read throws', async () => {
     await seedTimedOutWake();
 
-    await createStewardSupervisor(dir).tick({
+    const result = await createStewardSupervisor(dir).tick({
       now: '2026-07-08T14:05:00.000Z',
       isSessionRunning: () => true,
       readContextTelemetry: async () => {
@@ -955,16 +955,47 @@ describe('StewardSupervisor timeout attribution (issue #132)', () => {
     const wake = await createStewardWakeStore(dir).get('wake-timeout');
     expect(wake?.status).toBe('timeout');
     expect(wake?.attribution).toBeUndefined();
+    expect(result.warnings.some((w) => w.includes('context telemetry read failed for session sess-poisoned'))).toBe(
+      true,
+    );
+    const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
+    expect(log).toContain('"telemetryWarning"');
   });
 
-  it('records a plain timeout when no telemetry reader is provided', async () => {
+  it(
+    'falls back to a plain timeout AND warns when telemetry resolves to null for the tracked ' +
+      'session (rollout genuinely absent/unlocatable — PR #133 review)',
+    async () => {
+      await seedTimedOutWake();
+
+      const result = await createStewardSupervisor(dir).tick({
+        now: '2026-07-08T14:05:00.000Z',
+        isSessionRunning: () => true,
+        readContextTelemetry: async () => null,
+      });
+
+      const wake = await createStewardWakeStore(dir).get('wake-timeout');
+      expect(wake?.status).toBe('timeout');
+      expect(wake?.attribution).toBeUndefined();
+      expect(
+        result.warnings.some((w) => w.includes('context telemetry unavailable for session sess-poisoned')),
+      ).toBe(true);
+      const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
+      expect(log).toContain('"telemetryWarning"');
+    },
+  );
+
+  it('records a plain timeout with NO warning when no telemetry reader is provided', async () => {
     await seedTimedOutWake();
 
-    await createStewardSupervisor(dir).tick({
+    const result = await createStewardSupervisor(dir).tick({
       now: '2026-07-08T14:05:00.000Z',
       isSessionRunning: () => true,
     });
 
+    // No reader supplied at all is a known/expected omission by the caller,
+    // not a degraded read — must not warn (issue #132 / PR #133 review).
+    expect(result.warnings.some((w) => w.includes('context telemetry'))).toBe(false);
     const wake = await createStewardWakeStore(dir).get('wake-timeout');
     expect(wake?.status).toBe('timeout');
     expect(wake?.attribution).toBeUndefined();

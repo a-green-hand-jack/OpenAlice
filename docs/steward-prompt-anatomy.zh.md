@@ -474,3 +474,16 @@ gpt-5.3-codex-spark 事件，无法在 OpenAlice 内彻底修复；prompt guard 
   因此**没有**真实的 adapter 层拦截点能对单个 codex tool-call 参数尺寸封顶。#132 的 harness
   半边因此落在**回合已发生之后**的治理（rotation + attribution），而非回合内的尺寸拦截。此处
   显式记录「不建假拦截器」这一决定，避免后来者以为漏了一层。
+
+**Harness 半边的可配置项**（供运维查阅，非 prompt 组件，纯代码不进版本台账）：
+session rotation 的触发阈值走 workspace 自己的 `.alice/steward/config.json` →
+`sessionRotation.threshold`（`(0, 1]` 小数，`input_tokens >= threshold ×
+model_context_window` 触发 rotate；window 本身被超过时无条件 rotate）。缺省/越界值回退到
+`DEFAULT_ROTATION_THRESHOLD`（当前 0.65，`src/workspaces/steward/rotation.ts`）。完整字段
+说明见 [steward-persistent-loop-implementation.zh.md](steward-persistent-loop-implementation.zh.md)
+§4.1、§7。PR #133 review 还修了一个发现：token-tail 的 rollout 定位此前借用
+`listOnDisk` 的 2-leaf 发现窗口（为「刚 spawn 的 session」优化），对**长期存活**的 steward
+session（#132 的实际目标场景）在数周/数月后会静默失效——已改为 rotation/attribution 各自的
+`findCodexRolloutById`（按 id 定向、newest-first 跨月/年扫描、`maxLeaves` 兜底），并在遥测
+读到 `null`（而非「adapter 压根没实现」）时发出 `steward.rotation_telemetry_unavailable` /
+`telemetryWarning` 告警，使静默降级可观测。

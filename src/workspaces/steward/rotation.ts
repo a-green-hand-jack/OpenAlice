@@ -86,15 +86,25 @@ export interface EvaluateStewardRotationInput {
   readonly cwd: string;
   readonly sessionId: string;
   readonly config: Record<string, unknown>;
-  /** Warn sink for a telemetry read failure (isolation: reuse, don't block). */
+  /**
+   * Warn sink for a degraded telemetry read (isolation: reuse, don't block).
+   * Fires both when the adapter's read throws AND when it resolves to `null`
+   * for a session the caller IS tracking (PR #133 review, issue #132) —
+   * either way the rotation/attribution signal silently went dark for this
+   * session, which is worth surfacing even though it's never fatal. Does NOT
+   * fire when the adapter has no `readContextTelemetry` at all (a known,
+   * expected omission — e.g. claude — not a degraded read).
+   */
   readonly onWarn?: (message: string, detail: Record<string, unknown>) => void;
 }
 
 /**
  * Read the running session's telemetry via the adapter and decide. Failure
- * isolation: an adapter without `readContextTelemetry`, or a read that throws,
- * yields a `telemetry_unavailable` no-rotate decision (with a warning) — a wake
- * is never blocked on telemetry.
+ * isolation: an adapter without `readContextTelemetry`, a read that throws, or
+ * a read that resolves to `null` (rollout not found/unreadable) all yield a
+ * `telemetry_unavailable` no-rotate decision — a wake is never blocked on
+ * telemetry. The latter two additionally warn via `onWarn` so silent
+ * disablement for a session that IS being tracked stays observable.
  */
 export async function evaluateStewardRotation(
   input: EvaluateStewardRotationInput,
@@ -112,6 +122,12 @@ export async function evaluateStewardRotation(
       error: err instanceof Error ? err.message : String(err),
     });
     return { rotate: false, reason: 'telemetry_unavailable', telemetry: null, threshold };
+  }
+  if (!telemetry) {
+    input.onWarn?.('steward.rotation_telemetry_unavailable', {
+      sessionId: input.sessionId,
+      cwd: input.cwd,
+    });
   }
   return decideStewardRotation(telemetry, threshold);
 }
