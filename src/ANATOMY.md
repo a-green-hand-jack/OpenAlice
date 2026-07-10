@@ -35,6 +35,9 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   The first persistent steward scaffold lives in
   `src/workspaces/templates/steward/`; its context manifest is written by
   `src/workspaces/context-injector.ts:91-127` after instructions and skills land.
+  The steward template bootstrap also writes the workspace-local
+  `.alice/steward/validate-ledger.mjs` helper that agents run before treating a
+  ledger line as a wake completion marker.
   Steward wake/ledger schemas and workspace-local file stores live in
   `src/workspaces/steward/`; the v1 wake injector formats the
   `<STEWARD_WAKE>` message at `src/workspaces/steward/injector.ts:5-28`.

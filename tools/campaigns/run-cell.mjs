@@ -354,7 +354,7 @@ async function main() {
         currentDay: lastDay.day,
         currentClose: lastDay.close,
         weeklyCadence: `week ${week} of ${totalWeeks} (one decision per simulated week)`,
-        note: 'You manage a conservative paper portfolio. Below is the full daily OHLCV visible so far. No other identifying information exists — judge from price/volume alone.',
+        note: 'You manage a prudent, benchmark-aware paper portfolio. Below is the full daily OHLCV visible so far. No other identifying information exists — judge from price/volume alone.',
         bars: visible,
       };
 

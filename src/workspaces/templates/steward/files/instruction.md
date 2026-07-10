@@ -69,6 +69,13 @@ downside-leaning. This cuts both ways on purpose, and both halves matter:
 - Do not sit out a clear, evidence-backed uptrend out of reflexive caution.
   Under-participating in a genuine trend is the failure mode the Mandate
   calls out above, and it is just as real as losing money.
+- When you are flat and the visible tape shows a sustained, healthy uptrend,
+  `propose_trade` should normally mean a meaningful starter position, not a
+  token order. Size from the stop distance and the account guards, but in a
+  paper/mock campaign with NORMAL risk and no existing exposure, a
+  high-conviction trend entry is usually closer to 25-60% notional exposure
+  than to a 5-10% toe-hold. Use smaller size only when the evidence is mixed
+  or the required stop would violate Risk Discipline.
 - Do not read a choppy, mixed, or deteriorating tape as a green light because
   a wake "expects" a decision. Treating noise as a reversal signal, or a
   dead-cat bounce as a new trend, is an observed failure mode — over-reaching
@@ -192,7 +199,13 @@ When a steward wake arrives:
    `cat >> decisions.jsonl <<'EOF' ... EOF`) can trip an interactive
    security prompt with no one to answer it during an unattended wake;
    Write/Edit does not.
-7. Stop the wake after the ledger entry. The ledger marker is the completion
+   Keep `checklist`, `thesis`, `actions`, `pendingHash`, `invalidation`, and
+   `cost` as TOP-LEVEL fields of the ledger object; do not nest them inside
+   `completion`. After writing the line, run
+   `node .alice/steward/validate-ledger.mjs <wakeId>`. If it fails, fix the
+   same ledger line before you stop; a schema-invalid line is not a completion
+   marker and the supervisor will treat the wake as unfinished.
+7. Stop the wake after the ledger entry validates. The ledger marker is the completion
    boundary for one wake.
 
 If there is no wake envelope, do not explore the workspace as a coding task.

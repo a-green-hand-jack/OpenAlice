@@ -95,7 +95,8 @@ state, or ownership.
   registry (including launcher-owned workspace `authzLevel` changed through
   Alice's audited workspace route), session records, scrollback, headless tasks,
   and workspace repos. Steward workspaces additionally carry their template-owned
-  `.alice/steward/` context/ledger scaffold inside the workspace repo; Alice's
+  `.alice/steward/` context/ledger scaffold inside the workspace repo, including
+  `.alice/steward/validate-ledger.mjs` for local wake-marker sanity checks; Alice's
   steward file-store helpers under `src/workspaces/steward/` read/write that
   workspace-local source of truth, and the manual wake API writes
   `.alice/steward/wakes/*.json`, `.alice/steward/locks/*.json`,

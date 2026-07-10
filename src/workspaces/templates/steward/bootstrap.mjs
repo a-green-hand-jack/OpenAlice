@@ -36,6 +36,7 @@ end with one JSON line in ledger/decisions.jsonl.
   instructions and skills are written.
 - wakes/<wakeId>.json: one structured input envelope per wake.
 - ledger/decisions.jsonl: one structured decision/completion marker per wake.
+- validate-ledger.mjs: local schema sanity check for one wake's ledger marker.
 - tmp/: gitignored scratch space for --json-file payloads (order/commit/reject
   free-text fields written here via the Write tool, then passed to alice-uta
   by path — never embedded in a Bash argument).
@@ -48,6 +49,85 @@ no_trade, propose_trade, or blocked. Append exactly one ledger JSON object.
 
 Do not inspect OpenAlice source code. Do not call push. Do not end a wake
 without a ledger entry.
+`
+
+const validateLedger = `#!/usr/bin/env node
+const wakeId = process.argv[2]
+if (!wakeId) fail('usage: node .alice/steward/validate-ledger.mjs <wakeId>')
+
+const fs = await import('node:fs/promises')
+const path = '.alice/steward/ledger/decisions.jsonl'
+let raw = ''
+try {
+  raw = await fs.readFile(path, 'utf8')
+} catch (err) {
+  fail('cannot read ' + path + ': ' + err.message)
+}
+
+const requiredTopLevel = [
+  'version',
+  'wakeId',
+  'at',
+  'accountId',
+  'decision',
+  'status',
+  'completion',
+  'checklist',
+  'thesis',
+  'actions',
+  'pendingHash',
+  'invalidation',
+  'cost',
+]
+const requiredChecklist = ['account', 'positions', 'orders', 'risk', 'market', 'history']
+const requiredCost = [
+  'model',
+  'inputTokens',
+  'outputTokens',
+  'modelCostUsd',
+  'allocatedServerCostUsd',
+  'tradingFeesUsd',
+  'estimatedSlippageUsd',
+  'totalEstimatedCostUsd',
+]
+
+const lines = raw.split('\\n').map((line) => line.trim()).filter(Boolean)
+let found = null
+for (let i = 0; i < lines.length; i++) {
+  let parsed
+  try {
+    parsed = JSON.parse(lines[i])
+  } catch (err) {
+    if (lines[i].includes(wakeId)) fail('ledger line ' + (i + 1) + ' mentions this wake but is invalid JSON: ' + err.message)
+    continue
+  }
+  if (parsed && parsed.wakeId === wakeId) found = { line: i + 1, entry: parsed }
+}
+if (!found) fail('no ledger entry found for wake ' + wakeId)
+
+const entry = found.entry
+const missing = requiredTopLevel.filter((key) => !(key in entry))
+if (missing.length) fail('line ' + found.line + ' is missing top-level field(s): ' + missing.join(', '))
+if (entry.version !== 1) fail('line ' + found.line + ' version must be 1')
+if (!['no_trade', 'propose_trade', 'blocked'].includes(entry.decision)) fail('line ' + found.line + ' has invalid decision')
+if (!['done', 'blocked', 'error'].includes(entry.status)) fail('line ' + found.line + ' has invalid status')
+if (!entry.completion || typeof entry.completion !== 'object' || Array.isArray(entry.completion)) fail('line ' + found.line + ' completion must be an object')
+if (typeof entry.completion.reason !== 'string' || !entry.completion.reason.trim()) fail('line ' + found.line + ' completion.reason is required')
+if (!Array.isArray(entry.completion.evidenceRefs) || entry.completion.evidenceRefs.length === 0) fail('line ' + found.line + ' completion.evidenceRefs must be a non-empty array')
+if (!entry.checklist || typeof entry.checklist !== 'object' || Array.isArray(entry.checklist)) fail('line ' + found.line + ' checklist must be a TOP-LEVEL object, not nested inside completion')
+const missingChecklist = requiredChecklist.filter((key) => typeof entry.checklist[key] !== 'string' || !entry.checklist[key])
+if (missingChecklist.length) fail('line ' + found.line + ' checklist is missing field(s): ' + missingChecklist.join(', '))
+if (!Array.isArray(entry.actions)) fail('line ' + found.line + ' actions must be an array')
+if (entry.pendingHash !== null && typeof entry.pendingHash !== 'string') fail('line ' + found.line + ' pendingHash must be string or null')
+if (!entry.cost || typeof entry.cost !== 'object' || Array.isArray(entry.cost)) fail('line ' + found.line + ' cost must be an object')
+const missingCost = requiredCost.filter((key) => !(key in entry.cost))
+if (missingCost.length) fail('line ' + found.line + ' cost is missing field(s): ' + missingCost.join(', '))
+console.log('ok: ledger entry for ' + wakeId + ' validates at line ' + found.line)
+
+function fail(message) {
+  console.error('validate-ledger: ' + message)
+  process.exit(1)
+}
 `
 
 const config = {
@@ -85,6 +165,7 @@ mkdirSync(join(stewardRoot, 'tmp'), { recursive: true })
 
 writeFileSync(join(stewardRoot, 'README.md'), stewardReadme)
 writeFileSync(join(stewardRoot, 'config.json'), `${JSON.stringify(config, null, 2)}\n`)
+writeFileSync(join(stewardRoot, 'validate-ledger.mjs'), validateLedger)
 writeFileSync(join(stewardRoot, 'wakes', '.gitkeep'), '')
 writeFileSync(join(stewardRoot, 'ledger', 'decisions.jsonl'), '')
 writeFileSync(join(stewardRoot, 'supervisor.jsonl'), '')
