@@ -165,6 +165,9 @@ export function compactResult(r: unknown): AnyRec {
   pick(out, 'filledQty', val(k['filledQty']))
   pick(out, 'filledPrice', price(k['filledPrice']))
   pick(out, 'error', val(k['error']))
+  // Deliberately NO venue receipt pass-through (execIds, permIds, exchange
+  // routing): orderId/filledQty/filledPrice above are all the agent acts on;
+  // receipt detail is human reconciliation material.
   // Bracket TP/SL leg ids — the agent's only confirmation the protective
   // legs exist (and the handle for cancelling them).
   const legs = k['legs'] as Array<{ orderId?: unknown; kind?: unknown }> | undefined
@@ -193,7 +196,30 @@ export function compactStatus(status: unknown): AnyRec {
     head: k['head'] ?? null,
     commitCount: k['commitCount'],
     ...(k['riskState'] ? { riskState: k['riskState'] } : {}),
+    ...(k['mutation'] ? { mutation: compactMutationStatus(k['mutation']) } : {}),
   }
+}
+
+/**
+ * TRADING-AGENT BOUNDARY: mutation recovery is human-only. The agent view of
+ * mutation state is exactly four scalars plus a fixed pointer to the human —
+ * never attempt identifiers, operations, resolutions, evidence, receipts, or
+ * anything an agent could try to act on. Enforced by regression in
+ * trading-compact.spec.ts.
+ */
+function compactMutationStatus(value: unknown): AnyRec {
+  if (!value || typeof value !== 'object') return {}
+  const mutation = value as AnyRec
+  const out: AnyRec = {
+    schemaVersion: mutation['schemaVersion'],
+    readiness: mutation['readiness'],
+    ...(mutation['restartRequired'] === true ? { restartRequired: true } : {}),
+    downgradeBlocked: mutation['downgradeBlocked'] === true,
+  }
+  if (mutation['readiness'] !== 'ready') {
+    out['recovery'] = 'Human-only: a person must resolve this on the account detail page or the authenticated recovery API. There is no agent tool for it.'
+  }
+  return out
 }
 
 /** AddResult (stage echo) → confirmation, not a serialization dump. */
@@ -256,6 +282,8 @@ export function compactCommit(commit: unknown): AnyRec {
     timestamp: k['timestamp'],
     operations: Array.isArray(k['operations']) ? k['operations'].map(compactOperation) : [],
     results: Array.isArray(k['results']) ? k['results'].map(compactResult) : [],
+    // Deliberately NO mutationAudit projection: attempt ids, initiators, and
+    // resolution history are human/recovery material, not agent context.
     stateAfter: {
       netLiquidation: money(state['netLiquidation']),
       totalCashValue: money(state['totalCashValue']),

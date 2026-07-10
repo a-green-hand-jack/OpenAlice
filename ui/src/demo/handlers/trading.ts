@@ -1,4 +1,5 @@
 import { http, HttpResponse } from 'msw'
+import type { WalletStatus } from '../../api/types'
 import {
   demoTradingAccounts,
   demoUTASummaries,
@@ -108,7 +109,13 @@ export const tradingHandlers = [
   ),
 
   http.get('/api/trading/uta/:id/wallet/status', () =>
-    HttpResponse.json({ staged: [], pendingMessage: null, head: null, commitCount: 0 }),
+    HttpResponse.json({
+      staged: [],
+      pendingMessage: null,
+      pendingHash: null,
+      head: null,
+      commitCount: 0,
+    } satisfies WalletStatus),
   ),
   http.get('/api/trading/uta/:id/wallet/log', () => HttpResponse.json({ commits: [] })),
   http.get('/api/trading/uta/:id/wallet/show/:hash', () =>

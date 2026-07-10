@@ -18,6 +18,7 @@ import {
   type RiskStateInfo,
 } from '@traderalice/uta-protocol'
 import type { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
+import { PendingApprovalChangedError } from './git/mutation-coordinator.js'
 
 // PaperAutoPushResult (+ its skip-reason / policy-violation constituents) is
 // declared in @traderalice/uta-protocol, not here: UTA's POST /wallet/commit
@@ -67,6 +68,15 @@ interface PaperAutoPushEligibility {
   now: () => Date
 }
 
+type PaperAutoPushPreflightResult = Exclude<PaperAutoPushResult, { status: 'pushed' }>
+
+class PaperAutoPushPreflightError extends Error {
+  constructor(readonly result: PaperAutoPushPreflightResult) {
+    super(result.status === 'failed' ? result.reason : result.reason)
+    this.name = 'PaperAutoPushPreflightError'
+  }
+}
+
 export function assertPaperAutoPushAccountType(accountType: AuthzAccountType): PaperAutoPushAccountType {
   if (!isPaperLikeAccountType(accountType)) {
     throw new Error(`paper auto-push executor is unreachable for ${accountType} accounts`)
@@ -77,7 +87,30 @@ export function assertPaperAutoPushAccountType(accountType: AuthzAccountType): P
 export function resolvePaperAutoPushEligibility(
   input: PaperAutoPushInput,
 ): { ok: true; eligibility: PaperAutoPushEligibility } | { ok: false; result: PaperAutoPushResult } {
-  const pendingHash = input.uta.status().pendingHash ?? undefined
+  const status = input.uta.status()
+  const pendingHash = status.pendingHash ?? undefined
+  const readiness = status.mutation?.readiness ?? 'ready'
+  if (readiness === 'busy') {
+    // A transiently held account lease (usually this very hash already
+    // dispatching) is NOT a recovery condition — mislabeling it would tell
+    // operators a healthy account needs human intervention.
+    return {
+      ok: false,
+      result: { status: 'skipped', reason: 'push_in_flight', ...(pendingHash ? { pendingHash } : {}) },
+    }
+  }
+  if (readiness !== 'ready') {
+    // recovery_required / unsupported_schema / legacy_review_required: never
+    // auto-push over quarantine or a pre-upgrade approval.
+    return {
+      ok: false,
+      result: {
+        status: 'skipped',
+        reason: 'mutation_recovery_required',
+        ...(pendingHash ? { pendingHash } : {}),
+      },
+    }
+  }
   if (!pendingHash) {
     return { ok: false, result: { status: 'skipped', reason: 'no_pending_commit' } }
   }
@@ -134,50 +167,68 @@ async function executePaperAutoPush(
     return { status: 'skipped', reason: 'no_pending_commit' }
   }
 
-  const risk = eligibility.uta.getRiskState()
-  if (risk.state !== 'NORMAL') {
-    return {
-      status: 'skipped',
-      reason: 'risk_state_not_normal',
-      pendingHash: eligibility.pendingHash,
-      accountType: eligibility.accountType,
-      effectiveAuthzLevel: eligibility.effectiveAuthzLevel,
-      risk,
-    }
-  }
-
-  let policyViolations: PaperDecisionPolicyViolation[]
-  try {
-    policyViolations = await evaluatePaperDecisionPolicy(eligibility.uta)
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err)
-    return {
-      status: 'failed',
-      reason: `paper decision policy failed: ${reason}`,
-      pendingHash: eligibility.pendingHash,
-      effectiveAuthzLevel: eligibility.effectiveAuthzLevel,
-      risk,
-    }
-  }
-  if (policyViolations.length > 0) {
-    return {
-      status: 'skipped',
-      reason: 'paper_policy_denied',
-      pendingHash: eligibility.pendingHash,
-      accountType: eligibility.accountType,
-      effectiveAuthzLevel: eligibility.effectiveAuthzLevel,
-      risk,
-      policyViolations,
-    }
-  }
-
   const approver: ApproverIdentity = {
     via: AUTO_PUSH_PAPER_VIA,
     at: eligibility.now().toISOString(),
   }
 
+  let risk: RiskStateInfo | undefined
   try {
-    const push = await eligibility.uta.push(approver)
+    const push = await eligibility.uta.push(approver, {
+      expectedHash: eligibility.pendingHash,
+      preflight: async ({ operations }) => {
+        risk = eligibility.uta.getRiskState()
+        if (risk.state !== 'NORMAL') {
+          throw new PaperAutoPushPreflightError({
+            status: 'skipped',
+            reason: 'risk_state_not_normal',
+            pendingHash: eligibility.pendingHash,
+            accountType: eligibility.accountType,
+            effectiveAuthzLevel: eligibility.effectiveAuthzLevel,
+            risk,
+          })
+        }
+
+        let policyViolations: PaperDecisionPolicyViolation[]
+        try {
+          policyViolations = await evaluatePaperDecisionPolicy(eligibility.uta, operations)
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err)
+          throw new PaperAutoPushPreflightError({
+            status: 'failed',
+            reason: `paper decision policy failed: ${reason}`,
+            pendingHash: eligibility.pendingHash,
+            effectiveAuthzLevel: eligibility.effectiveAuthzLevel,
+            risk,
+          })
+        }
+
+        // Re-read after asynchronous broker policy inputs. A concurrent risk
+        // transition must be observed before the lease permits dispatch.
+        risk = eligibility.uta.getRiskState()
+        if (risk.state !== 'NORMAL') {
+          throw new PaperAutoPushPreflightError({
+            status: 'skipped',
+            reason: 'risk_state_not_normal',
+            pendingHash: eligibility.pendingHash,
+            accountType: eligibility.accountType,
+            effectiveAuthzLevel: eligibility.effectiveAuthzLevel,
+            risk,
+          })
+        }
+        if (policyViolations.length > 0) {
+          throw new PaperAutoPushPreflightError({
+            status: 'skipped',
+            reason: 'paper_policy_denied',
+            pendingHash: eligibility.pendingHash,
+            accountType: eligibility.accountType,
+            effectiveAuthzLevel: eligibility.effectiveAuthzLevel,
+            risk,
+            policyViolations,
+          })
+        }
+      },
+    })
     return {
       status: 'pushed',
       hash: push.hash,
@@ -186,6 +237,14 @@ async function executePaperAutoPush(
       effectiveAuthzLevel: eligibility.effectiveAuthzLevel,
     }
   } catch (err) {
+    if (err instanceof PaperAutoPushPreflightError) return err.result
+    if (err instanceof PendingApprovalChangedError) {
+      return {
+        status: 'skipped',
+        reason: 'pending_approval_changed',
+        pendingHash: eligibility.pendingHash,
+      }
+    }
     const reason = err instanceof Error ? err.message : String(err)
     if (/push already in progress/i.test(reason)) {
       return {
@@ -193,6 +252,17 @@ async function executePaperAutoPush(
         reason: 'push_in_flight',
         pendingHash: eligibility.pendingHash,
         accountType: eligibility.accountType,
+        effectiveAuthzLevel: eligibility.effectiveAuthzLevel,
+        risk,
+      }
+    }
+    const mutation = eligibility.uta.status().mutation
+    if (mutation?.readiness === 'recovery_required'
+      || mutation?.readiness === 'unsupported_schema') {
+      return {
+        status: 'skipped',
+        reason: 'mutation_recovery_required',
+        pendingHash: eligibility.pendingHash,
         effectiveAuthzLevel: eligibility.effectiveAuthzLevel,
         risk,
       }
@@ -215,8 +285,9 @@ export async function tryAutoPushPaper(input: PaperAutoPushInput): Promise<Paper
 
 /**
  * The P3-campaign hard-guard policy (docs/steward-p3-campaign.zh.md §4.7):
- * evaluated against the currently-staged operations before a paper/mock
- * commit is allowed to auto-push. Three checks, each independent:
+ * evaluated against the exact operations bound by TradingGit's preflight
+ * lease before a paper/mock commit is allowed to auto-push. Three checks,
+ * each independent:
  *
  *   1. A risk-increasing placeOrder (opening new exposure, or adding to an
  *      existing position in the same direction) must carry an attached
@@ -229,14 +300,16 @@ export async function tryAutoPushPaper(input: PaperAutoPushInput): Promise<Paper
  * Risk-reducing operations (closePosition, or a placeOrder that trims an
  * existing position) are exempt — this mirrors `isClearlyRiskReducing` in
  * guards/portfolio-risk.ts, but is deliberately kept local: this policy is
- * paper-account-only and evaluated pre-commit against staged operations
- * directly, not through the GuardContext the guard pipeline builds.
+ * paper-account-only and evaluated against a non-ledger-writing broker
+ * position snapshot, not through the GuardContext the guard pipeline builds.
  */
-export async function evaluatePaperDecisionPolicy(uta: UnifiedTradingAccount): Promise<PaperDecisionPolicyViolation[]> {
-  const operations = uta.status().staged
+export async function evaluatePaperDecisionPolicy(
+  uta: UnifiedTradingAccount,
+  operations: readonly Operation[] = uta.status().staged,
+): Promise<PaperDecisionPolicyViolation[]> {
   if (operations.length === 0) return []
 
-  const positions = await uta.getPositions()
+  const positions = await uta.getPositionsForMutationPreflight()
   const violations: PaperDecisionPolicyViolation[] = []
 
   for (const operation of operations) {

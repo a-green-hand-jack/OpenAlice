@@ -119,7 +119,9 @@ describe('direct authenticated UTA readonly containment', () => {
       const pending = uta.commit('direct internal-token push must be contained')
       broker.resetCalls()
 
-      const result = await post(app, `/api/trading/uta/${uta.id}/wallet/push`, {})
+      const result = await post(app, `/api/trading/uta/${uta.id}/wallet/push`, {
+        expectedHash: pending.hash,
+      })
 
       expect(result.status).toBe(403)
       expectContainmentError(result.body)
@@ -162,10 +164,12 @@ describe('direct authenticated UTA readonly containment', () => {
     for (const scenario of stages) {
       const { app, broker, uta } = await createContainedFixture()
       scenario.stage(uta)
-      uta.commit(`contained ${scenario.action}`)
+      const pending = uta.commit(`contained ${scenario.action}`)
       broker.resetCalls()
 
-      const result = await post(app, `/api/trading/uta/${uta.id}/wallet/push`, {})
+      const result = await post(app, `/api/trading/uta/${uta.id}/wallet/push`, {
+        expectedHash: pending.hash,
+      })
 
       expect(result.status).toBe(403)
       expectContainmentError(result.body)

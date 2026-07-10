@@ -13,6 +13,7 @@ import { BrokerError, type IBroker, type AccountInfo, type Position, type OpenOr
 
 const REACH_RANK: Record<UTAReach, number> = { down: 0, connected: 1, readable: 2 }
 import { TradingGit } from './git/TradingGit.js'
+import type { PushOptions, PushPreflightContext, RejectOptions, SyntheticMutationParams } from './git/interfaces.js'
 import { recomputeCostBasisFromCommits } from './cost-basis.js'
 import { projectOrderHistory, projectTradeHistory } from './order-history.js'
 import {
@@ -28,6 +29,7 @@ import { pnlOf } from './position-math.js'
 import type {
   Operation,
   AddResult,
+  CommitHash,
   CommitPrepareResult,
   PushResult,
   RejectResult,
@@ -40,8 +42,17 @@ import type {
   SimulatePriceChangeResult,
   OrderStatusUpdate,
   SyncResult,
+  MutationResolutionAction,
+  MutationResolveResult,
+  OperationResult,
 } from './git/types.js'
 import { createGuardPipeline, resolveGuards } from './guards/index.js'
+import { LocalNoDispatchError, markNoBrokerDispatch } from './guards/guard-pipeline.js'
+import {
+  MutationBusyError,
+  MutationRecoveryRequiredError,
+  MutationUnsupportedSchemaError,
+} from './git/mutation-coordinator.js'
 import { createPortfolioGuardStateStore } from './guards/portfolio-state.js'
 import { isClearlyRiskReducing } from './guards/portfolio-risk.js'
 import type { GuardContext } from './guards/types.js'
@@ -71,7 +82,7 @@ export interface UnifiedTradingAccountOptions {
   guards?: Array<{ type: string; options?: Record<string, unknown> }>
   savedState?: GitExportState
   /** Called whenever exported git state changes (stage, commit, push/reject, sync). */
-  onCommit?: (state: GitExportState) => void | Promise<void>
+  onCommit?: (state: GitExportState) => void
   onHealthChange?: (accountId: string, health: BrokerHealthInfo) => void
   onPostPush?: (accountId: string) => void | Promise<void>
   onPostReject?: (accountId: string) => void | Promise<void>
@@ -98,6 +109,11 @@ export interface UnifiedTradingAccountOptions {
   riskStateNow?: () => Date
   /** Best-effort bridge into Alice's unified event log. Must never block trading. */
   eventSink?: UtaEventSink
+}
+
+export interface UnifiedPushOptions {
+  expectedHash?: string
+  preflight?: (context: PushPreflightContext) => Promise<void>
 }
 
 export interface EmergencyCancelOrderResult {
@@ -305,7 +321,11 @@ export class UnifiedTradingAccount {
     }
 
     const dispatcher = async (op: Operation): Promise<unknown> => {
-      this.assertBrokerMutationAllowed(op.action)
+      try {
+        this.assertBrokerMutationAllowed(op.action)
+      } catch (error) {
+        throw new LocalNoDispatchError(error instanceof Error ? error.message : String(error))
+      }
       switch (op.action) {
         case 'placeOrder':
           return broker.placeOrder(op.contract, op.order, op.tpsl)
@@ -316,7 +336,7 @@ export class UnifiedTradingAccount {
         case 'cancelOrder':
           return broker.cancelOrder(op.orderId, op.orderCancel)
         default:
-          throw new Error(`Unknown operation action: ${(op as { action: string }).action}`)
+          throw new LocalNoDispatchError(`Unknown operation action: ${(op as { action: string }).action}`)
       }
     }
     const guards = resolveGuards(options.guards ?? [], {
@@ -338,6 +358,8 @@ export class UnifiedTradingAccount {
     )
 
     const gitConfig = {
+      accountId: broker.id,
+      allowEphemeralPersistence: process.env.NODE_ENV === 'test',
       executeOperation: guardedDispatcher,
       getGitState: this._getState,
       onCommit: options.onCommit,
@@ -522,8 +544,11 @@ export class UnifiedTradingAccount {
   }
 
   private async _callBroker<T>(fn: () => Promise<T>): Promise<T> {
+    // The three refusals below are thrown BEFORE fn() is invoked, so they are
+    // typed proof that no venue request was made — the mutation state machine
+    // may classify them definitely_rejected instead of quarantining.
     if (this._disabled) {
-      throw new BrokerError('CONFIG', `Account "${this.label}" is disabled due to configuration error: ${this._lastError}`)
+      throw markNoBrokerDispatch(new BrokerError('CONFIG', `Account "${this.label}" is disabled due to configuration error: ${this._lastError}`))
     }
     // Initial connect still in flight (e.g. CCXT loadMarkets). Give it a short
     // grace: an instant broker settles within it and the read proceeds with real
@@ -535,11 +560,11 @@ export class UnifiedTradingAccount {
     if (this._connecting) {
       await this._awaitConnectOrGrace()
       if (this._connecting) {
-        throw new BrokerError('CONNECTING', `Account "${this.label}" is still connecting to the broker. Data will be available shortly.`)
+        throw markNoBrokerDispatch(new BrokerError('CONNECTING', `Account "${this.label}" is still connecting to the broker. Data will be available shortly.`))
       }
     }
     if (this.health === 'offline' && this._recovering) {
-      throw new BrokerError('CONNECTING', `Account "${this.label}" is offline and reconnecting. Try again shortly.`)
+      throw markNoBrokerDispatch(new BrokerError('CONNECTING', `Account "${this.label}" is offline and reconnecting. Try again shortly.`))
     }
     try {
       const result = await fn()
@@ -867,8 +892,9 @@ export class UnifiedTradingAccount {
 
     const operation: Operation = { action: 'placeOrder', contract, order, tpsl }
     this._assertRiskStateAllowsWrite('stage', operation)
+    const result = this.git.add(operation)
     if (subAccountId) this._stagedSubAccountIds.push(subAccountId)
-    return this.git.add(operation)
+    return result
   }
 
   stageModifyOrder(params: StageModifyOrderParams): AddResult {
@@ -900,8 +926,9 @@ export class UnifiedTradingAccount {
       quantity: params.qty != null ? new Decimal(String(params.qty)) : undefined,
     }
     this._assertRiskStateAllowsWrite('stage', operation)
+    const result = this.git.add(operation)
     if (subAccountId) this._stagedSubAccountIds.push(subAccountId)
-    return this.git.add(operation)
+    return result
   }
 
   stageCancelOrder(params: { orderId: string }): AddResult {
@@ -939,86 +966,56 @@ export class UnifiedTradingAccount {
     return ids.length ? `${message} [sub:${ids.join(',')}]` : message
   }
 
-  async push(approver?: ApproverIdentity): Promise<PushResult> {
-    this.assertBrokerMutationAllowed('push')
-    try {
-      this._assertRiskStateAllowsWrite('push')
-    } catch (err) {
-      this._emitRiskRejectedPush(err, approver)
-      throw err
-    }
-    if (this._disabled) {
-      throw new BrokerError('CONFIG', `Account "${this.label}" is disabled due to configuration error.`)
-    }
-    if (this.health === 'offline') {
-      throw new Error(`Account "${this.label}" is offline. Cannot execute trades.`)
-    }
+  async push(
+    approver?: ApproverIdentity,
+    options: UnifiedPushOptions = {},
+  ): Promise<PushResult> {
     const pending = this.git.status()
     const pendingHash = pending.pendingHash
+    const expectedHash = options.expectedHash ?? pendingHash ?? undefined
     // Idempotency guard for manual and auto triggers alike: two callers racing
     // the same committed hash must not both enter TradingGit.push(), because
     // the staging area is only cleared after broker dispatch completes.
-    if (pendingHash) {
-      if (this._pushInFlightHash === pendingHash) {
-        throw new Error(`Push already in progress for commit ${pendingHash}`)
+    if (expectedHash) {
+      if (this._pushInFlightHash === expectedHash) {
+        throw new Error(`Push already in progress for commit ${expectedHash}`)
       }
-      this._pushInFlightHash = pendingHash
+      this._pushInFlightHash = expectedHash
     }
     const operations = [...pending.staged]
     try {
-      const result = await this.git.push(approver)
+      const gitOptions: PushOptions = {
+        expectedHash,
+        preflight: async (context) => {
+          this.assertBrokerMutationAllowed('push')
+          if (this._disabled) {
+            throw new BrokerError('CONFIG', `Account "${this.label}" is disabled due to configuration error.`)
+          }
+          if (this.health === 'offline') {
+            throw new Error(`Account "${this.label}" is offline. Cannot execute trades.`)
+          }
+
+          // Caller-specific policy runs on the exact hash/operations held by
+          // TradingGit's lease. Paper auto-push uses this to avoid evaluating A
+          // and dispatching a concurrently replaced B.
+          await options.preflight?.(context)
+
+          try {
+            this._assertRiskStateAllowsWrite('push')
+          } catch (err) {
+            this._emitRiskRejectedPush(err, approver)
+            throw err
+          }
+        },
+      }
+      const result = await this.git.push(approver, gitOptions)
       const committed = this.git.show(result.hash)
       const pushedOperations = committed?.operations ?? operations
       const pushedResults = committed?.results ?? [...result.submitted, ...result.rejected]
-      const guards = collectGuardVerdicts(pushedOperations, pushedResults)
-      const risk = riskSnapshot(this.getRiskState())
-      const guardSummary = buildGuardSummary(this._configuredGuardTypes, guards)
-      if (result.submitted.length > 0) {
-        this._emitEvent('trade.pushed', {
-          id: result.hash,
-          accountId: this.id,
-          operationCount: result.operationCount,
-          operations: summarizeOperations(pushedOperations, pushedResults),
-          approver: approver ?? { via: 'loopback', at: new Date().toISOString() },
-          guards,
-          guardSummary,
-          risk,
-        })
-      }
-      if (result.rejected.length > 0) {
-        const rejectingGuards = guards.filter((g) => g.verdict === 'reject')
-        this._emitEvent('trade.rejected', {
-          id: result.hash,
-          accountId: this.id,
-          operationCount: result.operationCount,
-          operations: summarizeOperations(pushedOperations, pushedResults),
-          reason: result.rejected.map((r) => r.error).filter(Boolean).join('; ') || 'Trading push rejected',
-          ...(approver ? { approver } : {}),
-          guards,
-          rejectingGuards,
-          risk,
-        })
-      }
-      pushedResults.forEach((opResult, index) => {
-        if (opResult.status !== 'filled') return
-        const op = pushedOperations[index] ?? pushedOperations[0]
-        if (!op) return
-        this._emitEvent('trade.executed', {
-          id: `${result.hash}:${opResult.orderId ?? index}`,
-          accountId: this.id,
-          commitHash: result.hash,
-          operation: summarizeOperation(op),
-          ...(opResult.orderId ? { orderId: opResult.orderId } : {}),
-          status: 'filled',
-          ...(opResult.filledQty ? { filledQty: opResult.filledQty } : {}),
-          ...(opResult.filledPrice ? { filledPrice: opResult.filledPrice } : {}),
-          source: 'push',
-        })
-      })
-      Promise.resolve(this._onPostPush?.(this.id)).catch(() => {})
+      this._emitPushOutcomeEvents(result, pushedOperations, pushedResults, approver)
       return result
     } finally {
-      if (pendingHash && this._pushInFlightHash === pendingHash) {
+      if (expectedHash && this._pushInFlightHash === expectedHash) {
         this._pushInFlightHash = null
       }
     }
@@ -1040,6 +1037,60 @@ export class UnifiedTradingAccount {
     })
   }
 
+  private _emitPushOutcomeEvents(
+    result: PushResult,
+    operations: readonly Operation[],
+    results: readonly OperationResult[],
+    approver?: ApproverIdentity,
+  ): void {
+    const guards = collectGuardVerdicts(operations, results)
+    const risk = riskSnapshot(this.getRiskState())
+    const guardSummary = buildGuardSummary(this._configuredGuardTypes, guards)
+    if (result.submitted.length > 0) {
+      this._emitEvent('trade.pushed', {
+        id: result.hash,
+        accountId: this.id,
+        operationCount: result.operationCount,
+        operations: summarizeOperations(operations, results),
+        approver: approver ?? { via: 'loopback', at: new Date().toISOString() },
+        guards,
+        guardSummary,
+        risk,
+      })
+    }
+    if (result.rejected.length > 0) {
+      const rejectingGuards = guards.filter((g) => g.verdict === 'reject')
+      this._emitEvent('trade.rejected', {
+        id: result.hash,
+        accountId: this.id,
+        operationCount: result.operationCount,
+        operations: summarizeOperations(operations, results),
+        reason: result.rejected.map((entry) => entry.error).filter(Boolean).join('; ') || 'Trading push rejected',
+        ...(approver ? { approver } : {}),
+        guards,
+        rejectingGuards,
+        risk,
+      })
+    }
+    results.forEach((operationResult, index) => {
+      if (!operationResult.success || operationResult.status !== 'filled') return
+      const operation = operations[index] ?? operations[0]
+      if (!operation) return
+      this._emitEvent('trade.executed', {
+        id: `${result.hash}:${operationResult.orderId ?? index}`,
+        accountId: this.id,
+        commitHash: result.hash,
+        operation: summarizeOperation(operation),
+        ...(operationResult.orderId ? { orderId: operationResult.orderId } : {}),
+        status: 'filled',
+        ...(operationResult.filledQty ? { filledQty: operationResult.filledQty } : {}),
+        ...(operationResult.filledPrice ? { filledPrice: operationResult.filledPrice } : {}),
+        source: 'push',
+      })
+    })
+    Promise.resolve(this._onPostPush?.(this.id)).catch(() => {})
+  }
+
   private _emitEvent<K extends UtaLifecycleEventType>(type: K, payload: AgentEventMap[K]): void {
     try {
       this._eventSink?.emit(type, payload)
@@ -1048,11 +1099,110 @@ export class UnifiedTradingAccount {
     }
   }
 
-  async reject(reason?: string): Promise<RejectResult> {
-    const result = await this.git.reject(reason)
+  async reject(
+    reason?: string,
+    approver?: ApproverIdentity,
+    options: RejectOptions = {},
+  ): Promise<RejectResult> {
+    const result = await this.git.reject(reason, approver, options)
     this._stagedSubAccountIds = []
     Promise.resolve(this._onPostReject?.(this.id)).catch(() => {})
     return result
+  }
+
+  async resolveMutation(input: {
+    attemptId: string
+    action: MutationResolutionAction
+    reason: string
+    confirmation: string
+    approver: ApproverIdentity
+  }): Promise<MutationResolveResult> {
+    const resolved = await this.git.resolveMutation(input)
+    if (!resolved.resolved || !resolved.hash) return resolved
+
+    const commit = this.git.show(resolved.hash)
+    const audit = commit?.mutationAudit
+    if (!commit || !audit || audit.attemptId !== resolved.attemptId || audit.attemptId !== input.attemptId) {
+      console.error(`UTA[${this.id}]: mutation ${resolved.attemptId} resolved without a matching durable audit commit; lifecycle events were not emitted`)
+      return resolved
+    }
+
+    const operationCount = audit.operationCount
+    if (!Number.isSafeInteger(operationCount) || operationCount < 0
+      || commit.operations.length < operationCount || commit.results.length < operationCount) {
+      console.error(`UTA[${this.id}]: mutation ${resolved.attemptId} has an invalid durable audit operation count; lifecycle events were not emitted`)
+      return resolved
+    }
+    const operations = commit.operations.slice(0, operationCount)
+    const results = commit.results.slice(0, operationCount)
+    if (results.some((result, index) => result.action !== operations[index]?.action)) {
+      console.error(`UTA[${this.id}]: mutation ${resolved.attemptId} has mismatched durable operation results; lifecycle events were not emitted`)
+      return resolved
+    }
+
+    switch (audit.kind) {
+      case 'push': {
+        const submitted = results.filter((result) => result.success)
+        // Human acknowledgement preserves uncertainty. It is not evidence of
+        // rejection, so uncertain rows must not feed trade.rejected.
+        const rejected = results.filter((result) => !result.success && result.status !== 'uncertain')
+        this._emitPushOutcomeEvents({
+          hash: commit.hash,
+          message: commit.message,
+          operationCount,
+          submitted,
+          rejected,
+        }, operations, results, audit.initiator)
+        break
+      }
+      case 'human_reject':
+        this._stagedSubAccountIds = []
+        Promise.resolve(this._onPostReject?.(this.id)).catch(() => {})
+        break
+      case 'emergency_cancel': {
+        if (typeof audit.context?.cancelOrders !== 'boolean' || !audit.context.reason) {
+          console.error(`UTA[${this.id}]: resolved emergency mutation ${resolved.attemptId} lacks durable event context; risk event was not emitted`)
+          break
+        }
+        if (operations.some((operation) => operation.action !== 'emergencyCancelOrder')) {
+          console.error(`UTA[${this.id}]: resolved emergency mutation ${resolved.attemptId} has unexpected operation types; risk event was not emitted`)
+          break
+        }
+        const outcomes = operations.map((operation, index) =>
+          this.projectEmergencyCancel(
+            operation as Extract<Operation, { action: 'emergencyCancelOrder' }>,
+            results[index],
+          ))
+        this._emitEvent('risk.emergency-stop', {
+          accountId: this.id,
+          hash: commit.hash,
+          reason: audit.context.reason,
+          cancelOrders: audit.context.cancelOrders,
+          triggerIdentity: audit.initiator,
+          outcomes,
+        })
+        break
+      }
+      case 'flatten': {
+        if (operations.some((operation) => operation.action !== 'emergencyClosePosition')) {
+          console.error(`UTA[${this.id}]: resolved flatten mutation ${resolved.attemptId} has unexpected operation types; risk event was not emitted`)
+          break
+        }
+        const outcomes = operations.map((operation, index) =>
+          this.projectFlattenResult(
+            operation as Extract<Operation, { action: 'emergencyClosePosition' }>,
+            results[index],
+          ))
+        this._emitEvent('risk.flatten', {
+          accountId: this.id,
+          hash: commit.hash,
+          triggerIdentity: audit.initiator,
+          outcomes,
+        })
+        break
+      }
+    }
+    return resolved
   }
 
   // ==================== Git queries ====================
@@ -1155,9 +1305,11 @@ export class UnifiedTradingAccount {
       return { hash: '', updatedCount: 0, updates: [] }
     }
 
-    const state = await this._getState()
-    const syncResult = await this.git.sync(updates, state)
-    for (const update of updates) {
+    // No caller-side snapshot: TradingGit.sync captures state inside its
+    // ledger lease so the newest commit can never carry pending orders that a
+    // concurrent push already replaced.
+    const syncResult = await this.git.sync(updates)
+    for (const update of syncResult.updates) {
       if (update.currentStatus !== 'filled') continue
       this._emitEvent('trade.executed', {
         id: `${syncResult.hash}:${update.orderId}`,
@@ -1231,19 +1383,30 @@ export class UnifiedTradingAccount {
     if (unknown.length === 0) return { observed: 0 }
 
     for (const o of unknown) this.stampAliceId(o.contract)
-    const stateAfter = await this._getState()
-    await this.git.recordObservedOrders({
+    const recorded = await this.git.recordObservedOrders({
       observed: unknown.map((o) => ({ contract: o.contract, order: o.order, orderId: o.orderId! })),
-      stateAfter,
     })
-    console.warn(`UTA[${this.id}]: recorded ${unknown.length} external order(s) not placed through Alice`)
-    return { observed: unknown.length }
+    if (recorded.observed > 0) {
+      console.warn(`UTA[${this.id}]: recorded ${recorded.observed} external order(s) not placed through Alice`)
+    }
+    return { observed: recorded.observed }
+  }
+
+  private async _executeSyntheticMutation(params: SyntheticMutationParams): Promise<PushResult> {
+    try {
+      return await this.git.executeSyntheticMutation(params)
+    } finally {
+      // Synthetic risk actions supersede any staged/pending proposal once the
+      // coordinator durably admits them. Keep UTA's transient sub-account tag
+      // tracker aligned with the now-empty git staging area, including the
+      // uncertain/recovery path.
+      if (this.git.status().staged.length === 0) this._stagedSubAccountIds = []
+    }
   }
 
   /**
-   * Human-only emergency stop broker action. This bypasses the normal
-   * stage/commit/push pipeline because READ_ONLY/HALT intentionally block it,
-   * but still records a TradingGit audit commit after the broker calls.
+   * Human-only emergency stop broker action. It bypasses normal approval, but
+   * every venue call still runs through TradingGit's durable mutation state.
    */
   async emergencyCancelAllOpenOrders(input: {
     reason: string
@@ -1256,50 +1419,51 @@ export class UnifiedTradingAccount {
       this.assertBrokerMutationAllowed('emergencyCancelAllOpenOrders')
     }
 
-    const cancellations: Array<{ orderId: string; contract: Contract; order?: Order; result: PlaceOrderResult }> = []
-    const cancelResults: EmergencyCancelOrderResult[] = []
-
-    if (input.cancelOrders) {
-      if (!this.broker.getOpenOrders) {
-        throw new BrokerError('CONFIG', `Account "${this.label}" broker does not support broad open-order enumeration; cannot cancel all orders safely.`)
-      }
-
-      const open = await this._callBroker(() => this.broker.getOpenOrders!())
-      console.warn(`UTA[${this.id}]: EMERGENCY STOP cancelling ${open.length} open order(s): ${input.reason}`)
-
-      for (const openOrder of open) {
-        if (openOrder.contract) this.stampAliceId(openOrder.contract)
-        const orderId = openOrder.orderId ?? (openOrder.order?.orderId ? String(openOrder.order.orderId) : '<missing-order-id>')
-        let result: PlaceOrderResult
-        if (orderId === '<missing-order-id>') {
-          result = { success: false, error: 'Broker open-order row omitted orderId; cannot cancel safely.' }
-        } else {
-          try {
-            result = await this._callBroker(() => this.broker.cancelOrder(orderId))
-          } catch (err) {
-            result = { success: false, error: err instanceof Error ? err.message : String(err) }
-          }
-        }
-        cancellations.push({
-          orderId,
-          contract: openOrder.contract,
-          order: openOrder.order,
-          result,
-        })
-        cancelResults.push(this.projectEmergencyCancel(openOrder, orderId, result))
-      }
-    } else {
-      console.warn(`UTA[${this.id}]: EMERGENCY STOP set HALT without cancelling orders: ${input.reason}`)
-    }
-
-    const stateAfter = await this._getState()
-    const hash = await this.git.recordEmergencyStop({
-      reason: input.reason,
-      cancelOrders: input.cancelOrders,
-      cancellations,
-      stateAfter,
+    const mutation = await this._executeSyntheticMutation({
+      kind: 'emergency_cancel',
+      message: input.cancelOrders
+        ? `[emergency-stop] HALT; cancel all open orders - ${input.reason}`
+        : `[emergency-stop] HALT; cancelOrders=false - ${input.reason}`,
       approver: input.triggerIdentity,
+      context: { reason: input.reason, cancelOrders: input.cancelOrders },
+      prepare: async () => {
+        if (!input.cancelOrders) {
+          console.warn(`UTA[${this.id}]: EMERGENCY STOP set HALT without cancelling orders: ${input.reason}`)
+          return []
+        }
+        if (!this.broker.getOpenOrders) {
+          throw new BrokerError('CONFIG', `Account "${this.label}" broker does not support broad open-order enumeration; cannot cancel all orders safely.`)
+        }
+        const open = await this._callBroker(() => this.broker.getOpenOrders!())
+        console.warn(`UTA[${this.id}]: EMERGENCY STOP cancelling ${open.length} open order(s): ${input.reason}`)
+        return open.map((openOrder) => {
+          if (openOrder.contract) this.stampAliceId(openOrder.contract)
+          const orderId = openOrder.orderId
+            ?? (openOrder.order?.orderId ? String(openOrder.order.orderId) : '<missing-order-id>')
+          return {
+            action: 'emergencyCancelOrder' as const,
+            orderId,
+            contract: openOrder.contract,
+            ...(openOrder.order ? { order: openOrder.order } : {}),
+          }
+        })
+      },
+      execute: async (operation) => {
+        if (operation.action !== 'emergencyCancelOrder') {
+          throw new LocalNoDispatchError(`Unexpected emergency operation: ${operation.action}`)
+        }
+        if (operation.orderId === '<missing-order-id>') {
+          throw new LocalNoDispatchError('Broker open-order row omitted orderId; cannot cancel safely.')
+        }
+        return this._callBroker(() => this.broker.cancelOrder(operation.orderId))
+      },
     })
+    const committed = this.git.show(mutation.hash)
+    const cancelResults = (committed?.operations ?? []).slice(0, mutation.operationCount).flatMap((operation, index) => {
+      if (operation.action !== 'emergencyCancelOrder') return []
+      return [this.projectEmergencyCancel(operation, committed?.results[index])]
+    })
+    const hash = mutation.hash
     const succeeded = cancelResults.filter((r) => r.success).length
     console.warn(`UTA[${this.id}]: [emergency-stop] audit ${hash}; cancelled ${succeeded}/${cancelResults.length} open order(s)`)
     this._emitEvent('risk.emergency-stop', {
@@ -1320,28 +1484,36 @@ export class UnifiedTradingAccount {
    */
   async flattenAllOpenPositions(triggerIdentity?: ApproverIdentity): Promise<FlattenResult> {
     this.assertBrokerMutationAllowed('flattenAllOpenPositions')
-
-    const positions = await this._callBroker(() => this.broker.getPositions())
-    for (const position of positions) this.stampAliceId(position.contract)
-
-    console.warn(`UTA[${this.id}]: FLATTEN closing ${positions.length} open position(s)`)
-
-    const records: Array<{ position: Position; result: PlaceOrderResult }> = []
-    const results: FlattenPositionResult[] = []
-
-    for (const position of positions) {
-      let result: PlaceOrderResult
-      try {
-        result = await this._callBroker(() => this.broker.closePosition(position.contract, position.quantity))
-      } catch (err) {
-        result = { success: false, error: err instanceof Error ? err.message : String(err) }
-      }
-      records.push({ position, result })
-      results.push(this.projectFlattenResult(position, result))
-    }
-
-    const stateAfter = await this._getState()
-    const hash = await this.git.recordFlatten({ positions: records, stateAfter, approver: triggerIdentity })
+    let preparedPositions: Position[] = []
+    const mutation = await this._executeSyntheticMutation({
+      kind: 'flatten',
+      message: '[flatten] close all open positions',
+      approver: triggerIdentity,
+      context: { reason: 'Human requested account flatten' },
+      prepare: async () => {
+        preparedPositions = await this._callBroker(() => this.broker.getPositions())
+        for (const position of preparedPositions) this.stampAliceId(position.contract)
+        console.warn(`UTA[${this.id}]: FLATTEN closing ${preparedPositions.length} open position(s)`)
+        return preparedPositions.map((position) => ({
+          action: 'emergencyClosePosition' as const,
+          contract: position.contract,
+          quantity: position.quantity,
+          side: position.side,
+        }))
+      },
+      execute: async (operation) => {
+        if (operation.action !== 'emergencyClosePosition') {
+          throw new LocalNoDispatchError(`Unexpected flatten operation: ${operation.action}`)
+        }
+        return this._callBroker(() => this.broker.closePosition(operation.contract, operation.quantity))
+      },
+    })
+    const committed = this.git.show(mutation.hash)
+    const results = (committed?.operations ?? []).slice(0, mutation.operationCount).flatMap((operation, index) => {
+      if (operation.action !== 'emergencyClosePosition') return []
+      return [this.projectFlattenResult(operation, committed?.results[index], preparedPositions[index]?.side)]
+    })
+    const hash = mutation.hash
     const succeeded = results.filter((r) => r.success).length
     console.warn(`UTA[${this.id}]: [flatten] audit ${hash}; closed ${succeeded}/${results.length} open position(s)`)
     this._emitEvent('risk.flatten', {
@@ -1353,27 +1525,38 @@ export class UnifiedTradingAccount {
     return { hash, results }
   }
 
-  private projectEmergencyCancel(openOrder: OpenOrder, orderId: string, result: PlaceOrderResult): EmergencyCancelOrderResult {
+  private projectEmergencyCancel(
+    operation: Extract<Operation, { action: 'emergencyCancelOrder' }>,
+    result?: OperationResult,
+  ): EmergencyCancelOrderResult {
     return {
-      orderId: result.orderId ?? orderId,
-      symbol: openOrder.contract.symbol || openOrder.contract.localSymbol || openOrder.contract.aliceId || 'unknown',
-      ...(openOrder.contract.aliceId ? { aliceId: openOrder.contract.aliceId } : {}),
-      success: result.success === true,
-      status: result.success === true ? (result.orderState?.status ?? 'Cancelled') : 'Rejected',
-      ...(result.error ? { error: result.error } : {}),
+      orderId: result?.orderId ?? operation.orderId,
+      symbol: operation.contract.symbol || operation.contract.localSymbol || operation.contract.aliceId || 'unknown',
+      ...(operation.contract.aliceId ? { aliceId: operation.contract.aliceId } : {}),
+      success: result?.success === true,
+      status: result?.success === true
+        ? (result.orderState?.status ?? 'Cancelled')
+        : result?.status === 'uncertain' ? 'Uncertain' : 'Rejected',
+      ...(result?.error ? { error: result.error } : {}),
     }
   }
 
-  private projectFlattenResult(position: Position, result: PlaceOrderResult): FlattenPositionResult {
+  private projectFlattenResult(
+    operation: Extract<Operation, { action: 'emergencyClosePosition' }>,
+    result?: OperationResult,
+    side?: Position['side'],
+  ): FlattenPositionResult {
     return {
-      symbol: position.contract.symbol || position.contract.localSymbol || position.contract.aliceId || 'unknown',
-      ...(position.contract.aliceId ? { aliceId: position.contract.aliceId } : {}),
-      side: position.side,
-      quantity: position.quantity.toFixed(),
-      success: result.success === true,
-      ...(result.orderId ? { orderId: result.orderId } : {}),
-      status: result.success === true ? (result.orderState?.status ?? 'Filled') : 'Rejected',
-      ...(result.error ? { error: result.error } : {}),
+      symbol: operation.contract.symbol || operation.contract.localSymbol || operation.contract.aliceId || 'unknown',
+      ...(operation.contract.aliceId ? { aliceId: operation.contract.aliceId } : {}),
+      side: operation.side ?? side ?? (operation.quantity.isNegative() ? 'short' : 'long'),
+      quantity: operation.quantity.abs().toFixed(),
+      success: result?.success === true,
+      ...(result?.orderId ? { orderId: result.orderId } : {}),
+      status: result?.success === true
+        ? (result.orderState?.status ?? 'Filled')
+        : result?.status === 'uncertain' ? 'Uncertain' : 'Rejected',
+      ...(result?.error ? { error: result.error } : {}),
     }
   }
 
@@ -1422,9 +1605,32 @@ export class UnifiedTradingAccount {
   }
 
   async getPositions(subAccountId?: string): Promise<Position[]> {
+    // Head observed BEFORE the broker read: every drift decision below is
+    // CAS-bound to it, so a sync/push landing during or after the broker
+    // round-trip turns the reconcile into a no-op instead of a stale write.
+    const observedHead = this.git.status().head
     const positions = await this._callBroker(() => this.broker.getPositions(subAccountId))
     for (const p of positions) this.stampAliceId(p.contract)
-    await this._reconcileWalletPositions(positions)
+    const mutationReadiness = this.git.status().mutation?.readiness ?? 'ready'
+    await this._reconcileWalletPositions(positions, {
+      // Read surfaces remain available during quarantine and for unknown
+      // future schemas. Cost-basis projection is still applied, but any drift
+      // ledger write waits until the mutation boundary is writable again.
+      recordDrift: mutationReadiness === 'ready' || mutationReadiness === 'legacy_review_required',
+      observedHead,
+    })
+    return positions
+  }
+
+  /**
+   * Broker-position snapshot for mutation preflight. It projects any existing
+   * wallet cost basis but never appends reconcile commits, so it is safe to
+   * call while TradingGit's fail-fast mutation lease is held.
+   */
+  async getPositionsForMutationPreflight(subAccountId?: string): Promise<Position[]> {
+    const positions = await this._callBroker(() => this.broker.getPositions(subAccountId))
+    for (const p of positions) this.stampAliceId(p.contract)
+    await this._reconcileWalletPositions(positions, { recordDrift: false })
     return positions
   }
 
@@ -1435,7 +1641,18 @@ export class UnifiedTradingAccount {
    * commit at observed markPrice. Mutates `positions` in place: replaces
    * the placeholder avgCost and recomputes unrealizedPnL.
    */
-  private async _reconcileWalletPositions(positions: Position[]): Promise<void> {
+  private async _reconcileWalletPositions(
+    positions: Position[],
+    options: { recordDrift?: boolean; observedHead?: CommitHash | null } = {},
+  ): Promise<void> {
+    // Drift WRITES stop for the rest of the pass once the ledger is known to
+    // have advanced past the broker snapshot; the avgCost/PnL projection
+    // below still runs for every position (it reads the current ledger).
+    let recordDrift = options.recordDrift ?? true
+    // The head the broker snapshot was taken against. Advanced only by our
+    // own successful reconcile commits; any other writer landing in between
+    // fails the CAS inside recordReconcile and this pass skips the write.
+    let expectedHead = options.observedHead ?? this.git.status().head
     const walletPositions = positions.filter(p => p.avgCostSource === 'wallet')
     if (walletPositions.length === 0) return
 
@@ -1467,7 +1684,7 @@ export class UnifiedTradingAccount {
       // only suppresses RECORDING — the avgCost/PnL projection below still
       // applies, so a position with a weeks-long hanging stop order keeps
       // its real cost basis on screen throughout.
-      if (!inFlight.has(aliceId) && drift.abs().gt(new Decimal('1e-8'))) {
+      if (recordDrift && !inFlight.has(aliceId) && drift.abs().gt(new Decimal('1e-8'))) {
         // Bootstrap price: prefer broker-reported avgCost when non-zero
         // (Mock externalTrade, future CCXT-with-fetchMyTrades, anything
         // that observed a real fill price). Fall back to markPrice only
@@ -1476,18 +1693,39 @@ export class UnifiedTradingAccount {
         // produces identical behavior there.
         const brokerAvgCost = p.avgCost ? new Decimal(p.avgCost) : new Decimal(0)
         const bootstrapPrice = brokerAvgCost.gt(0) ? brokerAvgCost : new Decimal(p.marketPrice)
-        await this.git.recordReconcile({
-          aliceId,
-          quantityDelta: drift,
-          markPrice: bootstrapPrice,
-          stateAfter: this._buildReconcileStateAfter(positions),
-        })
+        try {
+          const recorded = await this.git.recordReconcile({
+            aliceId,
+            quantityDelta: drift,
+            markPrice: bootstrapPrice,
+            stateAfter: this._buildReconcileStateAfter(positions),
+            expectedHead,
+          })
+          if (recorded === null) {
+            // The ledger advanced since the broker snapshot (a sync recorded
+            // a fill, a push landed) — this drift decision is stale. Stop
+            // writing this pass; the next getPositions recomputes fresh drift.
+            recordDrift = false
+          } else {
+            expectedHead = recorded
+          }
+        } catch (error) {
+          if (!(error instanceof MutationBusyError)
+            && !(error instanceof MutationRecoveryRequiredError)
+            && !(error instanceof MutationUnsupportedSchemaError)) {
+            throw error
+          }
+          // A read must remain available while mutation writes are quarantined
+          // or another writer owns the lease. The next clean read can record
+          // the same broker drift; never turn diagnostics into a write failure.
+        }
       }
 
       // Recompute (post-reconcile if drift was applied; otherwise unchanged).
       const finalCommits = this.git.exportState().commits
       const final = recomputeCostBasisFromCommits(finalCommits, aliceId)
-      if (!final) continue  // Should be unreachable — reconcile would seed it.
+      // Preflight snapshots intentionally do not seed missing wallet history.
+      if (!final) continue
 
       p.avgCost = final.avgCost.toString()
       // Cost-basis WAC operates on per-unit prices; the IBroker.Position

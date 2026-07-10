@@ -117,6 +117,6 @@ describe('UTAManagerSDK — readonly product mode', () => {
     const [account] = await m.resolve()
 
     await expect(account.stagePlaceOrder({} as never)).resolves.toEqual({ hash: 'stage' })
-    await expect(account.push()).rejects.toThrow('Trading mode is readonly')
+    await expect(account.push('abcd1234')).rejects.toThrow('Trading mode is readonly')
   })
 })

@@ -412,9 +412,14 @@ export interface WalletOperation {
   [key: string]: unknown
 }
 
+// NOTE (issue #121): the wallet status wire payload also carries a `mutation`
+// recovery projection, but the UI deliberately does NOT model or render it —
+// mutation recovery is a human-only flow on the authenticated API (see
+// docs/uta-live-testing.md). Do not re-mirror it here.
 export interface WalletStatus {
   staged: WalletOperation[]
   pendingMessage: string | null
+  pendingHash: string | null
   head: string | null
   commitCount: number
 }
@@ -455,7 +460,13 @@ export interface HistoryContract {
   multiplier?: string
 }
 
-export type OrderHistoryStatus = 'submitted' | 'filled' | 'cancelled' | 'rejected' | 'user-rejected'
+export type OrderHistoryStatus =
+  | 'submitted'
+  | 'filled'
+  | 'cancelled'
+  | 'rejected'
+  | 'user-rejected'
+  | 'uncertain'
 
 export type OrderHistorySource = 'alice' | 'external'
 

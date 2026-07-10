@@ -862,6 +862,7 @@ const ORDER_STATUS_STYLES: Record<OrderHistoryStatus, string> = {
   cancelled: 'bg-bg-tertiary text-text-muted',
   rejected: 'bg-red/15 text-red',
   'user-rejected': 'bg-red/15 text-red',
+  uncertain: 'bg-amber-500/15 text-amber-400',
   submitted: 'bg-accent/15 text-accent',
 }
 

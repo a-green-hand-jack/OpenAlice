@@ -16,6 +16,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createTradingRoutes } from './routes-trading.js'
 import type { UTAEngineContext } from '../types.js'
+import type { GitStatus } from '@traderalice/uta-protocol'
+import {
+  PendingApprovalChangedError,
+  MutationRecoveryRequiredError,
+} from '../domain/trading/git/mutation-coordinator.js'
 
 // Stub the UTA + manager just enough that the handler can call through.
 // We capture every call to verify what landed at the staging layer.
@@ -25,6 +30,7 @@ interface CapturedCall { method: string; args: unknown[] }
 function makeMockUTA(opts: { stageThrows?: 'stage' | 'commit' | 'push' | null; pushResult?: unknown; pendingMessage?: string | null } = {}) {
   const calls: CapturedCall[] = []
   let pendingMessage: string | null = opts.pendingMessage ?? null
+  let pendingHash: string | null = pendingMessage ? 'abcd1234' : null
   return {
     calls,
     uta: {
@@ -48,7 +54,8 @@ function makeMockUTA(opts: { stageThrows?: 'stage' | 'commit' | 'push' | null; p
         calls.push({ method: 'commit', args: [msg] })
         if (opts.stageThrows === 'commit') throw new Error('Guard rejected')
         pendingMessage = msg
-        return { prepared: true, hash: 'commit123', message: msg, operationCount: 1 }
+        pendingHash = 'abcd1234'
+        return { prepared: true, hash: pendingHash, message: msg, operationCount: 1 }
       }),
       push: vi.fn(async () => {
         calls.push({ method: 'push', args: [] })
@@ -65,7 +72,7 @@ function makeMockUTA(opts: { stageThrows?: 'stage' | 'commit' | 'push' | null; p
         calls.push({ method: 'reject', args: [] })
         return { hash: 'rej', message: 'rolled back', operationCount: 0 }
       }),
-      status: vi.fn(() => ({ pendingMessage, staged: [], head: null, commitCount: 0 })),
+      status: vi.fn((): GitStatus => ({ pendingMessage, pendingHash, staged: [], head: null, commitCount: 0 })),
     },
   }
 }
@@ -105,7 +112,9 @@ describe('POST /uta/:id/wallet/push', () => {
     const mock = makeMockUTA({ pendingMessage: 'ready to push' })
     const routes = makeRoutes(mock.uta)
 
-    const { status, body } = await post(routes, '/uta/mock-uta/wallet/push', {})
+    const { status, body } = await post(routes, '/uta/mock-uta/wallet/push', {
+      expectedHash: 'abcd1234',
+    })
 
     expect(status).toBe(200)
     expect((body as { hash: string }).hash).toBe('abc123')
@@ -122,6 +131,30 @@ describe('POST /uta/:id/wallet/push', () => {
     expect(mock.uta.push).not.toHaveBeenCalled()
   })
 
+  it('returns an actionable 409 when the reviewed approval hash is stale', async () => {
+    const mock = makeMockUTA({ pendingMessage: 'ready to push' })
+    mock.uta.status.mockReturnValue({
+      pendingMessage: 'ready to push',
+      pendingHash: 'abcd1234',
+      staged: [],
+      head: null,
+      commitCount: 0,
+      mutation: { schemaVersion: 1, readiness: 'ready', downgradeBlocked: false },
+    })
+    mock.uta.push.mockRejectedValue(new PendingApprovalChangedError('deadbeef', 'abcd1234'))
+    const routes = makeRoutes(mock.uta)
+
+    const response = await post(routes, '/uta/mock-uta/wallet/push', {
+      expectedHash: 'deadbeef',
+    })
+
+    expect(response.status).toBe(409)
+    expect(response.body).toMatchObject({
+      code: 'PENDING_APPROVAL_CHANGED',
+      mutation: { readiness: 'ready' },
+    })
+  })
+
   it('does not push from sibling wallet-git routes', async () => {
     const mock = makeMockUTA({ pendingMessage: 'ready to review' })
     const routes = makeRoutes(mock.uta)
@@ -130,7 +163,10 @@ describe('POST /uta/:id/wallet/push', () => {
     await routes.request('/uta/mock-uta/wallet/log')
     await routes.request('/uta/mock-uta/wallet/show/missing')
     await post(routes, '/uta/mock-uta/wallet/commit', { message: 'manual approval' })
-    await post(routes, '/uta/mock-uta/wallet/reject', { reason: 'not now' })
+    await post(routes, '/uta/mock-uta/wallet/reject', {
+      expectedHash: 'abcd1234',
+      reason: 'not now',
+    })
     await post(routes, '/uta/mock-uta/wallet/stage-cancel-order', { orderId: 'ord-42' })
 
     expect(mock.uta.push).not.toHaveBeenCalled()
@@ -177,6 +213,52 @@ describe('POST /uta/:id/wallet/place-order', () => {
     expect(status).toBe(200)
     expect((body as { hash: string }).hash).toBe('abc123')
     expect(mock.calls.map(c => c.method)).toEqual(['stagePlaceOrder', 'commit', 'push'])
+  })
+
+  it('returns structured 409 recovery evidence when a one-shot push becomes ambiguous', async () => {
+    mock.uta.push.mockImplementation(async () => {
+      mock.uta.status.mockReturnValue({
+        pendingMessage: null,
+        pendingHash: null,
+        staged: [],
+        head: null,
+        commitCount: 0,
+        mutation: {
+          schemaVersion: 1,
+          readiness: 'recovery_required',
+          downgradeBlocked: true,
+          activeAttempt: {
+            attemptId: 'attempt-ambiguous',
+            kind: 'push',
+            hash: 'abcd1234',
+            message: 'manual test',
+            createdAt: '2026-07-10T00:00:00.000Z',
+            updatedAt: '2026-07-10T00:00:01.000Z',
+            operations: [],
+          },
+        },
+      })
+      throw new MutationRecoveryRequiredError('attempt-ambiguous', 'venue acknowledgement lost')
+    })
+    const routes = makeRoutes(mock.uta)
+
+    const response = await post(routes, '/uta/mock-uta/wallet/place-order', {
+      aliceId: 'mock-uta|BTC/USDT',
+      action: 'BUY',
+      orderType: 'MKT',
+      totalQuantity: '0.001',
+      message: 'manual test',
+    })
+
+    expect(response.status).toBe(409)
+    expect(response.body).toMatchObject({
+      phase: 'push',
+      code: 'MUTATION_RECOVERY_REQUIRED',
+      mutation: {
+        readiness: 'recovery_required',
+        activeAttempt: { attemptId: 'attempt-ambiguous', hash: 'abcd1234' },
+      },
+    })
   })
 
   it('rejects body without commit message (Zod 400)', async () => {

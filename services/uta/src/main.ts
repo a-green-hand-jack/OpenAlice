@@ -21,6 +21,7 @@ import {
   createSnapshotService,
   createSnapshotScheduler,
 } from './domain/trading/index.js'
+import { GitStateRecoveryError } from './domain/trading/git-persistence.js'
 import { FxService } from './domain/trading/fx-service.js'
 import {
   getSDKExecutor,
@@ -95,6 +96,15 @@ async function main(): Promise<void> {
     try {
       await utaManager.initUTA(accCfg)
     } catch (err) {
+      if (err instanceof GitStateRecoveryError) {
+        // Fail-closed trading-state lockout (corrupt commit.json or an
+        // interrupted-write tombstone). The account is deliberately NOT
+        // started; a human must inspect the file before any broker access.
+        console.error(
+          `[uta] REFUSED to init "${accCfg.id}": durable trading state needs manual recovery at ${err.filePath} — ${err.message}`,
+        )
+        continue
+      }
       console.warn(`[uta] failed to init "${accCfg.id}": ${err instanceof Error ? err.message : String(err)}`)
     }
   }
