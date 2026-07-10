@@ -6,9 +6,11 @@ import { createStewardLedgerStore } from './ledger-store.js';
 import { createStewardLockStore } from './lock-store.js';
 import { stewardStatePath, stewardSupervisorLogPath } from './paths.js';
 import { createStewardWakeStore } from './wake-store.js';
+import type { ContextTelemetry } from '../cli-adapter.js';
 import type {
   StewardCostSummary,
   StewardState,
+  StewardWakeAttribution,
   StewardWakeRecord,
   StewardWakeStatus,
 } from './types.js';
@@ -17,6 +19,14 @@ export interface StewardSupervisorTickOptions {
   readonly now?: string;
   readonly isSessionRunning?: (sessionId: string) => boolean;
   readonly config?: StewardCostPolicyInput;
+  /**
+   * Best-effort context-window telemetry reader for a wake's session (issue
+   * #132). When a wake hits its deadline, the supervisor consults this to tell
+   * a context-overflow timeout (session poisoned past the window) apart from a
+   * plain slow timeout. Optional and failure-isolated — absent, missing, or a
+   * throw ⇒ the timeout is classified plainly.
+   */
+  readonly readContextTelemetry?: (sessionId: string) => Promise<ContextTelemetry | null>;
 }
 
 export interface StewardSupervisorTransition {
@@ -43,6 +53,12 @@ export class StewardSupervisor {
     const ledgerStore = createStewardLedgerStore(this.workspaceDir);
     const lockStore = createStewardLockStore(this.workspaceDir);
     const transitions: StewardSupervisorTransition[] = [];
+    // Issue #132 (PR #133 review): telemetry-degradation warnings collected
+    // across the loop below — a timed-out wake whose session IS tracked but
+    // whose rollout telemetry came back null/unreadable gets a distinct
+    // warning here (not just a silent plain-timeout fallback), so campaign
+    // reports and operators can see attribution silently went dark.
+    const telemetryWarnings: string[] = [];
     const wakes = await wakeStore.list();
 
     for (const wake of wakes) {
@@ -83,10 +99,24 @@ export class StewardSupervisor {
       }
 
       if (Date.parse(wake.deadline) <= Date.parse(now)) {
+        // Issue #132: attribute the timeout. If the session's rollout shows
+        // input_tokens already at/past the model context window, this wake
+        // died because the session was context-poisoned, not merely slow —
+        // distinct in the terminal metadata and the supervisor event so
+        // campaign reports can count context overflows apart from timeouts.
+        const { attribution, warning: telemetryWarning } = await this.classifyTimeout(
+          wake.sessionId,
+          opts.readContextTelemetry,
+        );
+        if (telemetryWarning) telemetryWarnings.push(telemetryWarning);
         const updated = await wakeStore.updateStatus(wake.wakeId, 'timeout', {
           now,
           completedAt: now,
-          error: `deadline expired at ${wake.deadline}`,
+          error: attribution
+            ? `deadline expired at ${wake.deadline}; context overflow ` +
+              `(input_tokens ${attribution.inputTokens} >= window ${attribution.modelContextWindow})`
+            : `deadline expired at ${wake.deadline}`,
+          ...(attribution ? { attribution } : {}),
         });
         await lockStore.release(updated.envelope.accountId, updated.wakeId);
         transitions.push({
@@ -102,6 +132,14 @@ export class StewardSupervisor {
           from: wake.status,
           to: updated.status,
           deadline: wake.deadline,
+          ...(attribution
+            ? {
+              attribution: 'context_overflow',
+              inputTokens: attribution.inputTokens,
+              modelContextWindow: attribution.modelContextWindow,
+            }
+            : {}),
+          ...(telemetryWarning ? { telemetryWarning } : {}),
         });
         continue;
       }
@@ -174,7 +212,7 @@ export class StewardSupervisor {
         invalid,
       });
     }
-    const warnings = [...state.warnings, ...duplicateWarnings, ...invalidWarnings];
+    const warnings = [...state.warnings, ...duplicateWarnings, ...invalidWarnings, ...telemetryWarnings];
 
     const activeWakeIds = (await wakeStore.list())
       .filter((wake) => !isTerminal(wake.status))
@@ -187,6 +225,50 @@ export class StewardSupervisor {
       cost: state.cost,
       warnings,
     };
+  }
+
+  /**
+   * Best-effort context-overflow check for a timed-out wake (issue #132).
+   * Returns a `context_overflow` attribution when the session's latest
+   * telemetry has `input_tokens >= model_context_window`. Never throws — a
+   * missing reader or no session classifies the timeout plainly with no
+   * warning (nothing was expected to be tracked); a telemetry read that
+   * throws OR resolves to `null` for a session that DOES have a tracked
+   * sessionId classifies plainly too, but returns a `warning` string (PR #133
+   * review) so the caller can surface that attribution silently went dark for
+   * a session it should have been able to check.
+   */
+  private async classifyTimeout(
+    sessionId: string | null,
+    readContextTelemetry: StewardSupervisorTickOptions['readContextTelemetry'],
+  ): Promise<{ attribution: StewardWakeAttribution | null; warning: string | null }> {
+    if (!sessionId || !readContextTelemetry) return { attribution: null, warning: null };
+    try {
+      const telemetry = await readContextTelemetry(sessionId);
+      if (!telemetry) {
+        return {
+          attribution: null,
+          warning: `context telemetry unavailable for session ${sessionId} (timeout attribution skipped)`,
+        };
+      }
+      if (telemetry.modelContextWindow > 0 && telemetry.inputTokens >= telemetry.modelContextWindow) {
+        return {
+          attribution: {
+            kind: 'context_overflow',
+            inputTokens: telemetry.inputTokens,
+            modelContextWindow: telemetry.modelContextWindow,
+          },
+          warning: null,
+        };
+      }
+      return { attribution: null, warning: null };
+    } catch (err) {
+      return {
+        attribution: null,
+        warning: `context telemetry read failed for session ${sessionId}: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
   }
 }
 

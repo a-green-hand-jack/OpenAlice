@@ -8,3 +8,4 @@ export * from './cost.js';
 export * from './supervisor.js';
 export * from './config.js';
 export * from './supervisor-scanner.js';
+export * from './rotation.js';

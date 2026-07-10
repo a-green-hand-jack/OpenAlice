@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
-import type { BootstrapContext, CliAdapter, OnDiskSession, SpawnContext, WorkspaceAiCred } from '../cli-adapter.js';
+import type { BootstrapContext, CliAdapter, ContextTelemetry, OnDiskSession, SpawnContext, WorkspaceAiCred } from '../cli-adapter.js';
 import { readWorkspaceFile, writeWorkspaceFile } from '../file-service.js';
 
 const CODEX_CONFIG_PATH = '.codex/config.toml';
@@ -304,7 +304,175 @@ export const codexAdapter: CliAdapter = {
     }
     return out;
   },
+
+  /**
+   * Latest context-window telemetry for `sessionId` (issue #132). Locates the
+   * session's rollout via {@link findCodexRolloutById} (its OWN broad,
+   * id-targeted scan — NOT `listOnDisk`'s 2-newest-leaves window, see that
+   * function's doc for why), then reads the tail of its `token_count` events.
+   * Best-effort: any miss (no rollout on disk yet, no token event, unreadable
+   * file) returns null so a wake is never blocked.
+   */
+  async readContextTelemetry(cwd: string, sessionId: string): Promise<ContextTelemetry | null> {
+    return readCodexContextTelemetry(cwd, sessionId);
+  },
 };
+
+/**
+ * Find `sessionId`'s rollout by walking dated leaves NEWEST-FIRST across
+ * `root`, stopping at the first match — capped at `maxLeaves` day-leaves so a
+ * genuinely-missing id can't walk the entire history.
+ *
+ * Deliberately does NOT reuse `listOnDisk`'s `recentDatedLeaves(root, 2)` scan
+ * (PR #133 review, issue #132): that window is sized for *transcript
+ * discovery of a just-spawned session* (line 264's doc — "a just-spawned
+ * session is in today's leaf, so the newest few suffice"), which is the right
+ * tradeoff for that caller (`transcript-watcher.ts` polls right after spawn).
+ * A steward session's rollout leaf is fixed at ITS OWN creation date, though —
+ * for issue #132's actual long-horizon target (weekly wakes over weeks/months
+ * against one persistent session), the tracked session eventually falls
+ * outside a 2-leaf window the moment any newer-dated leaf appears anywhere in
+ * the (GLOBAL, cross-workspace) root, even from an unrelated session. Under
+ * the old shared `listOnDisk` path this silently returned no match — rotation
+ * and timeout attribution both no-op with no warning. This walk instead keeps
+ * going, month/year boundaries included, until it finds the id or exhausts
+ * the cap — early-returning on the first hit keeps the common case (a rollout
+ * from the last few days) just as cheap as before.
+ */
+export async function findCodexRolloutById(
+  root: string,
+  target: string,
+  sessionId: string,
+  maxLeaves = 180,
+): Promise<OnDiskSession | null> {
+  let seen = 0;
+  for (const leaf of await sortedNumericDirNames(root)) {
+    const yearDir = join(root, leaf);
+    for (const month of await sortedNumericDirNames(yearDir)) {
+      const monthDir = join(yearDir, month);
+      for (const day of await sortedNumericDirNames(monthDir)) {
+        if (seen >= maxLeaves) return null;
+        seen += 1;
+        const dayDir = join(monthDir, day);
+        const match = await findRolloutInLeaf(dayDir, target, sessionId);
+        if (match) return match;
+      }
+    }
+  }
+  return null;
+}
+
+/** Scan one `YYYY/MM/DD` leaf for a rollout whose `session_meta` matches both
+ *  `sessionId` and `target` (the resolved cwd). Returns the first match. */
+async function findRolloutInLeaf(
+  leaf: string,
+  target: string,
+  sessionId: string,
+): Promise<OnDiskSession | null> {
+  let files: string[];
+  try {
+    files = await readdir(leaf);
+  } catch {
+    return null;
+  }
+  for (const f of files) {
+    if (!CODEX_ROLLOUT_RE.test(f)) continue;
+    const fp = join(leaf, f);
+    try {
+      const meta = JSON.parse(await firstLine(fp)) as {
+        type?: string;
+        payload?: { id?: string; cwd?: string };
+      };
+      const id = meta.payload?.id;
+      const rolloutCwd = meta.payload?.cwd;
+      if (meta.type !== 'session_meta' || typeof id !== 'string' || typeof rolloutCwd !== 'string') continue;
+      if (id !== sessionId) continue;
+      if (resolve(rolloutCwd) !== target) continue;
+      const st = await stat(fp);
+      return { sessionId: id, file: fp, mtime: st.mtime.toISOString(), sizeBytes: st.size };
+    } catch {
+      // partial / unreadable rollout — skip
+    }
+  }
+  return null;
+}
+
+/** Numeric (`YYYY`/`MM`/`DD`) subdirectory names of `dir`, newest first. */
+async function sortedNumericDirNames(dir: string): Promise<string[]> {
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return [];
+  }
+  return names.filter((x) => /^\d+$/.test(x)).sort().reverse();
+}
+
+/**
+ * Read the newest `token_count` event's `input_tokens` / `model_context_window`
+ * for `sessionId`'s rollout. Uses {@link findCodexRolloutById} for discovery
+ * (broad, id-targeted — NOT `listOnDisk`'s 2-leaf window). Returns null on any
+ * miss (no rollout found, no token_count event, unreadable file) — a wake is
+ * never blocked on telemetry.
+ */
+export async function readCodexContextTelemetry(cwd: string, sessionId: string): Promise<ContextTelemetry | null> {
+  const root = existsSync(join(cwd, '.codex'))
+    ? join(cwd, '.codex', 'sessions')
+    : join(homedir(), '.codex', 'sessions');
+  const match = await findCodexRolloutById(root, resolve(cwd), sessionId);
+  if (!match) return null;
+  const tail = await readLastTokenCount(match.file);
+  if (!tail) return null;
+  return { inputTokens: tail.inputTokens, modelContextWindow: tail.modelContextWindow, source: match.file };
+}
+
+/**
+ * Stream a codex rollout JSONL and return the LAST `token_count` event's
+ * `payload.info.total_token_usage.input_tokens` +
+ * `payload.info.model_context_window`. Streams line-by-line (a rollout can hold
+ * a many-KB degenerate turn) and only JSON-parses lines that mention
+ * `token_count`. Returns null when the file has no usable token_count event.
+ */
+export async function readLastTokenCount(
+  fp: string,
+): Promise<{ inputTokens: number; modelContextWindow: number } | null> {
+  // createReadStream itself never throws synchronously (ENOENT etc. surface as
+  // an async 'error' event on the stream) — the for-await/catch below is what
+  // actually handles a missing/unreadable file.
+  const input = createReadStream(fp, { encoding: 'utf8' });
+  const rl = createInterface({ input, crlfDelay: Infinity });
+  let latest: { inputTokens: number; modelContextWindow: number } | null = null;
+  try {
+    for await (const line of rl) {
+      if (!line.includes('"token_count"')) continue;
+      try {
+        const evt = JSON.parse(line) as {
+          payload?: {
+            type?: string;
+            info?: {
+              total_token_usage?: { input_tokens?: unknown };
+              model_context_window?: unknown;
+            };
+          };
+        };
+        if (evt.payload?.type !== 'token_count') continue;
+        const inputTokens = evt.payload.info?.total_token_usage?.input_tokens;
+        const modelContextWindow = evt.payload.info?.model_context_window;
+        if (typeof inputTokens === 'number' && typeof modelContextWindow === 'number') {
+          latest = { inputTokens, modelContextWindow };
+        }
+      } catch {
+        // malformed line — skip, keep the last good token_count
+      }
+    }
+  } catch {
+    // read error mid-stream — return whatever we captured (possibly null)
+  } finally {
+    rl.close();
+    input.destroy();
+  }
+  return latest;
+}
 
 /**
  * Optional `codex -c mcp_servers.*` head. When MCP is disabled, return the

@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import {
   WAKE_SCHEMA_VERSION,
   parseStewardWakeRecord,
+  type StewardWakeAttribution,
   type StewardWakeEnvelope,
   type StewardWakeRecord,
   type StewardWakeStatus,
@@ -23,6 +24,8 @@ export interface WakeStatusPatch {
   readonly completedAt?: string | null;
   readonly sessionId?: string | null;
   readonly error?: string | null;
+  /** Terminal-outcome attribution (issue #132). `null` clears it. */
+  readonly attribution?: StewardWakeAttribution | null;
   readonly now?: string;
 }
 
@@ -82,6 +85,11 @@ export class StewardWakeStore {
       delete candidate.error;
     } else if (patch.error !== undefined) {
       candidate.error = patch.error;
+    }
+    if (patch.attribution === null) {
+      delete candidate.attribution;
+    } else if (patch.attribution !== undefined) {
+      candidate.attribution = patch.attribution;
     }
     const next = parseStewardWakeRecord(candidate);
     await writeJsonAtomic(this.pathFor(wakeId), next);

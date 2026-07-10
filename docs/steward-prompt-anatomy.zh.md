@@ -26,7 +26,7 @@
 | **v5** | winner management + pullback discipline | **`src/workspaces/templates/steward/files/instruction.md`** | 同左 + `.alice/steward/validate-ledger.mjs` | **已实现（2026-07-10）；targeted regression failed** | 针对 v4 full dev baseline 的行为缺口：在 Participation Bias 中补充「盈利趋势仓位要重新评估当前 notional，不足且可控风险时可顺势加仓」「健康 uptrend 的正常 pullback / 临时浮亏不等于 invalidation」「低波动漂移不等于高置信 uptrend」，并在 Risk Discipline 中明确只允许给盈利或持平且 thesis 仍有效的仓位加仓，且必须先/同时上移 stop。Targeted regression 显示方向不够窄：NVDA 学会加仓但贴近 max-position guard 后触发 READ_ONLY；0700.HK 仍被 pullback 洗出；SPY low-vol chop 过早参与。 |
 | **v6** | guard headroom + stricter trend filter | **`src/workspaces/templates/steward/files/instruction.md`** | 同左 + `.alice/steward/validate-ledger.mjs` | **已实现（2026-07-10）；targeted regression partial / failed bull threshold** | 在 v5 基础上把 starter range 收窄为 25-45%，加仓目标收在 50-55% notional 而不是贴近 60% hard guard；明确若 mark-to-market 把敞口推近/超过 guard，应 trim 回 guard 下方而不是等 READ_ONLY；把 pullback hold 条件写成「在原 stop/risk budget 内、仍高于 swing support、且未超过约 8% adverse move」；把 low-vol chop 过滤写硬：1-4% 的一两周窄幅 drift 不足以使用 meaningful starter。Targeted regression 修掉 NVDA READ_ONLY（+17.0%，仍低于 +25% bull 阈值）并让 SPY PASS，但暴露 0700.HK 的 default-contract/AAPL 污染。 |
 | **v7** | campaign tradable contract binding | **`src/workspaces/templates/steward/files/instruction.md`** + `tools/campaigns/run-cell.mjs` | wake `marketContext.tradeableAliceId` | **已实现；targeted + 10-cell 六周 baseline 已完成（2026-07-10）；尚未冻结 holdout** | v6 targeted 暴露出非 prompt-policy 摩擦：MockBroker 空搜索会返回默认 `AAPL`，agent 在 0700.HK cell 中读 `ASSET-K` tape 却尝试交易默认 `AAPL`。v7 显式传入并强制使用 exact `tradeableAliceId`。后续 60/60 wake 证明 isolated-stack contract binding 已稳定、无 AAPL 污染；但 guard-feasible NVDA 仅 +17.7%，仍低于 +25% bull gate。六路 shared-stack 则被 Codex trust-config 并发写竞争阻断（#124），不是 prompt policy 失败。 |
-| **v8-CANDIDATE** | v2 ledger contract（strict pendingHash / typed actions / single-entry wakes） | **`src/workspaces/templates/steward/files/instruction.md`**（Wake Loop step 5-6 + Decision Ledger Shape）+ 生成的 `.alice/steward/validate-ledger.mjs` | 同左（in-repo 模板文件，wake 时逐字读取） | **候选，未冻结（issue #125）；dev matrix 复跑 pending；holdout 仍封存** | 配合 decision-ledger schema v1→v2（`DECISION_LEDGER_SCHEMA_VERSION` bump）落地的 prompt 半边：Decision Ledger Shape 现示 `version: 2` + 一个 typed action 示例（`kind`/`aliceId`/`params`/`commitHash`/`outcome`/`violations`）；Wake Loop step 5 增补「每个 broker 操作记一个 typed action 对象，`outcome` 对应四个 `autoPush` 分支，commit 出处进 `actions[].commitHash`，`pendingHash` 仅表示待批准 stage、executed 后必须为 null」；step 6 增补「每个 wakeId 恰好一条记录、first-wins、要更正就原地改那一行不追加第二行」。属**实质性契约变更**（改变 agent 记账行为），按 §4 规则 4 须 maintainer 批准后才升 v8 正式版；升版前 dev matrix 必须复跑确认 bull 参与度与 ledger 完成率不回落，holdout 保持封存。逐组件解剖见 §15。 |
+| **v8-CANDIDATE** | v2 ledger contract（strict pendingHash / typed actions / single-entry wakes） | **`src/workspaces/templates/steward/files/instruction.md`**（Wake Loop step 5-6 + Decision Ledger Shape）+ 生成的 `.alice/steward/validate-ledger.mjs` | 同左（in-repo 模板文件，wake 时逐字读取） | **候选，未冻结（issue #125）；dev matrix 复跑 pending；holdout 仍封存** | 配合 decision-ledger schema v1→v2（`DECISION_LEDGER_SCHEMA_VERSION` bump）落地的 prompt 半边：Decision Ledger Shape 现示 `version: 2` + 一个 typed action 示例（`kind`/`aliceId`/`params`/`commitHash`/`outcome`/`violations`）；Wake Loop step 5 增补「每个 broker 操作记一个 typed action 对象，`outcome` 对应四个 `autoPush` 分支，commit 出处进 `actions[].commitHash`，`pendingHash` 仅表示待批准 stage、executed 后必须为 null」；step 6 增补「每个 wakeId 恰好一条记录、first-wins、要更正就原地改那一行不追加第二行」。属**实质性契约变更**（改变 agent 记账行为），按 §4 规则 4 须 maintainer 批准后才升 v8 正式版；升版前 dev matrix 必须复跑确认 bull 参与度与 ledger 完成率不回落，holdout 保持封存。**第三组件（issue #132 degenerate-turn guard，同批未冻结）**：Wake Loop step 6 增补命令参数尺寸纪律（ledger 只用原生 file-write 工具组装、禁止巨型 inline 参数/heredoc、单参数务必小），针对 v8 NVDA run1 week-2 的 271KB 退化 `exec_command` 参数——它以 output-token 速度撑爆 deadline 并毒化持久 session；配套 harness 半边（threshold session rotation + supervisor timeout attribution，纯代码不进本台账）见 issue #132。逐组件解剖见 §15、§16。 |
 
 > **v2 验证结果（2026-07-07，paste 模式，3 个真实牛市匿名窗口）**：H1 = NVDA 42% / TSLA 65% / AMD 43%（均 ~50%），maxDD 全 0%。对比 pilot（v1）H1 仅 7-16%——**v2 把牛市参与度提升 3-5×，同时保住 H2 纪律（回撤 0%）**。即「行情好时参与、行情差时仍不冒大险」。12-cell（含 bear/chop）将复核 v2 是否破坏 H2。
 
@@ -440,3 +440,50 @@ shared-stack campaign 的失败归因给 Spark 或 v7 prompt。
   本地校验器同步升级：`version === 2`、typed-action 校验、`policy_denied⇒violations`、
   `executed⇒commitHash`、`executed⇒pendingHash===null`、重复 wakeId 报错。它是 agent 在
   wake 结尾实际运行的那一层，与服务端 zod schema（`src/workspaces/steward/types.ts`）语义对齐。
+
+## 16. v8-CANDIDATE 第三组件：degenerate-turn guard（issue #132）
+
+> **状态：未冻结的候选**（与 §15 同批，随 v8-CANDIDATE 一起评估）。这是 #132「wake
+> context governance」的 prompt 半边——另外两半（threshold session rotation、supervisor
+> timeout attribution）是纯 harness 代码，不进 prompt 台账。属实质性行为约束变更（收紧
+> agent 写 ledger 的工具用法），按 §4 规则 4 须 maintainer 批准后才随 v8 正式版落地；升版前
+> v8 NVDA 复跑须确认 week-2 degeneration 不复现。
+
+**根因（read-only root-cause pass, 2026-07-10）**：v8 NVDA run1 的 week-2 死于**单个退化模型
+回合**——一个 271,810 字节的 `exec_command` 参数（heredoc 组装塌缩成重复循环：`while true;
+do :; done` + 44,790 × `true\n`，约 68K tokens）。这一个回合 (a) 以 output-token 速度撑爆了
+week-2 自己的 deadline，(b) 永久毒化了持久 session：下一次 wake 开在 `input_tokens 125,765`
+vs `model_context_window 121,600`。对照组 v7-shape run2（同架构同模型）跨 6/6 wake 处理 246 万
+累计 input tokens 无 timeout——horizon 结构上可survive，是退化回合杀死了这次 run。退化本身是
+gpt-5.3-codex-spark 事件，无法在 OpenAlice 内彻底修复；prompt guard 只压缩其爆炸半径。
+
+逐组件（相对 v8-CANDIDATE §15 之上新增）：
+
+- **[Wake Loop step 6 · 命令参数尺寸纪律]** `instruction.md` step 6 在既有「用 Write/Edit 写
+  ledger、不用 Bash heredoc」之上增补：ledger 对象**只能**用原生 file-write 工具组装，绝不作为
+  inline shell 字符串；禁止手工搭建大参数（无巨型 heredoc body、无千行引号串）；单个 Bash 参数
+  务必小——JSON 内容进你写的文件，不上命令行。意图：把「Bash 安全分类器触发」这一既有约束
+  （#91 heredoc / #107 openssl / #113 free-text，见 §7 v3 修补史）推广为一条**尺寸纪律**，直接
+  针对 #132 的 271KB 退化参数形态。所控：agent 组装 ledger/命令参数的方式。变更：step 6 此前只
+  禁 heredoc「因为会触发安全提示」，未涉及**参数尺寸**与**退化回合/session 毒化**的因果。关联：
+  不涉及 schema/不变量，属行为提示层；与 harness 侧 rotation（`src/workspaces/steward/
+  rotation.ts`）+ timeout attribution（`supervisor.ts` `classifyTimeout`）互补——prompt 减少退化
+  发生率，harness 兜住已发生的毒化 session（rotate）并把溢出 timeout 标注出来（attribution）。
+- **[adapter 侧参数封顶：调查结论 = 无可行拦截点]** PTY 数据面对 launcher 是**不透明字节流**：
+  stdin 是注入的按键、stdout 是终端回显，codex 的 tool-call 参数从不以结构化形式过 launcher。
+  因此**没有**真实的 adapter 层拦截点能对单个 codex tool-call 参数尺寸封顶。#132 的 harness
+  半边因此落在**回合已发生之后**的治理（rotation + attribution），而非回合内的尺寸拦截。此处
+  显式记录「不建假拦截器」这一决定，避免后来者以为漏了一层。
+
+**Harness 半边的可配置项**（供运维查阅，非 prompt 组件，纯代码不进版本台账）：
+session rotation 的触发阈值走 workspace 自己的 `.alice/steward/config.json` →
+`sessionRotation.threshold`（`(0, 1]` 小数，`input_tokens >= threshold ×
+model_context_window` 触发 rotate；window 本身被超过时无条件 rotate）。缺省/越界值回退到
+`DEFAULT_ROTATION_THRESHOLD`（当前 0.65，`src/workspaces/steward/rotation.ts`）。完整字段
+说明见 [steward-persistent-loop-implementation.zh.md](steward-persistent-loop-implementation.zh.md)
+§4.1、§7。PR #133 review 还修了一个发现：token-tail 的 rollout 定位此前借用
+`listOnDisk` 的 2-leaf 发现窗口（为「刚 spawn 的 session」优化），对**长期存活**的 steward
+session（#132 的实际目标场景）在数周/数月后会静默失效——已改为 rotation/attribution 各自的
+`findCodexRolloutById`（按 id 定向、newest-first 跨月/年扫描、`maxLeaves` 兜底），并在遥测
+读到 `null`（而非「adapter 压根没实现」）时发出 `steward.rotation_telemetry_unavailable` /
+`telemetryWarning` 告警，使静默降级可观测。

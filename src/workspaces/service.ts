@@ -80,8 +80,10 @@ import { WorkspaceRegistry, type WorkspaceMeta } from './workspace-registry.js';
 import {
   createStewardLockStore,
   createStewardWakeStore,
+  evaluateStewardRotation,
   formatStewardWakeMessage,
   injectStewardWake,
+  recordStewardRotation,
   StewardLockConflictError,
   StewardSupervisorScanner,
 } from './steward/index.js';
@@ -782,6 +784,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     reused: boolean;
     resumed: boolean;
     injectedByInitialPrompt: boolean;
+    rotated?: boolean;
   }> {
     const configuredSessionId = typeof config['sessionId'] === 'string' ? config['sessionId'] : null;
     const configuredAgent = typeof config['agent'] === 'string' ? config['agent'] : undefined;
@@ -794,13 +797,51 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       (requestedAgent === undefined || requestedAgent === configuredRecord?.agent || requestedAgent === configuredAgent);
 
     if (configuredSessionId && canUseConfigured && pool.get(configuredSessionId)) {
-      return {
-        sessionId: configuredSessionId,
-        agent,
-        reused: true,
-        resumed: false,
-        injectedByInitialPrompt: false,
-      };
+      // Issue #132: rotate instead of reusing when the running session's
+      // context is over threshold / already overflowed. Continuity is rebuilt
+      // from workspace files by the Wake Loop, not carried over.
+      const adapter = adapters.get(agent);
+      const decision = adapter
+        ? await evaluateStewardRotation({
+          adapter,
+          cwd: ws.dir,
+          sessionId: configuredSessionId,
+          config,
+          onWarn: (message, detail) => launcherLogger.warn(message, { id: ws.id, ...detail }),
+        })
+        : null;
+      if (!decision || !decision.rotate) {
+        return {
+          sessionId: configuredSessionId,
+          agent,
+          reused: true,
+          resumed: false,
+          injectedByInitialPrompt: false,
+          rotated: false,
+        };
+      }
+      pool.disposeToken(configuredSessionId, 'steward_session_rotated');
+      const spawned = await spawnStewardScheduleSession(ws, agent, initialWakePrompt);
+      await writeStewardSessionConfig(ws, config, spawned.sessionId, spawned.agent);
+      await recordStewardRotation(ws.dir, {
+        at: new Date().toISOString(),
+        wsId: ws.id,
+        disposedSessionId: configuredSessionId,
+        newSessionId: spawned.sessionId,
+        reason: decision.reason,
+        inputTokens: decision.telemetry?.inputTokens ?? null,
+        modelContextWindow: decision.telemetry?.modelContextWindow ?? null,
+        threshold: decision.threshold,
+      }).catch(() => undefined);
+      launcherLogger.info('workspace.steward_session_rotated', {
+        id: ws.id,
+        disposed: configuredSessionId,
+        spawned: spawned.sessionId,
+        reason: decision.reason,
+        inputTokens: decision.telemetry?.inputTokens ?? null,
+        modelContextWindow: decision.telemetry?.modelContextWindow ?? null,
+      });
+      return { ...spawned, rotated: true };
     }
     if (configuredRecord && canUseConfigured) {
       return resumeStewardScheduleSession(ws, configuredRecord);
@@ -973,6 +1014,16 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
   const stewardSupervisorScanner = new StewardSupervisorScanner({
     registry,
     pool: { get: (sessionId: string) => pool.get(sessionId) },
+    // Issue #132: bind timeout attribution to the workspace's runtime adapter.
+    // Steward is codex-scoped today; the adapter's optional
+    // `readContextTelemetry` reads the rollout token tail (null when
+    // unavailable — attribution simply degrades to a plain timeout).
+    readContextTelemetry: (ws, sessionId) => {
+      const adapter = resolveAdapter(ws);
+      return adapter.readContextTelemetry
+        ? adapter.readContextTelemetry(ws.dir, sessionId)
+        : Promise.resolve(null);
+    },
     ...(inboxStore ? { inboxStore } : {}),
     logger: launcherLogger.child({ scope: 'steward-supervisor-scanner' }),
   });
