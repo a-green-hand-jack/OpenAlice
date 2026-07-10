@@ -52,7 +52,11 @@ export AQ_WS_ID=<any live workspace id>     # from ~/.openalice/workspaces/works
 BIN=src/workspaces/cli/bin/alice-uta
 node $BIN                                    # discover groups/verbs
 node $BIN order place --help                 # flags come from the manifest
-# "user approves": curl -s -X POST http://127.0.0.1:47333/api/trading/uta/<id>/wallet/push
+# Read and review pendingHash first; the write is bound to that exact approval.
+curl -s http://127.0.0.1:47333/api/trading/uta/<id>/wallet/status
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"expectedHash":"<pendingHash>"}' \
+  http://127.0.0.1:47333/api/trading/uta/<id>/wallet/push
 ```
 
 Probe scripts (external orders, raw venue checks) live as throwaway `.mts`
@@ -63,8 +67,9 @@ Delete after use.
 
 ## Scenario catalog
 
-Run S1–S12 for a trading-path change; run ALL of them per venue for a new
-broker integration. Each scenario names the bug class it guards against.
+Run S1–S12 plus S15 for a trading-path change; run every applicable scenario
+per venue for a new broker integration. Each scenario names the bug class it
+guards against.
 
 **S1 — Read-state agreement.** `account info`, `account portfolio`,
 `/equity`: account-level unrealizedPnL must equal the positions sum;
@@ -188,6 +193,80 @@ re-marked with the stock's price (symbol collision produced +23,000%
 "moves" and sign-inverted PnL — the community "option direction is
 flipped" report). *Guards: unit-mismatched cost basis, symbol-collision
 re-marking, sign inversion on recompute surfaces.*
+
+**S15 — Crash quarantine / non-replay.** Run the process-level regression
+spec before any live venue exercise:
+`pnpm exec vitest run --project node services/uta/src/domain/trading/git/mutation-crash-recovery.spec.ts`.
+Its file-backed fake venue fsyncs an accepted mutation, then the harness kills
+the child process running `TradingGit` before its receipt can be persisted.
+After loading the same `commit.json`, restored git status must report
+`recovery_required`, project the on-disk `dispatching` operation as
+`uncertain`, expose no legacy pending approval, and refuse retry without a
+second venue call (the durable witness count stays exactly one for each
+broker-dispatching coordinator mutation kind: push, emergency-cancel, and
+flatten). Do not try to reproduce this by timing a live UTA kill: no opt-in
+boundary is exposed, and a guessed interruption cannot prove which side of
+receipt persistence it hit.
+Before resolving a quarantined demo/paper attempt, independently query venue
+truth with a broker probe. Record the human resolution without relabeling an
+uncertain outcome, then perform and verify any separate corrective action
+needed to leave the account flat; never blindly retry or flatten. *Guards:
+broker-side acceptance followed by process death, blind replay after restart,
+and old-reader replay through stale staging.*
+
+Downgrade policy is intentionally strict while recovery evidence exists. The
+desktop updater keeps `autoUpdater.allowDowngrade = false`, and status reports
+`downgradeBlocked: true` for an unresolved or persistence-poisoned attempt.
+Manually installing an older binary is unsupported. Even then, the durable
+attempt has already cleared legacy staging/pending fields, so an old reader has
+nothing to replay; recovery must be completed with a current binary.
+
+## Mutation recovery runbook (human-only)
+
+Recovery is deliberately NOT exposed to the trading agent and has no UI panel:
+the surface is `GET /wallet/status` (the `mutation` projection) plus one
+authenticated route. The Alice BFF injects the human approver identity; a
+loopback/agent caller is refused with 403.
+
+```
+POST /api/trading/uta/<id>/wallet/mutation/resolve
+{
+  "attemptId":    "<uuid from status.mutation.activeAttempt>",
+  "action":       "discard-never-dispatched" | "acknowledge-uncertainty" | "finalize-known-outcomes",
+  "reason":       "<non-empty, recorded verbatim in the audit>",
+  "confirmation": "<must repeat attemptId exactly — stale-tab guard>"
+}
+```
+
+**Restart requirement.** If `status.mutation.restartRequired` is true — a
+broker dispatch timed out (the venue request was NOT cancelled and its local
+Promise may still land), or a persistence acknowledgement was lost — every
+resolve attempt in that process is refused. Restart UTA first
+(`data/control/restart-uta.flag` or a full process restart), reconcile against
+the venue, then resolve. This is deliberate: a timeout never cancels the
+underlying venue call, so resolving in the same process could let the original
+request and a human-approved replacement both take effect.
+
+**Procedure.** 1) Read `status.mutation.activeAttempt` — every operation
+carries its durable state and evidence. 2) Query venue truth independently
+(open orders, executions, positions via broker probe — never trust the ledger
+over the venue). 3) Pick the action whose precondition matches:
+
+- `discard-never-dispatched` — only when EVERY operation is still `prepared`
+  (durable proof dispatch never began). Records all operations as
+  user-rejected. Retry-idempotent after a failed finalization.
+- `acknowledge-uncertainty` — requires at least one `uncertain` operation.
+  Releases quarantine WITHOUT inventing an outcome: uncertain operations stay
+  `uncertain` in the finalized audit; not-yet-dispatched ones are discarded.
+  Use only after venue reconciliation; any corrective venue action (cancel a
+  live order the ledger missed, close an unexpected fill) is a separate,
+  normal, approved mutation afterwards.
+- `finalize-known-outcomes` — when every operation is `confirmed` /
+  `definitely_rejected` (a late-settled timeout may have durably recorded the
+  real outcome) or never dispatched. Commits the known outcomes to history.
+
+Resolution is audited (approver fingerprint + reason + timestamp, append-only
+across retries and restarts) and can never fabricate a broker receipt.
 
 ## Scoreboard so far
 
