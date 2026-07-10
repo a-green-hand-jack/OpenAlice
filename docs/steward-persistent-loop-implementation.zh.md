@@ -158,9 +158,21 @@ launcher 侧可以保留运行索引，但业务真相以 workspace 文件为主
   "costPolicy": {
     "warnAtPct": 80,
     "blockAtPct": 100
+  },
+  "sessionRotation": {
+    "threshold": 0.65
   }
 }
 ```
+
+`sessionRotation.threshold`（issue #132，可选）——重用运行中 steward session
+之前，session rotation 决策用来判断「是否该 dispose + respawn」的阈值：
+`input_tokens >= threshold × model_context_window` 即触发 rotate（`window` 本身
+被超过时无条件 rotate，与 threshold 无关）。取值为 `(0, 1]` 的小数；缺省或越界值
+一律回退到 `DEFAULT_ROTATION_THRESHOLD`（当前 0.65，见
+`src/workspaces/steward/rotation.ts`）。只对声明了
+`CliAdapter.readContextTelemetry` 的 runtime 生效（目前只有 codex）；其它 runtime
+忽略此字段。
 
 ### 4.2 `context-manifest.json`
 
@@ -375,6 +387,18 @@ supervisor 是 core-agent 外部的小控制器。第一版只做四件事：
 匹配 decision ledger、推进 `done` / `blocked` / `error` / `timeout` / `stuck`，释放
 account lock，写 `.alice/steward/supervisor.jsonl`，并把聚合成本写入
 `.alice/steward/state.json`。第一版成本策略只输出 `warnings`，不阻断新 wake。
+
+**issue #132 新增（between-wake context governance）**：`tick()` 判定
+`timeout` 前会（best-effort）读一次 session 的 rollout token 尾，
+`input_tokens >= model_context_window` 时把这次 timeout 归因为
+`context_overflow`——写进 wake record 的 `attribution` 结构化字段（状态枚举本身不变，
+仍是 `timeout`），并在 `wake_timeout` 事件里带 `attribution`/`inputTokens`/
+`modelContextWindow`。读取失败或返回 `null`（session 有 sessionId 但 rollout 找不到/
+读不出来）会额外写一条 `telemetryWarning`（进 `wake_timeout` 事件 + 返回值
+`warnings[]`），使遥测静默失效可被观察到；没有配置遥测 reader 或 wake 从未拿到
+sessionId 时不发这条警告（这是预期缺省，不是降级）。同批新增 session rotation：见
+`src/workspaces/steward/rotation.ts`，触发阈值走上面 `sessionRotation.threshold`
+配置，rotation 事件写进同一个 `supervisor.jsonl`（`type: "session_rotated"`）。
 
 ## 8. Lock 策略
 

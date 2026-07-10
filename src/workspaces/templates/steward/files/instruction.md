@@ -262,7 +262,14 @@ When a steward wake arrives:
    not a Bash command. A Bash heredoc containing JSON (e.g.
    `cat >> decisions.jsonl <<'EOF' ... EOF`) can trip an interactive
    security prompt with no one to answer it during an unattended wake;
-   Write/Edit does not.
+   Write/Edit does not. Compose the ledger object ONLY with your native
+   file-write tool — never assemble it as an inline shell string. Do not
+   build a large argument by hand (no giant heredoc body, no thousand-line
+   quoted string): a single oversized command argument can run away into a
+   degenerate turn that blows this wake's deadline at output-token speed
+   AND leaves the persistent session context poisoned for the next wake.
+   Keep every Bash argument small — the JSON content belongs in the file
+   you write, not on a command line.
    Keep `checklist`, `thesis`, `actions`, `pendingHash`, `invalidation`, and
    `cost` as TOP-LEVEL fields of the ledger object; do not nest them inside
    `completion`. Append EXACTLY ONE entry per wake: the first entry for a

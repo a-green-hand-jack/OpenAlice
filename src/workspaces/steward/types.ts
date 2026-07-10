@@ -56,6 +56,20 @@ export const stewardWakeEnvelopeSchema = z.object({
 }).passthrough();
 export type StewardWakeEnvelope = z.infer<typeof stewardWakeEnvelopeSchema>;
 
+// Terminal-outcome attribution (issue #132). The status enum stays STABLE (a
+// context-overflow timeout is still a `timeout` for every existing consumer —
+// campaign harness terminal set, UI); the distinction rides this optional
+// structured field instead of widening the enum. Today the only attribution is
+// `context_overflow`: the supervisor saw `input_tokens >= model_context_window`
+// on the session's rollout when the deadline expired, i.e. the session was
+// context-poisoned, not merely slow.
+export const stewardWakeAttributionSchema = z.object({
+  kind: z.literal('context_overflow'),
+  inputTokens: z.coerce.number().int().nonnegative(),
+  modelContextWindow: z.coerce.number().int().nonnegative(),
+}).passthrough();
+export type StewardWakeAttribution = z.infer<typeof stewardWakeAttributionSchema>;
+
 export const stewardWakeRecordSchema = z.object({
   version: z.literal(WAKE_SCHEMA_VERSION),
   wakeId: z.string().min(1),
@@ -68,6 +82,7 @@ export const stewardWakeRecordSchema = z.object({
   sessionId: z.string().min(1).nullable(),
   envelope: stewardWakeEnvelopeSchema,
   error: z.string().min(1).optional(),
+  attribution: stewardWakeAttributionSchema.optional(),
 }).passthrough();
 export type StewardWakeRecord = z.infer<typeof stewardWakeRecordSchema>;
 
