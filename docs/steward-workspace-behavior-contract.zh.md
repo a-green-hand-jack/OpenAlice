@@ -269,10 +269,11 @@ runId / wakeId
 ## 7. Decision ledger 是单次 wake 的完成边界
 
 常驻 session 不能靠「屏幕看起来没动了」判断一轮完成。每个 wake 必须追加一条结构化
-decision ledger。最小字段：
+decision ledger（`version: 2`，issue #125）。最小字段：
 
 ```json
 {
+  "version": 2,
   "wakeId": "...",
   "at": "2026-07-08T14:01:23Z",
   "accountId": "...",
@@ -291,7 +292,15 @@ decision ledger。最小字段：
     "history": "checked"
   },
   "thesis": "short, evidence-backed rationale",
-  "actions": [],
+  "actions": [
+    {
+      "kind": "order_place",
+      "aliceId": "mock-simulator-.../ASSET-A",
+      "params": { "action": "BUY", "orderType": "MKT", "totalQuantity": "50" },
+      "commitHash": "deadbeef",
+      "outcome": "executed"
+    }
+  ],
   "pendingHash": null,
   "invalidation": "what would make this wrong",
   "cost": {
@@ -308,7 +317,27 @@ decision ledger。最小字段：
 ```
 
 `no_trade` 是正式决策，不是空结果。没有 thesis、entry signal、invalidation、risk budget
-时，正确输出就是 `no_trade` 并写明原因。
+时，正确输出就是 `no_trade` 并写明原因。`no_trade`/`blocked` 的 `actions` 为空数组。
+
+### v2 ledger 契约（issue #125，三条硬规则）
+
+1. **`pendingHash` 严格「待批准」语义（D1）**：`pendingHash` 只表示「当前正在等待批准
+   的 stage hash」。一旦有 action `outcome` 为 `executed`（auto-push 成功即终态），
+   `pendingHash` **必须为 `null`**——commit 出处放进 `actions[].commitHash`，不放
+   `pendingHash`。这样 ledger↔UTA 对账退化为一次等值比较。
+
+2. **`actions` 是版本化的判别联合（D2）**：每个 action 是一个对象，不是自由文本串（v2
+   拒绝自由文本串）。`kind` ∈ {`order_place`, `order_commit`, `order_modify`,
+   `order_cancel`, `position_close`, `git_reject`}；记录精确 `aliceId`（`git_reject`
+   除外）、`params` 摘要、可用时的 `commitHash`，以及真实 guard/broker `outcome` ∈
+   {`executed`, `awaiting_approval`, `policy_denied`, `failed`}（对应 prompt 已教的
+   四个 `autoPush.status` 分支），`policy_denied` 时附非空 `violations`。读路径对 v1
+   历史保持宽松（v1 的 `actions` 保留为 `unknown[]`），写路径严格 v2。
+
+3. **每个 wakeId 恰好一条终态记录，first-wins（D3）**：重复 wakeId 是校验错误；reader
+   取**第一条**（从此前未文档化的 last-wins 改为 first-wins），后续重复条目作为
+   violation 上报给 supervisor/报表。没有修订机制——事后追加永远不能改变已记录的决策
+   （tamper-evident 审计面）。要更正就原地改那一行，不要追加第二行。
 
 `completion.reason` 是本轮完成判定的最短解释；`completion.evidenceRefs` 指向它依据的
 checklist 项、工具结果、ledger 记录或 staged commit。supervisor 可以用它判断 agent
