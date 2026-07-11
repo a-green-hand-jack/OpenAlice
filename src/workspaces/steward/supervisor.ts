@@ -638,7 +638,14 @@ async function writeCostState(
   return state;
 }
 
-async function appendSupervisorEvent(workspaceDir: string, event: Record<string, unknown>): Promise<void> {
+/**
+ * Append one JSON line to the steward operational event log (`supervisor.jsonl`).
+ * Exported (issue #146) so the machine-face wake dispatcher records its own
+ * lifecycle events (`machine_thread_reset`, `machine_turn_failed`) in the SAME
+ * operational stream operators already watch — the supervisor only ever appends
+ * here, never reads it, so extra event types are additive.
+ */
+export async function appendSupervisorEvent(workspaceDir: string, event: Record<string, unknown>): Promise<void> {
   const path = stewardSupervisorLogPath(workspaceDir);
   await mkdir(dirname(path), { recursive: true });
   await appendFile(path, `${JSON.stringify(event)}\n`, 'utf8');
