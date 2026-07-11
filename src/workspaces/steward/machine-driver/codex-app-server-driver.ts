@@ -165,6 +165,10 @@ export class CodexAppServerDriver implements StewardMachineDriver {
         waiter.deadlineTimer = setTimeout(() => this.onDeadline(waiter, opts.deadlineMs as number), opts.deadlineMs);
       }
     } catch (err) {
+      // onClose/dispose may have already rejected `outcome` while turn/start
+      // was in flight; hand it back so the rejection is consumed exactly once
+      // instead of orphaning a rejected promise (unhandled rejection).
+      if (waiter.settled) return outcome;
       this.discardWaiter(waiter);
       throw err instanceof Error ? err : new MachineDriverProtocolError(String(err));
     }

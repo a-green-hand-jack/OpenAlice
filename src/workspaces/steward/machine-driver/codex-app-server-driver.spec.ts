@@ -348,4 +348,54 @@ describe('CodexAppServerDriver', () => {
 
     await driver.dispose();
   });
+
+  it('rejects cleanly when the app-server exits while turn/start is in flight', async () => {
+    const server = new FakeCodexServer();
+    respondHandshake(server);
+    const inner = server.onMessage;
+    server.onMessage = (msg, srv) => {
+      // Die before answering turn/start — the waiter is armed but the request
+      // is still pending, so the rejection must be consumed exactly once.
+      if (msg.method === 'turn/start') {
+        srv.exit();
+        return;
+      }
+      inner(msg, srv);
+    };
+    const driver = makeDriver(server);
+    const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch' });
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      await expect(driver.runTurn(threadId, 'x')).rejects.toBeInstanceOf(MachineDriverProtocolError);
+      await flush(); // give an orphaned rejection a tick to surface
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+
+    await driver.dispose();
+  });
+
+  it('rejects cleanly when dispose() runs while turn/start is in flight', async () => {
+    const server = new FakeCodexServer();
+    respondHandshake(server);
+    const inner = server.onMessage;
+    server.onMessage = (msg, srv) => {
+      if (msg.method === 'turn/start') return; // never answer
+      inner(msg, srv);
+    };
+    const driver = makeDriver(server);
+    const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch' });
+
+    const pending = driver.runTurn(threadId, 'x');
+    await flush(); // turn/start sent, response never arrives
+    await driver.dispose();
+
+    await expect(pending).rejects.toBeInstanceOf(MachineDriverProtocolError);
+  });
 });
