@@ -249,9 +249,27 @@ export class StewardSupervisor {
       // follow the SAME transition-to-`stuck` + event emission — see
       // controlFaceVanished for the identical "only when the accessor is
       // provided and reports gone" rule.
+      //
+      // Issue #146 S5 review MAJOR-2, MACHINE-SCOPED ONLY: a machine wake whose
+      // ledger already carries a VALID first-wins entry (`found?.valid &&
+      // found.entry`) is not eligible for `stuck`, even when liveness reports
+      // gone. The claude machine face's liveness is "a turn is in flight" (S5
+      // driver header) — it clears the MOMENT the turn settles, which can be
+      // well before the async generated validator writes its finalize marker
+      // (#136 barrier). Without this guard that ordinary marker-pending window
+      // races the liveness probe and mislabels a wake that already produced a
+      // real decision as "session not running". The wake instead waits for the
+      // barrier (finalizeGate above) or the deadline, exactly like every other
+      // ledger-backed-but-unbarriered wake already does. Scoped to
+      // `controlFace === 'machine'` only — PTY's process-alive liveness does not
+      // clear early the same way (the PTY process stays up through the
+      // validator step), so PTY stuck eligibility is byte-identical to before
+      // this review, preserving the parity standard the prior five slices held.
+      const machineLedgerBarrierPending = wake.controlFace === 'machine' && found?.valid === true && found.entry !== null;
       if (
         wake.status === 'injected' &&
         wake.sessionId &&
+        !machineLedgerBarrierPending &&
         controlFaceVanished(wake, opts)
       ) {
         const updated = await wakeStore.updateStatus(wake.wakeId, 'stuck', {

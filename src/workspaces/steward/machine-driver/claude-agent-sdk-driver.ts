@@ -49,10 +49,13 @@ import {
   type TurnOutcome,
 } from './types.js';
 
-/** The claude-code version the pinned SDK (`0.3.206`) bundles. Recorded for
- *  parity with the codex driver's `SUPPORTED_CODEX_VERSION` and to document the
- *  CLI the machine face actually spawns (close to the PTY adapter's 2.1.x). */
-export const SUPPORTED_CLAUDE_CODE_VERSION = '2.1.206';
+/** The `@anthropic-ai/claude-agent-sdk` version this driver is written against
+ *  (issue #146 S5 review minor) — the parity of the codex driver's
+ *  `SUPPORTED_CODEX_VERSION` pin. `claude-agent-sdk-driver.spec.ts` asserts this
+ *  equals the installed package's `package.json` version, so a silent SDK bump
+ *  (which can change `Options`/`SDKMessage` shapes this driver hand-maps) fails
+ *  CI instead of drifting unnoticed. */
+export const SUPPORTED_CLAUDE_AGENT_SDK_VERSION = '0.3.206';
 
 /** The `Options.effort` values the SDK accepts; a `RunTurnOptions.effort` outside
  *  this set is dropped rather than forwarded (an unknown effort would be
@@ -103,7 +106,14 @@ interface ClaudeInFlightTurn {
 
 export class ClaudeAgentSdkDriver implements StewardMachineDriver {
   private readonly cwd: string;
-  private readonly env: Record<string, string>;
+  /**
+   * Deliberately `undefined`, not `{}`, when the caller supplies no env (issue
+   * #146 S5 review MAJOR-1). `undefined` means "omit `Options.env`, let the SDK
+   * inherit `process.env` itself" (direct-driver/dev usage with no composed
+   * env); `{}` would instead pass an explicit EMPTY env to the SDK, which is a
+   * different — broken — thing (no PATH, no HOME, no credentials).
+   */
+  private readonly env: Record<string, string> | undefined;
   private readonly logger: Logger;
   private readonly queryFn: ClaudeQueryFn;
   private readonly threads = new Map<string, ClaudeThreadState>();
@@ -113,7 +123,7 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
 
   constructor(options: ClaudeAgentSdkDriverOptions) {
     this.cwd = options.cwd;
-    this.env = options.env ?? {};
+    this.env = options.env;
     this.logger = options.logger ?? NOOP_LOGGER;
     this.queryFn = options.queryFn ?? ((params) => sdkQuery(params));
   }
@@ -172,10 +182,26 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
     const effort = opts.effort !== undefined && EFFORT_LEVELS.has(opts.effort) ? opts.effort : undefined;
     const options: Options = {
       cwd: this.cwd,
-      // `Options.env` REPLACES the subprocess env entirely — spread process.env
-      // so PATH/HOME/credentials survive, then layer the driver's spawn env
-      // (alice* shims, OPENALICE_TOOL_URL, git identity, vault creds) on top.
-      env: { ...process.env, ...this.env },
+      // `Options.env` REPLACES the subprocess env entirely — and the driver's
+      // `this.env` (when supplied) is ALREADY a complete, composed env
+      // (`composeSpawnInputs` -> `buildSpawnEnv`): PATH rebuilt, HOME/creds
+      // present, and Alice-internal secrets (OPENALICE_UTA_INTERNAL_TOKEN,
+      // OPENALICE_INTERNAL_EVENT_TOKEN, OPENALICE_EVENT_INGEST_TOKEN, …)
+      // DELETED, not merely emptied, by `buildSpawnEnv`'s strip list — the
+      // unattended machine-face claude child must not hold Alice's own broker
+      // auth token; that would bypass the alice*/tool-gateway boundary the
+      // credential vault + BFF proxy exist to enforce (issue #146 S5 review
+      // MAJOR-1). Spreading raw `process.env` underneath would resurrect
+      // exactly those stripped keys, so pass the provided env EXACTLY —
+      // no merge. When no env is supplied at all (direct-driver/dev usage with
+      // no composed env), OMIT the option entirely rather than defaulting to
+      // `{}`: an explicit empty env is a broken env (no PATH/HOME), whereas
+      // omitting the key lets the SDK apply its own `{...process.env}` default
+      // (verified against the bundled `sdk.mjs`: `Options.env` is destructured
+      // with a `{...process.env}` default, which JS applies whenever the value
+      // is `undefined` — identical whether the key is absent or explicitly
+      // `env: undefined`).
+      ...(this.env !== undefined ? { env: this.env } : {}),
       abortController: abort,
       permissionMode: 'dontAsk',
       settings: AUTOTRUST_SETTINGS_OBJECT,
@@ -217,7 +243,17 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
       // resolves `interrupted`. The abort surfaces here as a thrown AbortError OR
       // as a clean stream end (handled above) — both routes honor `interrupted`.
       if (this.disposed) throw new MachineDriverProtocolError('driver disposed', { cause: err });
-      if (turn.interrupted) return this.interruptedOutcome(turn);
+      if (turn.interrupted) {
+        // Defensive (issue #146 S5 review): a FIRST turn interrupted via a
+        // thrown AbortError (rather than the SDK ending its stream cleanly)
+        // never reaches the `state.hasRun = true` assignment above, but the
+        // claude CLI may already have created + written the on-disk session
+        // before the abort landed. Mark it run regardless, so the NEXT turn on
+        // this thread correctly uses `resume` instead of re-pinning `sessionId`
+        // (which the SDK would reject once the session file already exists).
+        state.hasRun = true;
+        return this.interruptedOutcome(turn);
+      }
       throw err instanceof MachineDriverProtocolError
         ? err
         : new MachineDriverProtocolError(`claude query failed: ${errText(err)}`, { cause: err });

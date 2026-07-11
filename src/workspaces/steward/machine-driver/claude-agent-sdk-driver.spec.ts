@@ -1,9 +1,19 @@
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+
 import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
 import { AUTOTRUST_SETTINGS_OBJECT } from '../../adapters/claude.js';
-import { ClaudeAgentSdkDriver, type ClaudeQueryFn } from './claude-agent-sdk-driver.js';
+import {
+  ClaudeAgentSdkDriver,
+  SUPPORTED_CLAUDE_AGENT_SDK_VERSION,
+  type ClaudeQueryFn,
+} from './claude-agent-sdk-driver.js';
 import { MachineDriverProtocolError, type DriverEvent } from './types.js';
+
+const require_ = createRequire(import.meta.url);
 
 // --- fake SDK query seam (CI never spawns real claude) ------------------------
 
@@ -192,20 +202,60 @@ describe('ClaudeAgentSdkDriver', () => {
     expect(events.some((e) => e.type === 'token-usage')).toBe(true);
   });
 
-  it('forwards cwd + env (spread over process.env) and the auto-trust settings', async () => {
+  it('forwards cwd + the auto-trust settings, and passes a composed env EXACTLY (issue #146 S5 review MAJOR-1)', async () => {
     const { fn, captured } = makeFakeQuery({
       messages: [initMsg('s'), successResult({ sessionId: 's' })],
     });
-    const driver = makeDriver(fn, { AQ_WS_ID: 'ws-42', OPENALICE_TOOL_URL: 'http://127.0.0.1:1' });
+    // A `buildSpawnEnv`-style composed env: complete (rebuilt PATH, HOME) and
+    // WITHOUT Alice-internal secrets — `buildSpawnEnv` deletes those, it never
+    // just leaves them empty. This is what `composeSpawnInputs` actually hands
+    // the driver in production.
+    const composedEnv = {
+      PATH: '/composed/bin:/usr/bin',
+      HOME: '/home/steward',
+      AQ_WS_ID: 'ws-42',
+      OPENALICE_TOOL_URL: 'http://127.0.0.1:1',
+    };
+    // Seed the PARENT process env with a secret `buildSpawnEnv` would have
+    // stripped, to prove the driver never resurrects it by spreading
+    // `process.env` underneath the composed env.
+    const priorToken = process.env['OPENALICE_UTA_INTERNAL_TOKEN'];
+    process.env['OPENALICE_UTA_INTERNAL_TOKEN'] = 'super-secret-broker-token';
+    try {
+      const driver = makeDriver(fn, composedEnv);
+      const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch' });
+      await driver.runTurn(threadId, 'x');
+
+      const opts = captured[0].options;
+      expect(opts.cwd).toBe('/tmp/scratch');
+      // The composed env is passed through EXACTLY, not merged with process.env.
+      expect(opts.env).toEqual(composedEnv);
+      // PATH survives because it's part of the PROVIDED (composed) env, not
+      // because process.env leaked in underneath it.
+      expect(opts.env?.['PATH']).toBe('/composed/bin:/usr/bin');
+      // The Alice-internal secret present in the parent process env must NOT
+      // reach the unattended claude child — this is the security boundary the
+      // alice*/tool-gateway relies on.
+      expect(opts.env?.['OPENALICE_UTA_INTERNAL_TOKEN']).toBeUndefined();
+    } finally {
+      if (priorToken === undefined) delete process.env['OPENALICE_UTA_INTERNAL_TOKEN'];
+      else process.env['OPENALICE_UTA_INTERNAL_TOKEN'] = priorToken;
+    }
+  });
+
+  it('omits Options.env entirely when no env is supplied, letting the SDK inherit process.env itself', async () => {
+    const { fn, captured } = makeFakeQuery({
+      messages: [initMsg('s'), successResult({ sessionId: 's' })],
+    });
+    const driver = makeDriver(fn); // no env passed to the driver at all
     const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch' });
     await driver.runTurn(threadId, 'x');
 
-    const opts = captured[0].options;
-    expect(opts.cwd).toBe('/tmp/scratch');
-    expect(opts.env?.['AQ_WS_ID']).toBe('ws-42');
-    expect(opts.env?.['OPENALICE_TOOL_URL']).toBe('http://127.0.0.1:1');
-    // process.env survives the REPLACE-not-merge semantics because we spread it.
-    expect(opts.env?.['PATH']).toBe(process.env['PATH']);
+    // `env` key must be ABSENT (not `env: undefined` as an explicit key, and
+    // certainly not `env: {}`) — verified against the SDK: a destructured
+    // `Options.env` default of `{...process.env}` fires whenever the value is
+    // `undefined`, so omitting the key is what actually triggers inheritance.
+    expect('env' in captured[0].options).toBe(false);
   });
 
   it('interrupts a turn that overruns its deadline and resolves interrupted', async () => {
@@ -302,5 +352,24 @@ describe('ClaudeAgentSdkDriver', () => {
     const driver = makeDriver(fn);
     await driver.dispose();
     await expect(driver.ensureThread({ cwd: '/tmp/scratch' })).rejects.toBeInstanceOf(MachineDriverProtocolError);
+  });
+});
+
+/**
+ * Contract-drift guard (issue #146 S5 review minor), mirroring the codex
+ * driver's `SUPPORTED_CODEX_VERSION` pin discipline
+ * (`protocol-contract.spec.ts`): the driver hand-maps `Options`/`SDKMessage`
+ * shapes it read from the SDK's `.d.ts` at implementation time. If the
+ * installed `@anthropic-ai/claude-agent-sdk` is ever bumped without a matching
+ * driver review, this fails loudly instead of the driver silently drifting
+ * out of sync with the actual wire shapes.
+ */
+describe('claude-agent-sdk version pin', () => {
+  it('pins SUPPORTED_CLAUDE_AGENT_SDK_VERSION to the installed package version', () => {
+    // The package's `exports` map has no `./package.json` subpath, so resolve
+    // the main entry (`.` -> sdk.mjs) and read package.json from its directory.
+    const entry = require_.resolve('@anthropic-ai/claude-agent-sdk');
+    const pkg = JSON.parse(readFileSync(join(dirname(entry), 'package.json'), 'utf8')) as { version: string };
+    expect(pkg.version).toBe(SUPPORTED_CLAUDE_AGENT_SDK_VERSION);
   });
 });

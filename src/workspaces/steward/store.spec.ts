@@ -1715,6 +1715,52 @@ describe('StewardSupervisor machine control face (issue #146)', () => {
     expect(log).toContain(`"sessionId":"${THREAD_ID}"`);
   });
 
+  // Issue #146 S5 review MAJOR-2: a machine wake whose ledger already has a
+  // VALID first-wins entry must WAIT for the #136 finalize barrier (or the
+  // deadline), not be marked `stuck`, even when liveness reports gone — the
+  // claude machine face's liveness clears the moment the turn settles, which
+  // races the async validator's marker write. Test (b) above is the CONTROL
+  // case for this guard: dead liveness + NO ledger entry at all still
+  // transitions to `stuck` exactly as before — the guard is scoped to a
+  // valid-entry-present wake, not a blanket "never stuck a machine wake".
+  it('(e) does NOT mark a machine wake stuck when the ledger has a valid entry but the finalize marker is missing', async () => {
+    await seedInjectedMachineWake('2026-07-08T14:03:00.000Z');
+    const ledgerStore = createStewardLedgerStore(dir);
+    await ledgerStore.append(ledgerEntry({ wakeId: 'wake-m' }));
+    // No marker published — the generated validator has not run yet.
+
+    const result = await createStewardSupervisor(dir).tick({
+      now: '2026-07-08T14:01:00.000Z', // before deadline
+      isSessionRunning: () => true,
+      isMachineThreadLive: () => false, // turn already settled — liveness clears fast
+    });
+
+    expect(result.transitions).toHaveLength(0);
+    expect((await createStewardWakeStore(dir).get('wake-m'))?.status).toBe('injected');
+  });
+
+  it('(f) does NOT mark a machine wake stuck when the ledger entry was corrected after validation (marker fingerprint mismatch)', async () => {
+    await seedInjectedMachineWake('2026-07-08T14:03:00.000Z');
+    const ledgerStore = createStewardLedgerStore(dir);
+    const draft = ledgerEntry({ wakeId: 'wake-m', thesis: 'draft thesis' });
+    await ledgerStore.append(draft);
+    await publishMarker('wake-m', draft); // validated the draft
+
+    // A #125-permitted in-place correction — but NOT re-validated: the marker
+    // still points at the draft fingerprint.
+    const corrected = ledgerEntry({ wakeId: 'wake-m', thesis: 'corrected thesis', decision: 'propose_trade' });
+    await writeFile(ledgerStore.path(), `${JSON.stringify(corrected)}\n`, 'utf8');
+
+    const result = await createStewardSupervisor(dir).tick({
+      now: '2026-07-08T14:01:00.000Z', // before deadline
+      isSessionRunning: () => true,
+      isMachineThreadLive: () => false,
+    });
+
+    expect(result.transitions).toHaveLength(0);
+    expect((await createStewardWakeStore(dir).get('wake-m'))?.status).toBe('injected');
+  });
+
   it('(c) attributes a machine wake timeout from driver telemetry, not the PTY rollout', async () => {
     await seedInjectedMachineWake('2026-07-08T14:03:00.000Z');
     // A PTY rollout reader that would throw if consulted — proves the machine
