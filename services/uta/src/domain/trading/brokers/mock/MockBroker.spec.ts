@@ -157,6 +157,161 @@ describe('placeOrder', () => {
   })
 })
 
+// ==================== market order notional (cashQty) — #137 ====================
+
+describe('placeOrder market cashQty (notional)', () => {
+  // Regression for #137: a legal MKT order sized by cashQty reported
+  // outcome=executed but filled zero shares because MockBroker only read
+  // totalQuantity. These fail on the pre-fix broker.
+
+  it('equity BUY cashQty=30000 @ 150 fills 200 shares and debits 30000 cash', async () => {
+    broker.setQuote('AAPL', 150)
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
+    const order = new Order()
+    order.action = 'BUY'
+    order.orderType = 'MKT'
+    order.cashQty = new Decimal('30000')
+
+    const result = await broker.placeOrder(contract, order)
+    expect(result.success).toBe(true)
+
+    const positions = await broker.getPositions()
+    expect(positions).toHaveLength(1)
+    expect(positions[0].quantity.toString()).toBe('200')
+    expect(positions[0].avgCost).toBe('150')
+
+    const account = await broker.getAccount()
+    // cash = 100000 - 30000 notional = 70000
+    expect(account.totalCashValue).toBe('70000')
+
+    // Order history / filledQuantity reflect the resolved share count.
+    const detail = await broker.getOrder(result.orderId!)
+    expect(detail!.orderState.status).toBe('Filled')
+    expect(detail!.order.filledQuantity!.toString()).toBe('200')
+    expect(detail!.order.totalQuantity.toString()).toBe('200')
+  })
+
+  it('preserves fractional derived quantity (cashQty=100 @ 3)', async () => {
+    broker.setQuote('AAPL', 3)
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
+    const order = new Order()
+    order.action = 'BUY'
+    order.orderType = 'MKT'
+    order.cashQty = new Decimal('100')
+
+    const result = await broker.placeOrder(contract, order)
+    expect(result.success).toBe(true)
+
+    const positions = await broker.getPositions()
+    // 100 / 3 = 33.333… (Decimal precision, not float noise)
+    expect(positions[0].quantity.toString()).toBe('33.333333333333333333')
+    // Notional spent ≈ cashQty: qty * price ≈ 100, so cash ≈ 100000 - 100
+    const account = await broker.getAccount()
+    expect(new Decimal(account.totalCashValue).toNumber()).toBeCloseTo(99900, 6)
+  })
+
+  it('honors contract multiplier (option @ 58, mult 100, cashQty 5800 → 1 contract)', async () => {
+    broker.setQuote('AAPL  260116C00150000', 58)
+    const contract = makeContract({
+      aliceId: 'mock-paper|AAPL-OPT',
+      symbol: 'AAPL',
+      secType: 'OPT',
+    })
+    contract.localSymbol = 'AAPL  260116C00150000'
+    contract.multiplier = '100'
+    const order = new Order()
+    order.action = 'BUY'
+    order.orderType = 'MKT'
+    order.cashQty = new Decimal('5800')
+
+    const result = await broker.placeOrder(contract, order)
+    expect(result.success).toBe(true)
+
+    const positions = await broker.getPositions()
+    // 5800 / (58 * 100) = 1 contract
+    expect(positions[0].quantity.toString()).toBe('1')
+    const account = await broker.getAccount()
+    // cash = 100000 - 5800 = 94200
+    expect(account.totalCashValue).toBe('94200')
+  })
+
+  it('SELL cashQty converts to quantity and reduces the position', async () => {
+    broker.setQuote('AAPL', 150)
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
+    const buy = new Order()
+    buy.action = 'BUY'
+    buy.orderType = 'MKT'
+    buy.totalQuantity = new Decimal(200)
+    await broker.placeOrder(contract, buy)
+
+    const sell = new Order()
+    sell.action = 'SELL'
+    sell.orderType = 'MKT'
+    sell.cashQty = new Decimal('7500') // 7500 / 150 = 50 shares
+    const result = await broker.placeOrder(contract, sell)
+    expect(result.success).toBe(true)
+
+    const positions = await broker.getPositions()
+    expect(positions[0].quantity.toString()).toBe('150')
+    const account = await broker.getAccount()
+    // 100000 - 200*150 + 50*150 = 77500
+    expect(account.totalCashValue).toBe('77500')
+  })
+
+  it('SELL cashQty that exceeds the held position is refused (oversell)', async () => {
+    broker.setQuote('AAPL', 150)
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
+    const buy = new Order()
+    buy.action = 'BUY'
+    buy.orderType = 'MKT'
+    buy.totalQuantity = new Decimal(10)
+    await broker.placeOrder(contract, buy)
+
+    const sell = new Order()
+    sell.action = 'SELL'
+    sell.orderType = 'MKT'
+    sell.cashQty = new Decimal('3000') // 3000 / 150 = 20 shares > 10 held
+    const result = await broker.placeOrder(contract, sell)
+    expect(result.success).toBe(false)
+
+    // Position and cash untouched by the refused oversell.
+    const positions = await broker.getPositions()
+    expect(positions[0].quantity.toString()).toBe('10')
+    const account = await broker.getAccount()
+    expect(account.totalCashValue).toBe('98500')
+  })
+
+  it('market order with neither totalQuantity nor cashQty fails loudly (no zero-share fill)', async () => {
+    broker.setQuote('AAPL', 150)
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
+    const order = new Order()
+    order.action = 'BUY'
+    order.orderType = 'MKT'
+    // no totalQuantity, no cashQty
+
+    const result = await broker.placeOrder(contract, order)
+    expect(result.success).toBe(false)
+
+    // No phantom position, cash untouched.
+    expect(await broker.getPositions()).toHaveLength(0)
+    const account = await broker.getAccount()
+    expect(account.totalCashValue).toBe('100000')
+  })
+
+  it('market order with explicit zero cashQty fails loudly', async () => {
+    broker.setQuote('AAPL', 150)
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
+    const order = new Order()
+    order.action = 'BUY'
+    order.orderType = 'MKT'
+    order.cashQty = new Decimal(0)
+
+    const result = await broker.placeOrder(contract, order)
+    expect(result.success).toBe(false)
+    expect(await broker.getPositions()).toHaveLength(0)
+  })
+})
+
 // ==================== closePosition ====================
 
 describe('closePosition', () => {
