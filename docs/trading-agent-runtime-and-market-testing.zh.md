@@ -1,9 +1,9 @@
 # Trading Agent Runtime 与市场测试设计
 
-> 状态：市场测试与运行证据真源（2026-07-11）。本文件解释 trading-agent 在 OpenAlice
-> workspace 里的结构、信息流、输出流，以及下一阶段为了提高 performance 应采用的
-> 真实市场测试环境。它不改变 prompt、wake schema 或 UTA 行为，只把当前系统和实验方向
-> 讲清楚。2026-07-10 的 v7 Spark baseline 见 §8 和
+> 状态：运行与评测方法真源（2026-07-11，Steward Plan v2）。本文件解释 trading-agent 在
+> OpenAlice workspace 里的结构、信息流、输出流，并把 protocol reliability、decision quality、
+> execution fidelity 三类证据分开。它不授权继续 prompt tuning、campaign、holdout、真实
+> paper 或 live。2026-07-10 的 v7 Spark baseline 见 §8 和
 > [appendix/steward-v7-spark-baseline-20260710.md](appendix/steward-v7-spark-baseline-20260710.md)。
 > 架构与信息流的当前实现真源已拆分到
 > [trading-agent-architecture.zh.md](trading-agent-architecture.zh.md)；本文后半部分继续作为
@@ -51,13 +51,13 @@ trading-agent 的输入分为五类。关键原则是：稳定背景写入 works
 窄的 wake envelope；实时事实通过工具查询；不把 OpenAlice 源码、端口和内部 HTTP 路由
 暴露成它的日常世界。
 
-| 输入类别 | 形式 | 谁写入 | Agent 怎么使用 | 例子 |
-| --- | --- | --- | --- | --- |
-| 身份和行为规则 | workspace instruction / `AGENTS.md` / skills | workspace template | 定义它是 steward，不是 code-agent；定义 UTA checklist、ledger 契约、风控纪律 | `src/workspaces/templates/steward/files/instruction.md` |
-| 持久交易状态 | `.alice/steward/*.json` 和 ledger | OpenAlice + agent | 读取账户绑定、行为输入版本、历史决策、成本状态 | `config.json`、`context-manifest.json`、`ledger/decisions.jsonl` |
-| 本次任务边界 | wake envelope JSON | selector / supervisor | 知道本轮为什么醒来、看哪个账户、deadline 是什么、有哪些市场上下文 | `wakeId`、`accountId`、`marketContext.bars` |
-| 实时账户和市场事实 | `alice*` CLI 工具结果 | UTA / market-data layer | 跑 checklist，查账户、持仓、订单、risk、quote、bar source | account info、positions、riskState、market clock |
-| Core-agent 记忆 | Codex session transcript | Codex CLI | 保留连续 session 上下文，但完成边界仍以 ledger 为准 | 上一轮 wake 的对话和工具使用痕迹 |
+| 输入类别           | 形式                                         | 谁写入                  | Agent 怎么使用                                                               | 例子                                                             |
+| ------------------ | -------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| 身份和行为规则     | workspace instruction / `AGENTS.md` / skills | workspace template      | 定义它是 steward，不是 code-agent；定义 UTA checklist、ledger 契约、风控纪律 | `src/workspaces/templates/steward/files/instruction.md`          |
+| 持久交易状态       | `.alice/steward/*.json` 和 ledger            | OpenAlice + agent       | 读取账户绑定、行为输入版本、历史决策、成本状态                               | `config.json`、`context-manifest.json`、`ledger/decisions.jsonl` |
+| 本次任务边界       | wake envelope JSON                           | selector / supervisor   | 知道本轮为什么醒来、看哪个账户、deadline 是什么、有哪些市场上下文            | `wakeId`、`accountId`、`marketContext.bars`                      |
+| 实时账户和市场事实 | `alice*` CLI 工具结果                        | UTA / market-data layer | 跑 checklist，查账户、持仓、订单、risk、quote、bar source                    | account info、positions、riskState、market clock                 |
+| Core-agent 记忆    | Codex session transcript                     | Codex CLI               | 保留连续 session 上下文，但完成边界仍以 ledger 为准                          | 上一轮 wake 的对话和工具使用痕迹                                 |
 
 在当前 campaign harness 里，marketContext 是真实历史 OHLCV 的匿名重放：真实 symbol 和真实
 日期保留在 cell 的 `_provenance` 里给 orchestrator 审计，但不交给 agent。agent 只看到
@@ -91,15 +91,15 @@ flowchart TB
   Reject --> EventLog
 ```
 
-| 输出类别 | 形式 | 权威含义 |
-| --- | --- | --- |
-| 本轮决策记录 | `.alice/steward/ledger/decisions.jsonl` 一行 JSON | validator 原子提交的决策；单独出现还不足以完成新 wake |
-| 本轮完成标记 | `.alice/steward/finalize/<wakeId>.json` | marker fingerprint 与 ledger entry 匹配后，supervisor 才允许 wake 终态化 |
-| 交易意图 | UTA trading git staged operation + commit hash | 表示 agent 提出了可审计交易计划；不等于已经执行 |
-| paper/mock 执行 | UTA `autoPush.status: pushed` | 表示 deterministic paper auto-push 已执行到 broker/simulator |
-| guard 拒绝 | UTA `autoPush.status: skipped` + `paper_policy_denied` | 表示交易没有执行，agent 必须纠正或诚实降级 |
-| 用户沟通 | Inbox / audit / terminal text | 辅助解释，不是交易权威 |
-| 成本记录 | steward state + transcript token usage + report | 用于 net-after-cost PnL，不应事后补猜 |
+| 输出类别        | 形式                                                   | 权威含义                                                                 |
+| --------------- | ------------------------------------------------------ | ------------------------------------------------------------------------ |
+| 本轮决策记录    | `.alice/steward/ledger/decisions.jsonl` 一行 JSON      | validator 原子提交的决策；单独出现还不足以完成新 wake                    |
+| 本轮完成标记    | `.alice/steward/finalize/<wakeId>.json`                | marker fingerprint 与 ledger entry 匹配后，supervisor 才允许 wake 终态化 |
+| 交易意图        | UTA trading git staged operation + commit hash         | 表示 agent 提出了可审计交易计划；不等于已经执行                          |
+| paper/mock 执行 | UTA `autoPush.status: pushed`                          | 表示 deterministic paper auto-push 已执行到 broker/simulator             |
+| guard 拒绝      | UTA `autoPush.status: skipped` + `paper_policy_denied` | 表示交易没有执行，agent 必须纠正或诚实降级                               |
+| 用户沟通        | Inbox / audit / terminal text                          | 辅助解释，不是交易权威                                                   |
+| 成本记录        | steward state + transcript token usage + report        | 用于 net-after-cost PnL，不应事后补猜                                    |
 
 因此，performance 调参时我们不能只看 agent 的自然语言结论；必须同时看 ledger、UTA commit、
 auto-push 结果、最终 equity curve 和 transcript cost。
@@ -160,12 +160,12 @@ cell library 扩成 `legacy` / `dev` / `holdout` 三组，详见
 `tools/campaigns/cells/README.md` 和 `tools/campaigns/cells/manifest.json`。
 legacy 组仍保留原来的 crypto 基线：
 
-| Cell | 真实来源（只给 orchestrator 审计，不给 agent） | 区间 | 用途 |
-| --- | --- | --- | --- |
-| `bull-cx.json` | BTCUSDT | 2024-02-05 至 2024-03-05 | 牛市参与 |
-| `bear-eth.json` | ETHUSDT | 2026-01-26 至 2026-02-24 | 熊市避险 |
-| `bear-sol.json` | SOLUSDT | 2025-01-26 至 2025-02-24 | 熊市避险 |
-| `chop-cx.json` | BTCUSDT | 2024-11-27 至 2024-12-26 | 震荡不过度参与 |
+| Cell            | 真实来源（只给 orchestrator 审计，不给 agent） | 区间                     | 用途           |
+| --------------- | ---------------------------------------------- | ------------------------ | -------------- |
+| `bull-cx.json`  | BTCUSDT                                        | 2024-02-05 至 2024-03-05 | 牛市参与       |
+| `bear-eth.json` | ETHUSDT                                        | 2026-01-26 至 2026-02-24 | 熊市避险       |
+| `bear-sol.json` | SOLUSDT                                        | 2025-01-26 至 2025-02-24 | 熊市避险       |
+| `chop-cx.json`  | BTCUSDT                                        | 2024-11-27 至 2024-12-26 | 震荡不过度参与 |
 
 所以准确说：
 
@@ -180,10 +180,22 @@ crypto cells，而且使用 mock-simulator 执行。新的 dev/holdout cells 已
 name、US ETF、HK/TW equity、FX、commodity proxy；执行仍是 mock-simulator，行情来源仍是
 真实历史 OHLCV 的匿名回放。
 
-## 6. 下一阶段应如何营造更真实的测试环境
+## 6. 评测必须先分成三层
 
-为了提高 trading-agent performance，下一阶段不要直接跳 live，也不要继续只用 4 个 crypto
-cells。应该分层扩展，让“真实市场信息”和“安全可控执行”同时存在。
+旧 campaign 同时观察 wake 是否完成、agent 是否赚钱、guard 是否拦截和 broker 是否正确执行，
+容易把 containment 成功误读为策略成功。Plan v2 要求三层独立 gate：
+
+| 评测层               | 回答的问题                                                   | 不能拿什么替代        |
+| -------------------- | ------------------------------------------------------------ | --------------------- |
+| Protocol reliability | wake、CLI、ledger、finalize、lock、recovery 是否可靠         | PnL 或 agent 自述     |
+| Decision quality     | 在同一 as-of 信息集下，intent 是否合理、可解释、风险匹配     | guard 拒绝后的低回撤  |
+| Execution fidelity   | sizing、订单生命周期、broker/venue、费用、滑点、对账是否正确 | MockBroker 的理想成交 |
+
+一格只有先通过 protocol gate，才有资格进入 decision 评分；只有 decision contract 和 mandatory
+Risk Envelope 已批准，才进入 execution 评测。Guard 拒绝要记为“危险 intent 被 containment”，
+不能给 decision quality 加分。
+
+以下 L0–L4 保留为未来测试环境分层，不是当前运行授权。
 
 ### L0：当前 blind single-asset replay
 
@@ -193,6 +205,7 @@ cells。应该分层扩展，让“真实市场信息”和“安全可控执行
 - 执行：MockBroker。
 - 优点：反作弊、便宜、稳定、可并行。
 - 缺口：不测试真实 symbol 研究能力，也不测试事件/新闻/基本面。
+- 归属：主要是 decision quality，另带最小 protocol smoke。
 
 ### L1：多资产 historical replay
 
@@ -202,6 +215,7 @@ cells。应该分层扩展，让“真实市场信息”和“安全可控执行
 - 执行：MockBroker，多合约同账户。
 - 增加内容：现金分配、相对强弱、避险资产、换仓、组合回撤。
 - 验收重点：不是“看到涨的就买”，而是能在机会集中选择更好的风险回报。
+- 归属：decision quality；默认只产 proposal。
 
 ### L2：事件化 replay
 
@@ -211,6 +225,7 @@ cells。应该分层扩展，让“真实市场信息”和“安全可控执行
 - 执行：仍用 MockBroker，避免真实资金。
 - 增加内容：财报日前降风险、宏观冲击、趋势与事件冲突时的判断。
 - 验收重点：agent 能解释信息新鲜度，不用未来信息，不把 stale data 当 current price。
+- 归属：decision quality；每轮绑定 as-of information snapshot identity。
 
 ### L3：真实 paper broker
 
@@ -220,29 +235,31 @@ cells。应该分层扩展，让“真实市场信息”和“安全可控执行
 - 执行：Alpaca paper、Binance/Bybit/OKX demo、IBKR paper、Longbridge paper 等。
 - 增加内容：market hours、订单生命周期、真实 API 错误、成交状态同步、费用/滑点近似。
 - 验收重点：trading-agent 不仅“想得对”，还要在真实 broker 语义下稳定执行。
+- 归属：execution fidelity；必须另行授权。
 
 ### L4：小额实盘候选
 
-目的：只有当 L0-L3 都稳定后，才考虑小额实盘。
+目的：仅记录远期边界。L4 不在当前 Plan v2 授权路线内。
 
 - 执行必须仍由 UTA deterministic policy 和人类边界控制。
 - agent 不拿 push 权限。
 - 必须有金额上限、日损上限、kill switch、审计和回滚。
 
-## 7. 建议的验收市场矩阵
+## 7. 未来的 decision-quality 市场矩阵
 
-下一轮 performance tuning 至少应覆盖这些市场，而不是只覆盖 crypto：
+未来若 D3/D4 获得批准，decision-quality 评测至少应覆盖这些市场，而不是只覆盖 crypto：
 
-| 市场 | 样例 | 为什么需要 |
-| --- | --- | --- |
-| Crypto major | BTC, ETH, SOL | 24/7、高波动、趋势明显，适合快速暴露参与/止损问题 |
-| US index / ETF | SPY, QQQ, IWM, TLT, GLD, XLE | 更接近传统 portfolio allocation，可测风险资产/避险资产切换 |
-| US single names | NVDA, TSLA, AMD, AAPL | 趋势强但事件风险高，可测财报/动量/回撤纪律 |
-| HK / CN / TW equities | 0700.HK, 9988.HK, 600519.SS, 2330.TW | 检查全球市场 symbol、时区、数据源差异 |
-| FX / commodities data | EURUSD=X, USDJPY=X, gold, crude_oil | 测宏观 regime 和非股票风险表达；交易执行可先只做 data/research |
+| 市场                  | 样例                                 | 为什么需要                                                     |
+| --------------------- | ------------------------------------ | -------------------------------------------------------------- |
+| Crypto major          | BTC, ETH, SOL                        | 24/7、高波动、趋势明显，适合快速暴露参与/止损问题              |
+| US index / ETF        | SPY, QQQ, IWM, TLT, GLD, XLE         | 更接近传统 portfolio allocation，可测风险资产/避险资产切换     |
+| US single names       | NVDA, TSLA, AMD, AAPL                | 趋势强但事件风险高，可测财报/动量/回撤纪律                     |
+| HK / CN / TW equities | 0700.HK, 9988.HK, 600519.SS, 2330.TW | 检查全球市场 symbol、时区、数据源差异                          |
+| FX / commodities data | EURUSD=X, USDJPY=X, gold, crude_oil  | 测宏观 regime 和非股票风险表达；交易执行可先只做 data/research |
 
-开发集和验收集要分开。开发集用于 prompt/行为调参；验收集必须 holdout，且只在定版后跑，
-否则我们会把 agent 调成“会背这几个窗口”的系统。
+开发集和验收集要分开。未来开发集用于验证 Decision Intent、information snapshot 与评测方法；
+验收集必须 holdout，且只在契约定版并获得打开授权后运行。不能再用反复观看同一窗口的方式
+给 prompt 加参与压力，否则会把 agent 调成“会背这几个窗口”的系统。
 
 ## 8. 2026-07-10 v7 Spark baseline
 
@@ -279,14 +296,18 @@ guard 拒掉才没有执行，因此不能外推到无 max-position guard 的账
 实验与架构证据合入 `jieke/dev`，不激活 #126 participation candidate；holdout 继续封存。完整证据见
 [appendix/steward-v8-candidate-20260711.md](appendix/steward-v8-candidate-20260711.md)。
 
-## 9. 这一阶段的建议结论
+## 9. Plan v2 决定
 
-performance 阶段的第一目标不是让 agent 在一个 crypto 牛市 cell 上赚最多，而是让它在
-丰富、真实、可复现的环境里形成稳定的 regime-aware 行为：
+当前不继续 performance prompt tuning，也不打开 holdout。下一轮工作首先是**设计评测契约**，
+不是运行更多 cell：
 
-1. 扩大 cell library：crypto + US equity/ETF + HK/CN/TW equity，bull/bear/chop 各多例。
-2. 先跑 L0/L1 blind replay，修 under-participation 和 over-participation 的行为平衡。
-3. 再加入 L2 事件/基本面/宏观 as-of context，测试更接近真实研究流程。
-4. 最后用 L3 paper broker 验证真实交易基础设施 friction。
-5. 每轮报告必须同时列 gross PnL、net-after-cost PnL、maxDD、trade count、guard rejection、
-   ledger honesty、wake stability 和 token/cost。
+1. 定义可复现的 as-of Information Snapshot；行情、账户、风险、事件和 freshness 各自有身份。
+2. 定义 Decision Intent；把方向、目标范围、最大损失、失效条件和期限从任意订单参数中分离。
+3. 定义 mandatory Risk Envelope；无 envelope 的账户不得获得 autonomous execution 资格。
+4. 报告分栏呈现 protocol、decision、execution 结果。`policy_denied` 是 containment evidence，
+   不是策略 pass。
+5. D4 proposal-only 获准后，才使用 L0–L2 评估决策；D5/D6 另行批准后，才评估 mock bounded
+   autonomy 或真实 paper broker。
+
+未来报告仍应列 gross/net PnL、maxDD、trade count、guard rejection、ledger honesty、wake
+stability 和成本，但这些指标必须归到正确层，不能压成一个混合 verdict。

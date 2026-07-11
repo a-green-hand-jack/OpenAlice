@@ -1,5 +1,9 @@
 # Persistent Steward 最小实现方案
 
+> 版本：v1.0（2026-07-11）——Steward Plan v2 文档收敛：本文从“实现前设计稿”转为
+> **当前 persistent runtime 实现记录**。它证明 wake/CLI/ledger/finalize/supervisor 链路，
+> 不授权继续 prompt tuning、campaign 或 autonomous execution；Decision Intent、Information
+> Snapshot 与 mandatory Risk Envelope 属于后续设计阶段。
 > 版本：v0.9（2026-07-11）——当前 consolidation 状态：#124 trust-config 双层锁、#125
 > strict v2 ledger、#127 restart owner、#132 session rotation/overflow attribution、
 > #134/#136/#139/#140 ledger receipt/finalize/identity/atomic writer 与 #137 MockBroker
@@ -55,9 +59,9 @@
 > 的 git 跟踪策略；开发期成本只记录不阻断；第一版先手动 wake、必须建立 steward
 > template；补 trading-agent input context 版本管理。
 > 版本：v0.1（2026-07-08）
-> 地位：**实现前设计稿**，从属于
+> 地位：**当前实现记录与维护参考**，从属于
 > [steward-workspace-behavior-contract.zh.md](steward-workspace-behavior-contract.zh.md)
-> v0.3。本文把行为契约翻译成最小源码改动路径，供 jieke 继续批注后再进入代码实现。
+> v0.4。活动阶段和授权以 [steward-plan.zh.md](steward-plan.zh.md) 为准。
 
 ## 0. 一句话
 
@@ -66,15 +70,15 @@
 checklist 后写 decision ledger，外部 supervisor 通过 ledger 判断本轮完成、记录成本和
 轨迹，并在卡死时标记 stuck / timeout。
 
-### 0.1 总体验收标准
+### 0.1 本文能验收什么
 
-工程 smoke 只证明链路跑通，不是最终验收。persistent steward 的总体验收按两层看：
+本文只验收 protocol reliability：wake 是否送达、CLI/tool path 是否工作、ledger/finalize 是否
+原子且可对账、supervisor 是否能终态化/恢复、成本是否被记录。Canonical v8 的 60/60 wakes
+是这类证据。
 
-1. **交易行为验收**：trading-agent 必须在丰富回测任务上表现出 regime-aware 的交易
-   纪律。牛市应能扩大盈利能力；熊市应能止损、降敞口或持币避险；震荡市应能灵活操作、
-   避免过度参与。所有行为都必须经过 UTA checklist、decision ledger 和成本记录。
-2. **成本验收**：收益实验必须同时报告 gross PnL 和 net-after-cost PnL。成本至少包括
-   Codex/core-agent token、服务器/沙箱租赁、手续费、佣金、交易所费用、滑点等交易摩擦。
+它不验收 Decision Intent 是否优质、策略是否有 alpha，也不因为 guard 拒绝而给 agent 行为判定
+pass。Decision quality 与 execution fidelity 的方法见
+[trading-agent-runtime-and-market-testing.zh.md](trading-agent-runtime-and-market-testing.zh.md)。
 
 参考 [xbtlin/ai-berkshire](https://github.com/xbtlin/ai-berkshire) 的方向：它把投资研究
 做成结构化 skill/checklist、强制结论、可复现流程、反偏见机制和精确计算。OpenAlice

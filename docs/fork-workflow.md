@@ -45,7 +45,7 @@ Every change — code or docs — moves through the same stations:
    `jieke/dev` in an isolated `.worktrees/issue-N/` checkout.
 3. **Work order** — the orchestrator session translates the issue into
    a concrete brief (files, anchors, constraints, verification steps),
-   citing ANATOMY.md maps and `docs/steward-plan.zh.md` invariants
+   citing ANATOMY.md maps and the current `docs/steward-plan.zh.md` invariants
    where they apply.
 4. **Implement** — a sub-agent (codex or another implementation agent)
    works inside the issue's worktree. Self-verification is part of implementation:
@@ -57,7 +57,7 @@ Every change — code or docs — moves through the same stations:
 6. **Review / audit** — a different sub-agent or the main agent reads
    the full diff, spot-checks real behavior through the terminal
    runbook when relevant, and reviews against the issue intent,
-   steward-plan invariants (I1–I9), and ANATOMY citation sync.
+   current steward-plan invariants and stage authorization, and ANATOMY citation sync.
    Findings are fixed before merge.
 7. **Merge and cleanup** — merge only with CI green and review clean.
    Then sync the relevant checkout, remove `.worktrees/issue-N`, and
