@@ -30,14 +30,20 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   [../docs/steward-workspace-behavior-contract.zh.md](../docs/steward-workspace-behavior-contract.zh.md);
   the current minimal persistent-steward implementation design is
   [../docs/steward-persistent-loop-implementation.zh.md](../docs/steward-persistent-loop-implementation.zh.md).
-  The runtime information-flow diagram and performance-test market matrix are
-  in [../docs/trading-agent-runtime-and-market-testing.zh.md](../docs/trading-agent-runtime-and-market-testing.zh.md).
+  The current architecture and information-flow truth is
+  [../docs/trading-agent-architecture.zh.md](../docs/trading-agent-architecture.zh.md);
+  performance-test levels remain in
+  [../docs/trading-agent-runtime-and-market-testing.zh.md](../docs/trading-agent-runtime-and-market-testing.zh.md),
+  and the latest canonical matrix snapshot is
+  [../docs/appendix/steward-v8-candidate-20260711.md](../docs/appendix/steward-v8-candidate-20260711.md).
   The first persistent steward scaffold lives in
   `src/workspaces/templates/steward/`; its context manifest is written by
   `src/workspaces/context-injector.ts:91-127` after instructions and skills land.
   The steward template bootstrap also writes the workspace-local
-  `.alice/steward/validate-ledger.mjs` helper that agents run before treating a
-  ledger line as a wake completion marker.
+  `.alice/steward/validate-ledger.mjs`: agents write per-wake drafts, and this
+  validator is the supported atomic writer of `ledger/decisions.jsonl` plus the
+  matching finalization marker. Supervisor terminalization requires the current
+  entry and marker fingerprints to agree.
   Steward wake/ledger schemas and workspace-local file stores live in
   `src/workspaces/steward/`; the v1 wake injector formats the
   `<STEWARD_WAKE>` message at `src/workspaces/steward/injector.ts:5-28`.
@@ -105,11 +111,11 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
 - `webui` routes keep the browser on Alice while proxying trading to UTA:
   `src/webui/plugin.ts:228-236` -> `src/webui/routes/trading-proxy.ts:32-41`
   -> `services/uta/src/http/routes-trading.ts:121`.
-- `tool/` definitions register with `ToolCenter`; global MCP exports the enabled
-  catalog with trading trimmed to read-only, while workspace MCP exports a
-  Steward-authz-filtered union of global tools plus workspace-scoped tools; proposal
-  tools are additionally gated against the target account ceiling/type before
-  execution:
+- `tool/` definitions register with `ToolCenter`. Workspace agents use the
+  `alice*` CLI gateway by default; it builds the same steward-authz-filtered
+  catalog of global plus workspace-scoped tools that the optional workspace MCP
+  route can expose. Proposal tools are additionally gated against the target
+  account ceiling/type before execution:
   `src/main.ts:217-253` -> `src/core/tool-center.ts:17-21` ->
   `src/core/workspace-tool-center.ts:33-153`,
   `src/core/workspace-tool-center.ts:459-475`, and

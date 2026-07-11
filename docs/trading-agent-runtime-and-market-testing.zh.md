@@ -1,6 +1,6 @@
 # Trading Agent Runtime 与市场测试设计
 
-> 状态：运行与测试真源（2026-07-10）。本文件解释 trading-agent 在 OpenAlice
+> 状态：运行与测试真源（2026-07-11）。本文件解释 trading-agent 在 OpenAlice
 > workspace 里的结构、信息流、输出流，以及下一阶段为了提高 performance 应采用的
 > 真实市场测试环境。它不改变 prompt、wake schema 或 UTA 行为，只把当前系统和实验方向
 > 讲清楚。2026-07-10 的 v7 Spark baseline 见 §8 和
@@ -264,6 +264,20 @@ entry 的 validator 行为未定义。这些字段在澄清前只能作为软审
 UTA 权威或 performance gate。
 它们跟踪于 #125；同轮观察到的一次 config mutation 两次 UTA restart 的放大问题
 跟踪于 #127。
+
+### 8.1 2026-07-11 v8 candidate canonical matrix
+
+Issue #126 的 canonical `v8matrix7` 在 exact HEAD `e27efdb6` 上严格串行跑完同一组
+legacy + dev 10 cells：10/10 audit-clean、60/60 wakes，零 integrity violation、stuck、
+timeout、账户/进程残留；#137 的 `cashQty` 还在真实 cell 中产生了非零 fractional fill。
+这是 #134/#136/#137/#139/#140 首次共同通过完整矩阵 load acceptance。
+
+行为面没有同等幅度的改善：raw 仍为 7/10，排除两个 guard-infeasible bull cell 后仍为
+7/8；NVDA 从 v7 +17.7% 提到 +20.7%，仍是唯一低于 +25% gate 的可行 cell。所有
+bear/chop verdict 继续通过，所以 v8 participation policy 没有明显破坏防守纪律，但也没有
+解决 NVDA under-participation。Maintainer 决定把已评估候选合入 `jieke/dev` 作为重新规划前
+的 consolidation point；holdout 继续封存。完整证据见
+[appendix/steward-v8-candidate-20260711.md](appendix/steward-v8-candidate-20260711.md)。
 
 ## 9. 这一阶段的建议结论
 
