@@ -26,7 +26,7 @@
 | **v5** | winner management + pullback discipline | **`src/workspaces/templates/steward/files/instruction.md`** | 同左 + `.alice/steward/validate-ledger.mjs` | **已实现（2026-07-10）；targeted regression failed** | 针对 v4 full dev baseline 的行为缺口：在 Participation Bias 中补充「盈利趋势仓位要重新评估当前 notional，不足且可控风险时可顺势加仓」「健康 uptrend 的正常 pullback / 临时浮亏不等于 invalidation」「低波动漂移不等于高置信 uptrend」，并在 Risk Discipline 中明确只允许给盈利或持平且 thesis 仍有效的仓位加仓，且必须先/同时上移 stop。Targeted regression 显示方向不够窄：NVDA 学会加仓但贴近 max-position guard 后触发 READ_ONLY；0700.HK 仍被 pullback 洗出；SPY low-vol chop 过早参与。 |
 | **v6** | guard headroom + stricter trend filter | **`src/workspaces/templates/steward/files/instruction.md`** | 同左 + `.alice/steward/validate-ledger.mjs` | **已实现（2026-07-10）；targeted regression partial / failed bull threshold** | 在 v5 基础上把 starter range 收窄为 25-45%，加仓目标收在 50-55% notional 而不是贴近 60% hard guard；明确若 mark-to-market 把敞口推近/超过 guard，应 trim 回 guard 下方而不是等 READ_ONLY；把 pullback hold 条件写成「在原 stop/risk budget 内、仍高于 swing support、且未超过约 8% adverse move」；把 low-vol chop 过滤写硬：1-4% 的一两周窄幅 drift 不足以使用 meaningful starter。Targeted regression 修掉 NVDA READ_ONLY（+17.0%，仍低于 +25% bull 阈值）并让 SPY PASS，但暴露 0700.HK 的 default-contract/AAPL 污染。 |
 | **v7** | campaign tradable contract binding | **`src/workspaces/templates/steward/files/instruction.md`** + `tools/campaigns/run-cell.mjs` | wake `marketContext.tradeableAliceId` | **已实现；targeted + 10-cell 六周 baseline 已完成（2026-07-10）；尚未冻结 holdout** | v6 targeted 暴露出非 prompt-policy 摩擦：MockBroker 空搜索会返回默认 `AAPL`，agent 在 0700.HK cell 中读 `ASSET-K` tape 却尝试交易默认 `AAPL`。v7 显式传入并强制使用 exact `tradeableAliceId`。后续 60/60 wake 证明 isolated-stack contract binding 已稳定、无 AAPL 污染；但 guard-feasible NVDA 仅 +17.7%，仍低于 +25% bull gate。六路 shared-stack 则被 Codex trust-config 并发写竞争阻断（#124），不是 prompt policy 失败。 |
-| **v8-CANDIDATE** | v2 ledger contract（strict pendingHash / typed actions / single-entry wakes） | **`src/workspaces/templates/steward/files/instruction.md`**（Wake Loop step 5-6 + Decision Ledger Shape）+ 生成的 `.alice/steward/validate-ledger.mjs` | 同左（in-repo 模板文件，wake 时逐字读取） | **候选，未冻结（issue #125）；dev matrix 复跑 pending；holdout 仍封存** | 配合 decision-ledger schema v1→v2（`DECISION_LEDGER_SCHEMA_VERSION` bump）落地的 prompt 半边：Decision Ledger Shape 现示 `version: 2` + 一个 typed action 示例（`kind`/`aliceId`/`params`/`commitHash`/`outcome`/`violations`）；Wake Loop step 5 增补「每个 broker 操作记一个 typed action 对象，`outcome` 对应四个 `autoPush` 分支，commit 出处进 `actions[].commitHash`，`pendingHash` 仅表示待批准 stage、executed 后必须为 null」；step 6 增补「每个 wakeId 恰好一条记录、first-wins、要更正就原地改那一行不追加第二行」。属**实质性契约变更**（改变 agent 记账行为），按 §4 规则 4 须 maintainer 批准后才升 v8 正式版；升版前 dev matrix 必须复跑确认 bull 参与度与 ledger 完成率不回落，holdout 保持封存。**第三组件（issue #132 degenerate-turn guard，同批未冻结）**：Wake Loop step 6 增补命令参数尺寸纪律（ledger 只用原生 file-write 工具组装、禁止巨型 inline 参数/heredoc、单参数务必小），针对 v8 NVDA run1 week-2 的 271KB 退化 `exec_command` 参数——它以 output-token 速度撑爆 deadline 并毒化持久 session；配套 harness 半边（threshold session rotation + supervisor timeout attribution，纯代码不进本台账）见 issue #132。逐组件解剖见 §15、§16。 |
+| **v8-CANDIDATE** | v2 ledger contract（strict pendingHash / typed actions / single-entry wakes） | **`src/workspaces/templates/steward/files/instruction.md`**（Wake Loop step 5-6 + Decision Ledger Shape）+ 生成的 `.alice/steward/validate-ledger.mjs` | 同左（in-repo 模板文件，wake 时逐字读取） | **已落地（#125/#132）；legacy/dev 60-wake validation 已完成（2026-07-11）；holdout/live 仍封存** | 配合 decision-ledger schema v1→v2（`DECISION_LEDGER_SCHEMA_VERSION` bump）落地的 prompt 半边：Decision Ledger Shape 现示 `version: 2` + 一个 typed action 示例（`kind`/`aliceId`/`params`/`commitHash`/`outcome`/`violations`）；Wake Loop step 5 增补「每个 broker 操作记一个 typed action 对象，`outcome` 对应四个 `autoPush` 分支，commit 出处进 `actions[].commitHash`，`pendingHash` 仅表示待批准 stage、executed 后必须为 null」；step 6 增补「每个 wakeId 恰好一条记录、first-wins、要更正就原地改那一行不追加第二行」。属**已落地契约变更**（改变 agent 记账行为）；canonical v8matrix7 的 60 wakes 已验证 typed actions、strict pending、finalize 与 atomic writer 路径，holdout/live 仍封存。**第三组件（issue #132 degenerate-turn guard，已落地）**：Wake Loop step 6 增补命令参数尺寸纪律（ledger 只用原生 file-write 工具组装、禁止巨型 inline 参数/heredoc、单参数务必小），针对 v8 NVDA run1 week-2 的 271KB 退化 `exec_command` 参数——它以 output-token 速度撑爆 deadline 并毒化持久 session；配套 harness 半边（threshold session rotation + supervisor timeout attribution，纯代码不进本台账）见 issue #132。逐组件解剖见 §15、§16。 |
 
 > **Issue #126 participation experiment（2026-07-11）**：另一个未冻结候选曾在
 > `feat/issue-126-v8-participation-policy@7a3b8d52` 把 first-wake participation、
@@ -450,11 +450,12 @@ shared-stack campaign 的失败归因给 Spark 或 v7 prompt。
 完整矩阵、证据边界和下一 gate 见
 [appendix/steward-v7-spark-baseline-20260710.md](appendix/steward-v7-spark-baseline-20260710.md)。
 
-## 15. v8-CANDIDATE 逐组件解剖（v2 ledger contract，issue #125）
+## 15. v8 已落地组件（v2 ledger contract，issue #125）
 
-> **状态：未冻结的候选**。这是 decision-ledger schema v1→v2 落地的 prompt 半边。属实质性
-> 契约变更，按 §4 规则 4 须 maintainer 批准后才升为 v8 正式版；升版前 dev matrix 必须
-> 复跑（确认 bull 参与度、ledger 完成率、`propose_trade` 记账正确性不回落），holdout 保持封存。
+> **状态：已落地，并在 2026-07-11 canonical legacy/dev matrix 的 60 wakes 中通过 load
+> validation**。这是 decision-ledger schema v1→v2 的 prompt 半边；strict pending、typed
+> actions、single-entry wake、finalize 和 atomic writer 均在当前默认 instruction/runtime 中。
+> Holdout/live 仍封存，这不等于 trading performance 已通过。
 
 逐组件（相对 v7）：
 
@@ -477,13 +478,13 @@ shared-stack campaign 的失败归因给 Spark 或 v7 prompt。
   `executed⇒commitHash`、`executed⇒pendingHash===null`、重复 wakeId 报错。它是 agent 在
   wake 结尾实际运行的那一层，与服务端 zod schema（`src/workspaces/steward/types.ts`）语义对齐。
 
-## 16. v8-CANDIDATE 第三组件：degenerate-turn guard（issue #132）
+## 16. v8 已落地组件：degenerate-turn guard（issue #132）
 
-> **状态：未冻结的候选**（与 §15 同批，随 v8-CANDIDATE 一起评估）。这是 #132「wake
-> context governance」的 prompt 半边——另外两半（threshold session rotation、supervisor
-> timeout attribution）是纯 harness 代码，不进 prompt 台账。属实质性行为约束变更（收紧
-> agent 写 ledger 的工具用法），按 §4 规则 4 须 maintainer 批准后才随 v8 正式版落地；升版前
-> v8 NVDA 复跑须确认 week-2 degeneration 不复现。
+> **状态：已落地，并随 2026-07-11 canonical 60-wake matrix 完成 legacy/dev validation**。
+> 这是 #132「wake context governance」的 prompt 半边；另外两半（threshold session
+> rotation、supervisor timeout attribution）是 runtime 代码，不进 prompt 台账。Canonical
+> matrix 未复现 week-2 degeneration，但概率性模型退化仍可能发生，不能把一次 clean matrix
+> 当作模型质量保证。
 
 **根因（read-only root-cause pass, 2026-07-10）**：v8 NVDA run1 的 week-2 死于**单个退化模型
 回合**——一个 271,810 字节的 `exec_command` 参数（heredoc 组装塌缩成重复循环：`while true;
