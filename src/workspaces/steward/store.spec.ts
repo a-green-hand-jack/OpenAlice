@@ -6,6 +6,8 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  canonicalDecisionFingerprint,
+  createStewardFinalizeStore,
   createStewardLedgerStore,
   createStewardLockStore,
   createStewardSupervisor,
@@ -83,6 +85,21 @@ function ledgerEntry(over: Partial<StewardDecisionLedgerEntryV2> = {}): StewardD
     },
     ...over,
   };
+}
+
+/** Issue #136: publish the finalization marker the generated validator would
+ *  write, so a marker-protocol wake can terminalize on the next tick. Fingerprint
+ *  matches the appended entry's canonical semantic fingerprint. */
+async function publishMarker(
+  wakeId: string,
+  entry: Record<string, unknown>,
+  validatedAt = '2026-07-08T14:01:10.000Z',
+): Promise<void> {
+  await createStewardFinalizeStore(dir).write({
+    wakeId,
+    fingerprint: canonicalDecisionFingerprint(entry),
+    validatedAt,
+  });
 }
 
 describe('StewardWakeStore', () => {
@@ -558,7 +575,7 @@ describe('StewardSupervisor', () => {
       now: '2026-07-08T14:00:00.000Z',
       expiresAt: '2026-07-08T14:03:00.000Z',
     });
-    await ledgerStore.append(ledgerEntry({
+    const wake1Entry = ledgerEntry({
       wakeId: 'wake-1',
       cost: {
         model: 'codex',
@@ -570,7 +587,9 @@ describe('StewardSupervisor', () => {
         estimatedSlippageUsd: 3,
         totalEstimatedCostUsd: null,
       },
-    }));
+    });
+    await ledgerStore.append(wake1Entry);
+    await publishMarker('wake-1', wake1Entry);
 
     const result = await createStewardSupervisor(dir).tick({
       now: '2026-07-08T14:01:30.000Z',
@@ -661,6 +680,7 @@ describe('StewardSupervisor', () => {
       `${JSON.stringify(goodEntry)}\n${JSON.stringify(badEntry)}\n`,
       'utf8',
     );
+    await publishMarker('wake-good', goodEntry);
 
     const result = await createStewardSupervisor(dir).tick({
       now: '2026-07-08T14:01:30.000Z',
@@ -799,6 +819,8 @@ describe('StewardSupervisor', () => {
       `${JSON.stringify(v1Entry)}\n${JSON.stringify(v2Entry)}\n${JSON.stringify(v1Dup)}\n`,
       'utf8',
     );
+    await publishMarker('wake-v1', v1Entry);
+    await publishMarker('wake-v2', v2Entry);
 
     const result = await createStewardSupervisor(dir).tick({
       now: '2026-07-08T14:01:30.000Z',
@@ -899,7 +921,9 @@ describe('StewardSupervisor ledger integrity (issue #134)', () => {
   it('records a corruption-evidence receipt on the first terminal reconciliation', async () => {
     const ledgerStore = createStewardLedgerStore(dir);
     await seedInjectedWake('wake-r1');
-    await ledgerStore.append(ledgerEntry({ wakeId: 'wake-r1' }));
+    const r1Entry = ledgerEntry({ wakeId: 'wake-r1' });
+    await ledgerStore.append(r1Entry);
+    await publishMarker('wake-r1', r1Entry);
 
     await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
 
@@ -919,7 +943,9 @@ describe('StewardSupervisor ledger integrity (issue #134)', () => {
   it('emits a ledger_integrity_violation when a completed wake\'s ledger line is deleted (issue #134 regression 1)', async () => {
     const ledgerStore = createStewardLedgerStore(dir);
     await seedInjectedWake('wake-del');
-    await ledgerStore.append(ledgerEntry({ wakeId: 'wake-del' }));
+    const delEntry = ledgerEntry({ wakeId: 'wake-del' });
+    await ledgerStore.append(delEntry);
+    await publishMarker('wake-del', delEntry);
 
     // Tick 1: transition to done + record receipt.
     const first = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
@@ -942,7 +968,9 @@ describe('StewardSupervisor ledger integrity (issue #134)', () => {
   it('emits a ledger_integrity_violation when the first-wins entry is mutated in place (issue #134 regression 2)', async () => {
     const ledgerStore = createStewardLedgerStore(dir);
     await seedInjectedWake('wake-mut');
-    await ledgerStore.append(ledgerEntry({ wakeId: 'wake-mut', thesis: 'original thesis' }));
+    const mutOriginal = ledgerEntry({ wakeId: 'wake-mut', thesis: 'original thesis' });
+    await ledgerStore.append(mutOriginal);
+    await publishMarker('wake-mut', mutOriginal);
     await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
 
     // A whitespace/format-only rewrite must NOT trip the alarm (requirement 7):
@@ -1036,11 +1064,13 @@ describe('StewardSupervisor ledger integrity (issue #134)', () => {
   it('still reconciles a genuine ledger-backed error and then guards it (PR #135 regression 1)', async () => {
     const ledgerStore = createStewardLedgerStore(dir);
     await seedInjectedWake('wake-realerr');
-    await ledgerStore.append(ledgerEntry({
+    const realErrEntry = ledgerEntry({
       wakeId: 'wake-realerr',
       status: 'error',
       completion: { reason: 'tool failed hard', evidenceRefs: ['wake:wake-realerr'] },
-    }));
+    });
+    await ledgerStore.append(realErrEntry);
+    await publishMarker('wake-realerr', realErrEntry);
 
     const first = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
     expect(first.transitions[0]).toMatchObject({ wakeId: 'wake-realerr', to: 'error' });
@@ -1054,7 +1084,9 @@ describe('StewardSupervisor ledger integrity (issue #134)', () => {
   it('appends a persistent violation event only ONCE across repeated ticks, and recovers (PR #135 regression 3)', async () => {
     const ledgerStore = createStewardLedgerStore(dir);
     await seedInjectedWake('wake-dedup');
-    await ledgerStore.append(ledgerEntry({ wakeId: 'wake-dedup' }));
+    const dedupEntry = ledgerEntry({ wakeId: 'wake-dedup' });
+    await ledgerStore.append(dedupEntry);
+    await publishMarker('wake-dedup', dedupEntry);
     await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
 
     // Delete the entry, then tick THREE times — the violation persists but the
@@ -1089,7 +1121,9 @@ describe('StewardSupervisor ledger integrity (issue #134)', () => {
     for (let i = 1; i <= 6; i++) {
       const id = `wake-scale-${i}`;
       await seedInjectedWake(id, `acct-scale-${i}`);
-      await ledgerStore.append(ledgerEntry({ wakeId: id, accountId: `acct-scale-${i}` }));
+      const e = ledgerEntry({ wakeId: id, accountId: `acct-scale-${i}` });
+      await ledgerStore.append(e);
+      await publishMarker(id, e);
     }
     await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
 
@@ -1102,6 +1136,107 @@ describe('StewardSupervisor ledger integrity (issue #134)', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('StewardSupervisor finalize barrier (issue #136)', () => {
+  async function seedInjectedWake(wakeId: string): Promise<void> {
+    const wakeStore = createStewardWakeStore(dir);
+    const lockStore = createStewardLockStore(dir);
+    await wakeStore.create({ wakeId, deadline: '2026-07-08T14:03:00.000Z', envelope, now: '2026-07-08T14:00:00.000Z' });
+    await wakeStore.updateStatus(wakeId, 'injected', {
+      now: '2026-07-08T14:00:05.000Z', injectedAt: '2026-07-08T14:00:05.000Z', sessionId: 'sess-136',
+    });
+    await lockStore.acquire({
+      accountId: envelope.accountId, wakeId,
+      now: '2026-07-08T14:00:00.000Z', expiresAt: '2026-07-08T14:03:00.000Z',
+    });
+  }
+
+  it('does NOT terminalize a parseable draft that has no finalization marker (regression 1)', async () => {
+    const ledgerStore = createStewardLedgerStore(dir);
+    await seedInjectedWake('wake-draft');
+    await ledgerStore.append(ledgerEntry({ wakeId: 'wake-draft' }));
+    // No marker published — the agent has written the line but not validated.
+
+    const result = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
+    expect(result.transitions).toEqual([]);
+    expect((await createStewardWakeStore(dir).get('wake-draft'))?.status).toBe('injected');
+    expect((await createStewardWakeStore(dir).get('wake-draft'))?.ledgerReceipt).toBeUndefined();
+  });
+
+  it('does NOT terminalize when the entry was corrected after validation (marker fingerprint mismatch), and warns (regression 2)', async () => {
+    const ledgerStore = createStewardLedgerStore(dir);
+    await seedInjectedWake('wake-correct');
+    const draft = ledgerEntry({ wakeId: 'wake-correct', thesis: 'draft thesis' });
+    await ledgerStore.append(draft);
+    await publishMarker('wake-correct', draft); // validated the draft
+
+    // A #125-permitted in-place correction — but NOT re-validated: the marker
+    // still points at the draft fingerprint.
+    const corrected = ledgerEntry({ wakeId: 'wake-correct', thesis: 'corrected thesis', decision: 'propose_trade' });
+    await writeFile(ledgerStore.path(), `${JSON.stringify(corrected)}\n`, 'utf8');
+
+    const result = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
+    expect(result.transitions).toEqual([]);
+    expect((await createStewardWakeStore(dir).get('wake-correct'))?.status).toBe('injected');
+    expect(result.warnings.some((w) => w.includes('finalize marker for wake wake-correct does not match'))).toBe(true);
+  });
+
+  it('terminalizes with the CORRECTED fingerprint after the validator is re-run on the corrected line (regression 3)', async () => {
+    const ledgerStore = createStewardLedgerStore(dir);
+    await seedInjectedWake('wake-recommit');
+    const draft = ledgerEntry({ wakeId: 'wake-recommit', thesis: 'draft thesis' });
+    await ledgerStore.append(draft);
+    await publishMarker('wake-recommit', draft);
+
+    const corrected = ledgerEntry({ wakeId: 'wake-recommit', thesis: 'corrected thesis', decision: 'propose_trade' });
+    await writeFile(ledgerStore.path(), `${JSON.stringify(corrected)}\n`, 'utf8');
+    // Re-run validation on the corrected line: marker is atomically replaced.
+    await publishMarker('wake-recommit', corrected);
+
+    const result = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
+    expect(result.transitions[0]).toMatchObject({ wakeId: 'wake-recommit', to: 'done' });
+    const wake = await createStewardWakeStore(dir).get('wake-recommit');
+    // Receipt captured the CORRECTED entry, so a later #134 check won't false-flag.
+    expect(wake?.ledgerReceipt?.fingerprint).toBe(canonicalDecisionFingerprint(corrected));
+  });
+
+  it('after clean terminalization, a later in-place mutation STILL triggers a #134 violation (regression 4)', async () => {
+    const ledgerStore = createStewardLedgerStore(dir);
+    await seedInjectedWake('wake-post');
+    const entry = ledgerEntry({ wakeId: 'wake-post', thesis: 'validated thesis' });
+    await ledgerStore.append(entry);
+    await publishMarker('wake-post', entry);
+    await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
+
+    // Now the wake is terminal with a receipt. A post-terminal rewrite is a
+    // genuine #134 corruption, NOT a legal pre-terminal correction.
+    await writeFile(
+      ledgerStore.path(),
+      `${JSON.stringify(ledgerEntry({ wakeId: 'wake-post', thesis: 'rewritten after completion', decision: 'propose_trade' }))}\n`,
+      'utf8',
+    );
+    const result = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:05:00.000Z', isSessionRunning: () => true });
+    expect(result.warnings.some((w) => w.includes('ledger integrity violation for wake wake-post'))).toBe(true);
+  });
+
+  it('legacy in-flight wakes (no finalizeProtocol) still terminalize from raw presence (bounded compatibility)', async () => {
+    const wakeStore = createStewardWakeStore(dir);
+    const lockStore = createStewardLockStore(dir);
+    const ledgerStore = createStewardLedgerStore(dir);
+    await seedInjectedWake('wake-legacy-inflight');
+    // Simulate a wake created before the barrier shipped: strip finalizeProtocol.
+    const path = wakeStore.pathFor('wake-legacy-inflight');
+    const rec = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+    delete rec.finalizeProtocol;
+    await writeFile(path, JSON.stringify(rec, null, 2), 'utf8');
+    void lockStore;
+
+    await ledgerStore.append(ledgerEntry({ wakeId: 'wake-legacy-inflight' }));
+    // No marker — but a legacy wake terminalizes from raw presence.
+    const result = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
+    expect(result.transitions[0]).toMatchObject({ wakeId: 'wake-legacy-inflight', to: 'done' });
   });
 });
 

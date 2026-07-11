@@ -19,10 +19,25 @@ import {
 } from '../../core/workspace-tool-center.js';
 import type { ProducerHandle } from '../../core/producer.js';
 import {
+  createStewardFinalizeStore,
   createStewardLedgerStore,
   DECISION_LEDGER_SCHEMA_VERSION,
   STEWARD_WAKE_SUBMIT_DELAY_MS,
 } from '../../workspaces/steward/index.js';
+
+/** Issue #136: publish the finalization marker the generated validator would
+ *  write for `wakeId`, using the ledger's own first-wins fingerprint, so the
+ *  supervisor terminalizes the (marker-protocol) wake on the next tick. */
+async function publishFinalizeMarker(dir: string, wakeId: string): Promise<void> {
+  const idx = await createStewardLedgerStore(dir).readIndex();
+  const fw = idx.firstWins.get(wakeId);
+  if (!fw) throw new Error(`no ledger entry for ${wakeId} to finalize`);
+  await createStewardFinalizeStore(dir).write({
+    wakeId,
+    fingerprint: fw.fingerprint,
+    validatedAt: '2026-07-08T14:01:25.000Z',
+  });
+}
 import { createMemoryInboxStore, type IInboxStore } from '../../core/inbox-store.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -668,6 +683,7 @@ describe('steward wake API', () => {
         },
       });
 
+      await publishFinalizeMarker(dir, 'wake-active');
       const tick = await post(app, '/ws-1/steward/supervisor/tick', {
         now: '2026-07-08T14:01:30.000Z',
       });
@@ -742,6 +758,8 @@ describe('steward wake API', () => {
           totalEstimatedCostUsd: null,
         },
       });
+
+      await publishFinalizeMarker(dir, 'wake-done');
 
       // Wake #2 gets injected into a session that then "disappears" (removed
       // from the live pool) — the liveness check should mark it stuck.

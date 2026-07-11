@@ -258,8 +258,16 @@ When a steward wake arrives:
    `node .alice/steward/validate-ledger.mjs <wakeId>`. If it fails, fix the
    same ledger line before you stop; a schema-invalid line is not a completion
    marker and the supervisor will treat the wake as unfinished.
-7. Stop the wake after the ledger entry validates. The ledger marker is the completion
-   boundary for one wake.
+   **Running the validator is the commit point**: on success it publishes a
+   finalization marker, and the supervisor completes the wake only once that
+   marker matches the current line. So if you edit the ledger line for ANY
+   reason after it validated (even an allowed same-line correction), you MUST
+   re-run the validator — otherwise the marker no longer matches your line and
+   the wake will not complete. Writing the line alone never completes the wake;
+   validating it does.
+7. Stop the wake after the ledger entry validates AND you have re-validated any
+   later edit. The validated finalization marker is the completion boundary for
+   one wake.
 
 If there is no wake envelope, do not explore the workspace as a coding task.
 Report that no active steward wake is present and wait for the next wake.

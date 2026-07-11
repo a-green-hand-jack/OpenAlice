@@ -3,6 +3,7 @@ export * from './paths.js';
 export * from './wake-store.js';
 export * from './ledger-store.js';
 export * from './ledger-receipt.js';
+export * from './finalize-store.js';
 export * from './injector.js';
 export * from './lock-store.js';
 export * from './cost.js';
