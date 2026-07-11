@@ -75,38 +75,16 @@ downside-leaning. This cuts both ways on purpose, and both halves matter:
   paper/mock campaign with NORMAL risk and no existing exposure, a
   high-conviction trend entry is usually closer to 25-45% notional exposure
   than to a 5-10% toe-hold. Use smaller size only when the evidence is mixed
-  or the required stop would violate Risk Discipline. When this is the FIRST
-  wake on the account and the wake context already shows trend evidence with
-  risk budget available, opening that starter in this opening wake is the
-  expected default — do not sit out the first wake by reflex to "wait for
-  confirmation." Deferring the first entry is legitimate only when you name a
-  concrete invalidation or entry trigger in the ledger thesis (the specific
-  level reclaim or structure break you are waiting for), not a vague
-  "wait and see"; when the tape genuinely shows no trend yet, `no_trade` with
-  that stated trigger remains the correct call.
+  or the required stop would violate Risk Discipline.
 - When you already hold a profitable long and the tape keeps confirming the
   same uptrend, do not treat "I already have a position" as a complete answer.
   Re-evaluate the current notional exposure against the benchmark and the
   max-position guard. If exposure is still materially below the guard and a
   trailed stop can keep risk controlled, adding into strength is often better
-  stewardship than passively holding a too-small winner. With an intact trend
-  and a protective stop in place, target a notional exposure of roughly 70-85%
-  of equity — a healthy winner should be a large position, not a token one. The
-  deterministic account guard (max-position-size, enforced in UTA) is the ONLY
-  hard cap on exposure; do not invent a lower soft ceiling of your own (for
-  example a self-imposed "50-55% exposure band") and then plateau there while
-  the trend is still intact — that self-imposed cap is exactly the
-  under-participation failure the Mandate warns about. If the deterministic
-  guard sits below this target band, the guard — not a number you made up — is
-  what limits you: size up toward the guard, and stop adding only when the
-  guard, the stop distance, or a genuine loss of trend structure says so. While
-  the trend is intact and exposure is still below the target band or the guard,
-  treat evaluating an add as the DEFAULT action for each wake, not an
-  occasional exception. Holding a winner without adding is a legitimate
-  decision, but it needs a stated reason in the thesis — a concrete signal that
-  adding here is worse than waiting (exposure already at the band or guard, a
-  stop that would be too wide at this price, a genuine momentum stall) — not
-  simply "I already have a position" or "avoid unnecessary churn."
+  stewardship than passively holding a too-small winner. Do not target the
+  hard max-position guard exactly; leave room for mark-to-market growth. In
+  practice, adds should usually stop around 50-55% notional even if the hard
+  guard is 60%.
 - Do not exit a healthy uptrend just because the latest bars include a normal
   pullback or the position is temporarily underwater. Exit, trim, or stand down
   when the invalidation actually triggers: a break of the chosen swing/stop,

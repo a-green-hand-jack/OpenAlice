@@ -49,29 +49,21 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   `<STEWARD_WAKE>` message at `src/workspaces/steward/injector.ts:5-28`.
   Per-account wake locks are in `src/workspaces/steward/lock-store.ts:25-88`;
   supervisor tick and cost state are in
-  `src/workspaces/steward/supervisor.ts:37-191` and
-  `src/workspaces/steward/cost.ts:14-81`. Scheduled steward wake routing starts
-  at `src/workspaces/issues/declaration.ts:84-117`, branches in
-  `src/workspaces/schedule/scanner.ts:203-220` and
-  `src/workspaces/schedule/scanner.ts:259-301`, then lands in
-  `src/workspaces/service.ts:651-915` (shifted 1 line by issue #109's new
-  `StewardSupervisorScanner`/`steward/config.ts` imports above this
-  function — the `readStewardConfig` extraction below happened in
-  `routes/workspaces.ts`, not here; `service.ts`'s own separate, untouched
-  local `readStewardConfig` copy for `dispatchStewardWakeMethod` still
-  lives at `service.ts:737-750`).
+  `src/workspaces/steward/supervisor.ts` and `src/workspaces/steward/cost.ts`.
+  Scheduled steward wake routing starts in `src/workspaces/issues/declaration.ts`,
+  branches in `src/workspaces/schedule/scanner.ts`, then lands in
+  `dispatchStewardWakeMethod` at `src/workspaces/service.ts:663`.
   `StewardSupervisor.tick()` itself only runs when something calls it; issue
   #109 added the self-arming `StewardSupervisorScanner`
-  (`src/workspaces/steward/supervisor-scanner.ts:131-209`, `.scan()` at
-  `:179-194`) so a hung/stuck wake's lock releases without external polling.
-  Its shared tick-runner (`runStewardSupervisorTick`, `:67-109`) is the SAME
+  (`src/workspaces/steward/supervisor-scanner.ts`, method `.scan()`) so a
+  hung/stuck wake's lock releases without external polling. Its shared
+  tick-runner (`runStewardSupervisorTick`) is the SAME
   function `POST /:id/steward/supervisor/tick` calls, so the manual route and
   the scanner can't drift; `readStewardConfig` (moved out of
   `src/webui/routes/workspaces.ts` into `src/workspaces/steward/config.ts`) is
   the other piece both share. The scanner is wired into
-  `src/workspaces/service.ts:928-934` (instantiate + `.start()`, next to
-  `scheduleScanner` above it) and `src/workspaces/service.ts:1269` (`.stop()`
-  in `dispose()`).
+  `src/workspaces/service.ts:1031` (instantiate), `:1047` (`.start()`), and
+  `:1382` (`.stop()` in `dispose()`).
   Open `src/workspaces/service.ts:94-104`, `src/workspaces/session-pool.ts:72-84`,
   `src/workspaces/template-registry.ts:106-111`, and
   `src/workspaces/adapters/claude.ts:89-113` (shifted from `:41-65` by the
@@ -88,14 +80,11 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   `src/server/local-tool-gateway.ts:35-52`, and `src/server/opentypebb.ts:70-91`.
 - `webui/` - Hono web plugin, admin-token middleware, `/api/*` routes, and
   workspace WebSocket/IPCs. `WebPlugin` starts at `src/webui/plugin.ts:73-94`;
-  core API routes are `src/webui/plugin.ts:221-245`; workspace routes are
-  `src/webui/plugin.ts:250-263`; workspace `authzLevel` changes live at
-  `src/webui/routes/workspaces.ts:702-734`; manual steward wake routes live at
-  `src/webui/routes/workspaces.ts:736-929` (both shifted from issue #88's
-  stuck-wake Inbox push addition, then again by issue #109 pulling the
-  supervisor/tick handler's `readStewardConfig` read and tick-plus-push logic
-  out into `src/workspaces/steward/{config,supervisor-scanner}.ts` so the
-  route and the new self-ticking scanner share it);
+  core and workspace routes are mounted from `src/webui/plugin.ts`. Workspace
+  `authzLevel` changes and steward wake routes live in
+  `src/webui/routes/workspaces.ts`; the wake POST starts at `:816` and the
+  manual supervisor tick starts at `:962`. The route and self-ticking scanner
+  share `src/workspaces/steward/{config,supervisor-scanner}.ts`;
   account `maxAuthzLevel` changes are
   audited in `src/webui/routes/trading-config.ts:197-207`; trading proxy is
   `src/webui/routes/trading-proxy.ts:32-41`; event ingest's external/internal
@@ -139,21 +128,20 @@ routes, launches native agent workspaces, and talks to UTA over the protocol.
   TUI is ready; the Codex adapter also injects loopback network access and
   honors `.alice/steward/core-agent-model.txt` model overrides at
   `src/workspaces/adapters/codex.ts:74-91`.
-- Manual steward wake dispatch is workspace-scoped: `src/webui/routes/workspaces.ts:760-890`
+- Manual steward wake dispatch is workspace-scoped: `src/webui/routes/workspaces.ts:816`
   acquires `.alice/steward/locks/*.json`, writes `.alice/steward/wakes/*.json`,
   reuses/resumes an existing configured interactive session, or spawns a fresh
-  one with the formatted wake as `initialPrompt` via
-  `src/webui/routes/workspaces.ts:348-394`. Existing sessions still use
+  one with the formatted wake as `initialPrompt` via `ensureStewardSession`.
+  Existing sessions still use
   `src/workspaces/steward/injector.ts:50-65` (async two-phase write + submit
   gap documented at `src/workspaces/steward/injector.ts:19-47`). Manual
-  supervisor tick at
-  `src/webui/routes/workspaces.ts:906-941` advances completed, stuck, or timed-out
+  supervisor tick at `src/webui/routes/workspaces.ts:962` advances completed, stuck, or timed-out
   wakes and writes cost state/audit log.
 - Scheduled steward wakes follow the same workspace-local files and session
   selection rule:
   issue frontmatter declares `kind: steward-wake`, scanner routes it away from
   headless at `src/workspaces/schedule/scanner.ts:203-220`, and the service
-  dispatch seam at `src/workspaces/service.ts:652-880` creates the wake, lock,
+  dispatch seam `dispatchStewardWakeMethod` at `src/workspaces/service.ts:663` creates the wake, lock,
   session, and either seeds a fresh session via `initialPrompt` or injects into
   an already-live session.
 - Alice talks to UTA through `@traderalice/uta-protocol`: `src/main.ts:15-16`,

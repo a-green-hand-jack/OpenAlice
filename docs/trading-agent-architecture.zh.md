@@ -34,7 +34,8 @@ flowchart TB
   Alice[OpenAlice<br/>workspace lifecycle + supervisor + tool gateway]
   Agent[Persistent native CLI session<br/>Codex or Claude = core-agent]
   Files[Steward workspace files<br/>wake + config + draft + ledger + marker]
-  Tools[Scoped tool catalog<br/>market / analysis / inbox / trading]
+  AliceTools[Alice domain tools<br/>market / analysis / news / inbox]
+  TradingTools[Trading tools<br/>authz-gated UTA bridge]
   UTA[UTA process<br/>account truth + trading git + guards]
   Broker[Broker / paper venue / MockBroker]
 
@@ -43,11 +44,13 @@ flowchart TB
   Alice -->|PTY inject and Enter| Agent
   Files <-->|read state; write draft| Agent
   Agent -->|alice* CLI| Alice
-  Alice --> Tools
-  Tools --> UTA
+  Alice --> AliceTools
+  Alice --> TradingTools
+  TradingTools --> UTA
   UTA <--> Broker
-  UTA --> Tools
-  Tools --> Alice
+  UTA --> TradingTools
+  AliceTools --> Alice
+  TradingTools --> Alice
   Alice -->|structured CLI result| Agent
   Agent -->|run validator| Files
   Files -->|matching finalize marker| Alice

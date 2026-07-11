@@ -35,21 +35,22 @@ state, or ownership.
   [docs/appendix/steward-v8-candidate-20260711.md](docs/appendix/steward-v8-candidate-20260711.md):
   the isolated, serial v8 candidate matrix completed 60/60 wakes and 10/10
   audit-clean cells. Its gateable result remained 7/8, with NVDA still below
-  the +25% behavior gate; the merge preserves an evaluated candidate, not a
-  claim that this performance gap is fixed or that holdout/live is open.
+  the +25% behavior gate. Merge review also found that the candidate's 70–85%
+  target was unsafe to generalize to accounts without a max-position guard, so
+  the experiment is documented but not enabled in the default instruction;
+  holdout/live remains closed.
   Persistent sessions expose an explicit server-side PTY input seam for future
   steward wake injection; see `src/workspaces/persistent-session.ts` and
   `src/workspaces/session-pool.ts`. The first manual persistent-steward wake
-  path is `POST /api/workspaces/:id/steward/wakes`, implemented in
-  `src/webui/routes/workspaces.ts:751-970` (shifted from `:744-935` by issue
-  #88's stuck-wake Inbox push addition), which acquires the account lock,
+  path is `POST /api/workspaces/:id/steward/wakes`, implemented at
+  `src/webui/routes/workspaces.ts:816`, which acquires the account lock,
   writes the workspace-local wake file, and injects a narrow `<STEWARD_WAKE>`
   into the configured interactive session instead of dispatching a new headless
   run. `POST /api/workspaces/:id/steward/supervisor/tick` advances ledger
   completions, timeouts, stuck sessions, lock release, and cost state. Scheduled
   issues with `kind: steward-wake` now route through the same persistent wake
   seam from `src/workspaces/schedule/scanner.ts:203-220` into
-  `src/workspaces/service.ts:650-913`; ordinary scheduled issues still run
+  `dispatchStewardWakeMethod` at `src/workspaces/service.ts:663`; ordinary scheduled issues still run
   headless.
 
 - Codex workspace bootstrap registers each cwd in the user-level

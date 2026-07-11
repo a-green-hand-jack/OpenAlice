@@ -35,7 +35,9 @@ invalidated by real infrastructure defects rather than reused as model evidence:
 All 10 cells were `trustworthy: true` and `audit.valid: true`: 60/60 wakes
 completed, ledger wake sets were equal, every v2 self-reference matched, all
 finalize gates passed, steward warnings were empty, and per-cell cleanup left
-zero workspaces, accounts, or processes.
+zero workspaces or accounts. Process cleanup was observed by the operator but
+was not written into the per-cell result schema, so it is not claimed as a
+machine-verifiable matrix field.
 
 | Cell              | Regime | Return | Agent maxDD | Raw verdict                               | v7 baseline              |
 | ----------------- | ------ | -----: | ----------: | ----------------------------------------- | ------------------------ |
@@ -59,16 +61,19 @@ to v7. `dev-bull-nvda` remained the only gateable failure.
 The v8 participation levers did not materially change the verdict surface:
 
 - Every cell retained the same pass/fail/observation-only class as v7.
-- Bear/chop discipline did not regress; drawdowns stayed low and no guard breach
-  or over-trading failure appeared.
+- Final bear/chop verdicts and drawdowns stayed within their gates, but this was
+  partly because deterministic guards rejected unsafe intents. At least
+  `bull-cx`, `dev-bull-3690hk`, and `dev-chop-spy` attempted roughly 70%
+  exposure before the test account's 60% max-position guard denied the add.
 - NVDA improved from +17.7% to +20.7% in the canonical row, but four isolated v8
   observations remained below +25%.
 - `dev-bull-3690hk` improved from +38.5% to +42.9%, but this did not establish a
   general policy improvement.
 
-The honest conclusion is therefore: the candidate is compatible with the
-current guard and audit regime, but it did **not** close the stable NVDA
-under-participation gap.
+The honest conclusion is therefore: the current deterministic guard and audit
+regime contained the candidate, but the prompt itself is not safe to generalize
+to an account with no max-position guard. It also did **not** close the stable
+NVDA under-participation gap.
 
 ## Infrastructure Load Acceptance
 
@@ -90,14 +95,17 @@ semantics, news/fundamental context, multi-asset allocation, or live trading.
 
 ## Maintainer Decision
 
-On 2026-07-11 the maintainer chose to merge the evaluated v8 candidate and its
-architecture documentation into `jieke/dev` as a consolidation point, then
-freeze current Ubuntu OpenAlice development and reconsider the next direction
-from a fresh handoff.
+On 2026-07-11 the maintainer chose to merge the architecture, experiment record,
+and runtime evidence into `jieke/dev` as a consolidation point, then freeze
+current Ubuntu OpenAlice development and reconsider the next direction from a
+fresh handoff. Independent merge review blocked activating the participation
+candidate in the default instruction because accounts may have no
+`max-position-size` guard.
 
 This merge means:
 
-- the candidate and its evidence are preserved in the integration branch;
+- the candidate is preserved on its experiment branch/commit and documented in
+  the integration branch, but is not enabled by default;
 - issue #126's experiment is complete enough to close;
 - the NVDA performance gap remains documented rather than represented as fixed;
 - holdout remains sealed and no paper/live promotion follows from this result.
