@@ -27,35 +27,39 @@ state, or ownership.
   [docs/steward-workspace-behavior-contract.zh.md](docs/steward-workspace-behavior-contract.zh.md);
   for the current minimal implementation design, continue to
   [docs/steward-persistent-loop-implementation.zh.md](docs/steward-persistent-loop-implementation.zh.md).
-  For the runtime information-flow diagram and performance-test market matrix,
-  see [docs/trading-agent-runtime-and-market-testing.zh.md](docs/trading-agent-runtime-and-market-testing.zh.md).
+  The current architecture and information-flow truth is
+  [docs/trading-agent-architecture.zh.md](docs/trading-agent-architecture.zh.md);
+  performance-test levels remain in
+  [docs/trading-agent-runtime-and-market-testing.zh.md](docs/trading-agent-runtime-and-market-testing.zh.md).
   The current acceptance snapshot is
-  [docs/appendix/steward-v7-spark-baseline-20260710.md](docs/appendix/steward-v7-spark-baseline-20260710.md):
-  isolated-stack v7 Spark completed 60/60 wakes, but the prompt is not frozen
-  because one guard-feasible bull cell still fails; shared-stack bootstrap is
-  blocked by the Codex trust-config concurrency defect tracked in #124.
+  [docs/appendix/steward-v8-candidate-20260711.md](docs/appendix/steward-v8-candidate-20260711.md):
+  the isolated, serial v8 candidate matrix completed 60/60 wakes and 10/10
+  audit-clean cells. Its gateable result remained 7/8, with NVDA still below
+  the +25% behavior gate. Merge review also found that the candidate's 70–85%
+  target was unsafe to generalize to accounts without a max-position guard, so
+  the experiment is documented but not enabled in the default instruction;
+  holdout/live remains closed.
   Persistent sessions expose an explicit server-side PTY input seam for future
   steward wake injection; see `src/workspaces/persistent-session.ts` and
   `src/workspaces/session-pool.ts`. The first manual persistent-steward wake
-  path is `POST /api/workspaces/:id/steward/wakes`, implemented in
-  `src/webui/routes/workspaces.ts:751-970` (shifted from `:744-935` by issue
-  #88's stuck-wake Inbox push addition), which acquires the account lock,
+  path is `POST /api/workspaces/:id/steward/wakes`, implemented at
+  `src/webui/routes/workspaces.ts:816`, which acquires the account lock,
   writes the workspace-local wake file, and injects a narrow `<STEWARD_WAKE>`
   into the configured interactive session instead of dispatching a new headless
   run. `POST /api/workspaces/:id/steward/supervisor/tick` advances ledger
   completions, timeouts, stuck sessions, lock release, and cost state. Scheduled
   issues with `kind: steward-wake` now route through the same persistent wake
   seam from `src/workspaces/schedule/scanner.ts:203-220` into
-  `src/workspaces/service.ts:650-913`; ordinary scheduled issues still run
+  `dispatchStewardWakeMethod` at `src/workspaces/service.ts:663`; ordinary scheduled issues still run
   headless.
 
-- Codex workspace bootstrap has one remaining shared-state ownership hazard:
-  `src/workspaces/adapters/codex.ts:404-426` registers each cwd by rewriting the
-  user-level `~/.codex/config.toml`. The 2026-07-10 six-way steward test proved
-  that concurrent calls can lose project blocks or produce malformed TOML.
-  Until #124 lands, do not treat `capabilities.parallelPerCwd` as proof that
-  concurrent *fresh bootstrap* is isolated; use distinct homes or serialize
-  bootstrap before launching parallel Codex workspaces.
+- Codex workspace bootstrap registers each cwd in the user-level
+  `~/.codex/config.toml`. Issue #124 hardened that shared write with an
+  in-process queue, a cross-process `O_EXCL` lock with stale reclaim, and
+  temp-file atomic replace (`src/workspaces/adapters/codex.ts:582-781`). That
+  removes the proven lost-block/malformed-TOML race, but campaign isolation is
+  still broader than config safety: shared UTA cleanup/restart can invalidate
+  other cells, so canonical matrices use isolated roots or strict serialization.
 
 - UTA is the co-located broker carrier under `services/uta/`. Its process entry
   is `services/uta/src/main.ts:40`, its account manager starts at
@@ -109,15 +113,18 @@ state, or ownership.
   Alice's audited workspace route), session records, scrollback, headless tasks,
   and workspace repos. Steward workspaces additionally carry their template-owned
   `.alice/steward/` context/ledger scaffold inside the workspace repo, including
-  `.alice/steward/validate-ledger.mjs` for local wake-marker sanity checks; Alice's
+  per-wake `drafts/`, validator-owned `ledger/decisions.jsonl`, and matching
+  `finalize/` markers; Alice's
   steward file-store helpers under `src/workspaces/steward/` read/write that
   workspace-local source of truth, and the manual wake API writes
   `.alice/steward/wakes/*.json`, `.alice/steward/locks/*.json`,
   `.alice/steward/state.json`, and `.alice/steward/supervisor.jsonl` while
-  reading `.alice/steward/ledger/decisions.jsonl`.
-  The 2026-07-10 audit found that `pendingHash`, `actions`, and duplicate-wake
-  revision semantics are not yet strict enough for a hard audit gate; #125 owns
-  that contract rather than UTA trading state.
+  reading `.alice/steward/ledger/decisions.jsonl`. New decisions use strict v2
+  typed actions and strict-pending semantics; the agent writes only a draft,
+  `validate-ledger.mjs` is the supported atomic ledger writer and publishes the
+  commit marker, and the supervisor retains receipts to detect later semantic
+  deletion or mutation. This is corruption-evident inside one agent-writable
+  trust domain, not tamper-proof account truth; UTA and the venue stay authoritative.
   The default root is `src/workspaces/config.ts:107-109`.
 
 - Secrets are not stored in plaintext data files after sealing. The machine key
