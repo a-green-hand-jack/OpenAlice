@@ -60,14 +60,17 @@ const goodCost = {
 };
 
 function entry(over: Record<string, unknown> = {}): Record<string, unknown> {
+  // Issue #139: derive the `wake:` evidence self-reference from the (possibly
+  // overridden) wakeId so entries are self-consistent by default.
+  const wakeId = (over.wakeId as string | undefined) ?? 'wake-1';
   return {
     version: 2,
-    wakeId: 'wake-1',
+    wakeId,
     at: '2026-07-10T14:01:23.000Z',
     accountId: 'mock-simulator-1',
     decision: 'no_trade',
     status: 'done',
-    completion: { reason: 'checklist complete; no entry signal', evidenceRefs: ['tool:risk'] },
+    completion: { reason: 'checklist complete; no entry signal', evidenceRefs: [`wake:${wakeId}`, 'tool:risk'] },
     checklist: goodChecklist,
     thesis: 'no thesis or entry signal',
     actions: [],
@@ -78,12 +81,24 @@ function entry(over: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
+/** Seed the active (non-terminal) wake record the #139 validator requires as its
+ *  external binding. Pass `null` to leave it absent (impersonation test), or a
+ *  terminal status to simulate a replay. */
+async function seedWakeRecord(wakeId: string, status: string): Promise<void> {
+  const file = join(wsDir, '.alice', 'steward', 'wakes', `${encodeURIComponent(wakeId)}.json`);
+  await writeFile(file, JSON.stringify({ version: 1, wakeId, status }, null, 2), 'utf8');
+}
+
 async function runValidator(
   entries: Record<string, unknown>[],
   wakeId: string,
+  opts: { seedWakeStatus?: string | null } = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const ledgerPath = join(wsDir, '.alice', 'steward', 'ledger', 'decisions.jsonl');
   await writeFile(ledgerPath, entries.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf8');
+  // Default: the validated wake is the active posted wake (external binding).
+  const seedStatus = opts.seedWakeStatus === undefined ? 'injected' : opts.seedWakeStatus;
+  if (seedStatus !== null) await seedWakeRecord(wakeId, seedStatus);
   const res = spawnSync(
     process.execPath,
     ['.alice/steward/validate-ledger.mjs', wakeId],
@@ -399,5 +414,50 @@ describe('generated steward validate-ledger.mjs integrity cross-check (issue #13
     const second = JSON.parse(await readFile(markerPathFor('wake-1'), 'utf8'));
     expect(second.fingerprint).toBe(canonicalDecisionFingerprint(corrected));
     expect(second.fingerprint).not.toBe(first.fingerprint);
+  });
+
+  // ── issue #139 identity binding ───────────────────────────────────────
+  it('rejects an entry whose wake: evidence self-reference contradicts the top-level wakeId, and writes no marker (regression: copied suffix)', async () => {
+    const res = await runValidator([
+      entry({ wakeId: 'wake-1', completion: { reason: 'done', evidenceRefs: ['wake:wake-prior-copied', 'tool:risk'] } }),
+    ], 'wake-1');
+    expect(res.code).toBe(1);
+    expect(res.stderr).toMatch(/self-reference|references a different wake/);
+    expect(existsSync(markerPathFor('wake-1'))).toBe(false);
+  });
+
+  it('rejects an entry missing the wake: self-reference', async () => {
+    const res = await runValidator([
+      entry({ wakeId: 'wake-1', completion: { reason: 'done', evidenceRefs: ['tool:risk'] } }),
+    ], 'wake-1');
+    expect(res.code).toBe(1);
+    expect(res.stderr).toMatch(/must include the self-reference/);
+  });
+
+  it('rejects finalizing a wake with no active wake record (impersonation / phantom id) and writes no marker', async () => {
+    const res = await runValidator([entry({ wakeId: 'ghost-wake' })], 'ghost-wake', { seedWakeStatus: null });
+    expect(res.code).toBe(1);
+    expect(res.stderr).toMatch(/no active posted wake/);
+    expect(existsSync(markerPathFor('ghost-wake'))).toBe(false);
+  });
+
+  it('rejects re-finalizing an already-terminal wake (replay) and writes no marker', async () => {
+    const res = await runValidator([entry({ wakeId: 'wake-replay' })], 'wake-replay', { seedWakeStatus: 'done' });
+    expect(res.code).toBe(1);
+    expect(res.stderr).toMatch(/already done|cannot be re-finalized/);
+    expect(existsSync(markerPathFor('wake-replay'))).toBe(false);
+  });
+
+  it('accepts and publishes a marker once the top-level wakeId is corrected to match the active wake + evidence', async () => {
+    // First attempt: contradictory (fails, no marker).
+    const bad = await runValidator([
+      entry({ wakeId: 'wake-fix', completion: { reason: 'done', evidenceRefs: ['wake:wake-other', 'tool:risk'] } }),
+    ], 'wake-fix');
+    expect(bad.code).toBe(1);
+    expect(existsSync(markerPathFor('wake-fix'))).toBe(false);
+    // Corrected: self-consistent entry for the active wake → validates + marker.
+    const good = await runValidator([entry({ wakeId: 'wake-fix' })], 'wake-fix');
+    expect(good.code).toBe(0);
+    expect(existsSync(markerPathFor('wake-fix'))).toBe(true);
   });
 });
