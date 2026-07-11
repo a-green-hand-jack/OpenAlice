@@ -223,6 +223,43 @@ describe('StewardLockStore.acquire — uncontended path is unchanged (issue #154
   });
 });
 
+describe('StewardLockStore.release — serialized with acquire (issue #154 review m1)', () => {
+  it('a late release of an expired lock racing a reclaim never deletes the reclaimer\'s fresh lock — the account always ends up held by the successor', async () => {
+    const ITERATIONS = 200;
+    const store = createStewardLockStore(dir);
+
+    for (let iter = 0; iter < ITERATIONS; iter += 1) {
+      const accountId = `release-race-${iter}`;
+      // Seed an EXPIRED lock still owned by a hung wake W1.
+      await store.acquire({
+        accountId,
+        wakeId: 'wake-hung',
+        now: '2026-07-08T14:00:00.000Z',
+        expiresAt: '2026-07-08T14:03:00.000Z',
+      });
+
+      // W1's late release races a fresh reclaim by W2. Unserialized, the
+      // release's get-then-rm could read W1, lose the CPU while the reclaim
+      // writes W2, then rm W2's healthy lock. Serialized, either order leaves
+      // W2 holding the lock.
+      const [, reclaimed] = await Promise.all([
+        store.release(accountId, 'wake-hung'),
+        store.acquire({
+          accountId,
+          wakeId: 'wake-successor',
+          now: '2026-07-08T14:03:01.000Z',
+          expiresAt: '2026-07-08T14:06:00.000Z',
+        }),
+      ]);
+
+      expect(reclaimed.wakeId).toBe('wake-successor');
+      const persisted = await store.get(accountId);
+      expect(persisted).not.toBeNull();
+      expect(persisted?.wakeId).toBe('wake-successor');
+    }
+  });
+});
+
 describe('StewardLockStore.get — torn/legacy-corrupt lock residue self-heals (issue #154 review M1)', () => {
   it('treats an unparseable lock file as absent rather than throwing, and a subsequent acquire overwrites it cleanly', async () => {
     const store = createStewardLockStore(dir);

@@ -167,11 +167,23 @@ export class StewardLockStore {
     return locks;
   }
 
+  /**
+   * Serialized behind the same per-path mutex as `acquire` (#154 review m1):
+   * unserialized, a LATE release of an already-expired lock could interleave
+   * with a concurrent reclaim — its `get` reads the old record, the reclaimer
+   * writes a fresh lock, then the release's `rm` deletes the reclaimer's
+   * healthy lock, reopening the double-acquire this file exists to prevent.
+   * Under the mutex the release either sees the reclaimer's record (wakeId
+   * mismatch → no-op) or runs entirely before it (rm of its own lock).
+   */
   async release(accountId: string, wakeId: string): Promise<boolean> {
-    const current = await this.get(accountId);
-    if (!current || current.wakeId !== wakeId) return false;
-    await rm(this.pathFor(accountId), { force: true });
-    return true;
+    const path = this.pathFor(accountId);
+    return withLockFileMutex(path, async () => {
+      const current = await this.get(accountId);
+      if (!current || current.wakeId !== wakeId) return false;
+      await rm(path, { force: true });
+      return true;
+    });
   }
 
   pathFor(accountId: string): string {
