@@ -1,6 +1,6 @@
 # Steward 方向与实施计划
 
-> 版本：v2.2（2026-07-11）
+> 版本：v2.3（2026-07-11）
 >
 > 地位：**唯一活动路线与授权真源**。当前只授权 D0 文档与分支收口；不授权 runtime、
 > prompt、campaign、paper/live 或 broker mutation 行为变更。旧 v1.1 及 P2/P3 阶段计划已归档到
@@ -138,7 +138,7 @@ workspace 保留 PTY；无人值守默认翻转（缺省 controlFace ⇒ machine
 | 阶段 | 目标                                                           | 当前授权               | 完成门                                                                                      |
 | ---- | -------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------- |
 | D0   | 统一方向、归档旧文档、收口遗留 branch                          | **已授权，当前阶段**   | canonical docs 无矛盾；旧 branch 进入 ancestry 且 runtime tree 零变化                       |
-| D1   | 设计 Decision Intent、Information Snapshot、Risk Envelope 契约，以及 wake 控制面迁移（app-server / agent-sdk，§4.4）设计 | D0 后只允许文档/设计   | schema、责任边界、失败语义、迁移影响经 maintainer 批准；控制面设计含协议版本 pin 与回退策略 |
+| D1   | 设计 Decision Intent、Information Snapshot、Risk Envelope 契约，以及 wake 控制面迁移（app-server / agent-sdk，§4.4）设计 | 契约设计已批准（PR #157，2026-07-11）；控制面迁移已落地（§4.4）；**runtime 实现仍未授权** | schema、责任边界、失败语义、迁移影响经 maintainer 批准；控制面设计含协议版本 pin 与回退策略 |
 | D2   | 补齐 autonomous execution 的确定性安全前置                     | 未授权实现             | mandatory envelope、sizing、revoke/admission、外部 ledger commit point 的范围经独立安全审查 |
 | D3   | 建立三层 eval harness                                          | 未授权实现             | protocol/decision/execution 指标分离，guard containment 不计入策略得分                      |
 | D4   | Proposal-only 决策试点                                         | 未授权运行             | 多资产/事件化 as-of replay；只产 proposal，不 auto-push                                     |
@@ -154,6 +154,7 @@ workspace 保留 PTY；无人值守默认翻转（缺省 controlFace ⇒ machine
 | 文档                                             | 唯一职责                                | 不承担什么                  |
 | ------------------------------------------------ | --------------------------------------- | --------------------------- |
 | 本文                                             | 活动方向、阶段、授权与停止条件          | 具体实现细节、实验流水账    |
+| `steward-decision-contracts.zh.md`               | Decision Intent / Information Snapshot / Risk Envelope 契约 schema 与失败语义（D1 交付物，2026-07-11 批准） | 方向/阶段授权、runtime 实现细节 |
 | `trading-agent-architecture.zh.md`               | 当前 Alice/Agent/UTA 结构和 IN/OUT 真相 | 未来路线授权                |
 | `steward-workspace-behavior-contract.zh.md`      | steward 应怎样判断、记录和交付          | broker/UTA 实现说明         |
 | `trading-agent-runtime-and-market-testing.zh.md` | protocol/decision/execution 评测方法    | 活动产品路线                |
@@ -196,6 +197,10 @@ workspace 保留 PTY；无人值守默认翻转（缺省 controlFace ⇒ machine
 
 ## 9. 变更记录
 
+- v2.3（2026-07-11）：D1 契约设计交付并获 maintainer 批准
+  （[steward-decision-contracts.zh.md](steward-decision-contracts.zh.md) v0.2，issue #156，
+  PR #157）；该文档登记入 §6 真源表，职责为三契约 schema 与失败语义。D1 的设计部分
+  就此完成；**不改变 D2+ 授权语义——runtime 实现仍须另行授权**。
 - v2.2（2026-07-11）：§4.4 wake 控制面迁移已落地（issue #146，S0–S6，PR #147–#151）。
   无人值守 wake 的默认控制面从 PTY 文本注入翻转为原生 CLI 机器协议
   （`codex app-server` / `@anthropic-ai/claude-agent-sdk`）；显式 `controlFace: 'pty'` 作为
