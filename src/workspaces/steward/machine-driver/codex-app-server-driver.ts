@@ -485,6 +485,19 @@ export class CodexAppServerDriver implements StewardMachineDriver {
     waiter.settled = true;
     this.clearTimers(waiter);
     this.inflight.delete(waiter.threadId);
+    // Issue #146 S4 (first-review MINOR-2): a FATAL turn settle that is not a
+    // completion — a non-retryable `error` notification, an app-server exit, or
+    // a dispose — clears the thread's `alive` flag. Without this, a turn that
+    // dies AFTER `turn/started` leaves `alive` true, so the supervisor never
+    // sees the thread as vanished and waits out the full deadline. This mirrors
+    // the PTY "session vanished → stuck" fast path: `isThreadLive` now reports
+    // gone, so the next supervisor tick transitions the wake to `stuck`. The OS
+    // process may still be running; `ensureThread` re-marks alive on the next
+    // resume, so future wakes are unaffected. NOTE: a normally-completed turn
+    // (including a deadline `interrupted` one) settles via `settleWaiter`, which
+    // deliberately does NOT touch `alive`.
+    const state = this.threads.get(waiter.threadId);
+    if (state) state.alive = false;
     waiter.reject(err);
   }
 

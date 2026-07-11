@@ -90,7 +90,12 @@ import {
 } from './steward/index.js';
 import { MachineDriverRegistry } from './steward/machine-driver/driver-registry.js';
 import { createMachineThreadStore } from './steward/machine-driver/thread-store.js';
-import { buildMachineDriver, dispatchMachineWake, resolveStewardControlFace } from './steward/machine-driver/dispatch.js';
+import {
+  buildMachineDriver,
+  dispatchStewardWakeControlFace,
+  type StewardWakeControlFaceInput,
+  type StewardWakeControlFaceOutcome,
+} from './steward/machine-driver/dispatch.js';
 import type { StewardMachineDriver } from './steward/machine-driver/types.js';
 
 /**
@@ -130,6 +135,24 @@ export interface WorkspaceService {
   refreshStewardRuntime(
     meta: Pick<WorkspaceMeta, 'template' | 'dir'>,
   ): Promise<{ readonly ok: true } | { readonly ok: false; readonly message: string }>;
+  /**
+   * Decide a steward wake's control face and, when it resolves to the MACHINE
+   * (codex app-server) face, dispatch it through the shared driver registry +
+   * `dispatchMachineWake` (issue #146 S4). Returns `{ face: 'pty' }` — with an
+   * optional `declineReason` the caller logs — when the wake must take the
+   * historical PTY inline flow, which the caller owns byte-for-byte. The machine
+   * branch owns its own wake-record creation (keyed off the native thread UUID),
+   * account-lock lifecycle, thread rotation, and structured events, identical
+   * whether the cron scanner or the HTTP route drives it. The caller runs
+   * `refreshStewardRuntime` BEFORE this. Throws `StewardLockConflictError` on an
+   * account-lock conflict and a plain `Error` on a duplicate wake / dispatch
+   * failure (the machine branch has already released the lock + marked the wake
+   * `error` in the latter case).
+   */
+  dispatchStewardWakeControlFace(
+    meta: WorkspaceMeta,
+    input: StewardWakeControlFaceInput,
+  ): Promise<StewardWakeControlFaceOutcome>;
   publicMeta(w: WorkspaceMeta): Promise<unknown>;
   /**
    * Probe the host PATH for each registered adapter's CLI binary. Keyed by
@@ -698,6 +721,35 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     });
   };
 
+  // Issue #146 S4 (item 1): the SHARED control-face gate + machine dispatch, used
+  // by BOTH the cron scanner (`dispatchStewardWakeMethod` below) and the HTTP
+  // route (`WorkspaceService.dispatchStewardWakeControlFace`). The registry side
+  // effects (get-or-create / dispose the per-workspace driver) are bound here,
+  // where the `MachineDriverRegistry` closure lives, and passed into the pure
+  // `dispatchStewardWakeControlFace` as `acquireDriver`/`rotateDriver`. A machine
+  // rotation (item 5) disposes the poisoned driver and re-creates a fresh one via
+  // the SAME `makeMachineDriver` seam (real spawn or `opts.machineDriverFactory`).
+  const dispatchStewardWakeControlFaceMethod = (
+    ws: WorkspaceMeta,
+    input: StewardWakeControlFaceInput,
+  ): Promise<StewardWakeControlFaceOutcome> =>
+    dispatchStewardWakeControlFace(input, {
+      wsId: ws.id,
+      workspaceDir: ws.dir,
+      cwd: ws.dir,
+      workspaceAgents: ws.agents,
+      getAdapter: (id) => adapters.get(id),
+      wakeStore: createStewardWakeStore(ws.dir),
+      lockStore: createStewardLockStore(ws.dir),
+      threadStore: createMachineThreadStore(ws.dir),
+      logger: launcherLogger,
+      acquireDriver: (adapter) => machineDriverRegistry.getOrCreate(ws.id, () => makeMachineDriver(ws, adapter)),
+      rotateDriver: async (adapter) => {
+        await machineDriverRegistry.dispose(ws.id);
+        return machineDriverRegistry.getOrCreate(ws.id, () => makeMachineDriver(ws, adapter));
+      },
+    });
+
   const dispatchStewardWakeMethod = async (
     ws: WorkspaceMeta,
     wake: ScheduleStewardWakeInput,
@@ -712,8 +764,6 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     if (!refreshed.ok) {
       throw new Error(`steward runtime refresh failed; not dispatching wake: ${refreshed.message}`);
     }
-    const wakeStore = createStewardWakeStore(ws.dir);
-    const lockStore = createStewardLockStore(ws.dir);
     const config = await readStewardConfig(ws);
     const envelope: StewardWakeEnvelope = {
       reason: wake.reason,
@@ -724,27 +774,44 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       ...(wake.marketContext !== undefined ? { marketContext: wake.marketContext } : {}),
       ...(wake.riskContext !== undefined ? { riskContext: wake.riskContext } : {}),
     };
-    // Issue #146: pick the control face. Machine is opt-in via
-    // `.alice/steward/config.json` `controlFace:'machine'` and honored ONLY for a
-    // codex-enabled, adapter-registered workspace; any other configuration warns
-    // and takes the historical PTY path (S3 never fails the wake for this
-    // reason — MINOR-3 review: an unregistered adapter declines too, it does not
-    // throw).
-    const controlFace = resolveStewardControlFace({
+
+    // Issue #146 S4: the control-face decision + (when honored) the machine
+    // dispatch run through the SAME shared method the HTTP route uses. A machine
+    // wake is fully handled here (wake-record creation, lock, rotation, events);
+    // a PTY wake falls through to the historical inline flow below, byte-identical.
+    const outcome = await dispatchStewardWakeControlFaceMethod(ws, {
       config,
       requestedAgent: wake.agent,
-      workspaceAgents: ws.agents,
-      getAdapter: (id) => adapters.get(id),
+      wakeId: wake.wakeId,
+      deadline,
+      now,
+      envelope,
     });
-    if (controlFace.declineReason) {
+    if (outcome.face === 'machine') {
+      launcherLogger.info('schedule.steward_wake_injected', {
+        wsId: ws.id,
+        issueId: wake.issueId,
+        wakeId: wake.wakeId,
+        sessionId: outcome.threadId,
+        controlFace: 'machine',
+        resumed: outcome.resumed,
+        threadReset: outcome.threadReset,
+      });
+      return { wakeId: wake.wakeId };
+    }
+    if (outcome.declineReason) {
       launcherLogger.warn('schedule.steward_machine_face_declined', {
         wsId: ws.id,
         wakeId: wake.wakeId,
-        agent: controlFace.agent,
-        reason: controlFace.declineReason,
+        reason: outcome.declineReason,
       });
     }
 
+    // PTY inline flow (unchanged from S3, save that the wake-exists + lock it
+    // shared with the machine branch now live here — the shared method does its
+    // own for the machine face and returns `{ face: 'pty' }` with no side effects).
+    const wakeStore = createStewardWakeStore(ws.dir);
+    const lockStore = createStewardLockStore(ws.dir);
     if (await wakeStore.get(wake.wakeId)) {
       throw new Error(`steward wake already exists: ${wake.wakeId}`);
     }
@@ -762,42 +829,6 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
 
     let created = false;
     try {
-      if (controlFace.useMachine && controlFace.adapter) {
-        // Issue #146 (S3): dispatch through the codex app-server driver instead of
-        // PTY spawn+inject. Same preflight above (refresh, wake-exists, lock); the
-        // wake is created inside `dispatchMachineWake` keyed off the native thread
-        // UUID. The turn runs detached — the supervisor terminalizes it from the
-        // ledger + finalize markers exactly as for a PTY wake. Driver construction
-        // (real spawn or `opts.machineDriverFactory`) happens HERE, only once
-        // dispatch is actually committed — not during the earlier decline-vs-honor
-        // decision — so a duplicate-wakeId early-throw never spins up a live driver.
-        const adapter = controlFace.adapter;
-        const driver = machineDriverRegistry.getOrCreate(ws.id, () => makeMachineDriver(ws, adapter));
-        const result = await dispatchMachineWake({
-          workspaceDir: ws.dir,
-          wsId: ws.id,
-          cwd: ws.dir,
-          driver,
-          wakeStore,
-          threadStore: createMachineThreadStore(ws.dir),
-          wake: { wakeId: wake.wakeId, deadline, envelope },
-          now,
-          logger: launcherLogger,
-          onWakeCreated: () => {
-            created = true;
-          },
-        });
-        launcherLogger.info('schedule.steward_wake_injected', {
-          wsId: ws.id,
-          issueId: wake.issueId,
-          wakeId: wake.wakeId,
-          sessionId: result.threadId,
-          controlFace: 'machine',
-          resumed: result.resumed,
-          threadReset: result.threadReset,
-        });
-        return { wakeId: wake.wakeId };
-      }
       const record = await wakeStore.create({
         wakeId: wake.wakeId,
         deadline,
@@ -1502,6 +1533,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     transcriptWatcher,
     resolveAdapter,
     refreshStewardRuntime: (meta) => creator.refreshStewardRuntime(meta),
+    dispatchStewardWakeControlFace: dispatchStewardWakeControlFaceMethod,
     publicMeta,
     detectAgents,
     computeSpawnPlan,

@@ -310,6 +310,36 @@ describe('CodexAppServerDriver', () => {
     expect(interruptReceived).toBe(true);
     expect(outcome.interrupted).toBe(true);
     expect(outcome.status).toBe('interrupted');
+    // Issue #146 S4 (MINOR-2): a normally-settled turn — completion OR a deadline
+    // `interrupted` one — must NOT clear thread liveness. Only a FATAL, non-
+    // completion settle does (see the fatal-error test below).
+    expect(driver.isThreadLive(threadId)).toBe(true);
+
+    await driver.dispose();
+  });
+
+  it('clears thread liveness on a FATAL (non-retryable) error settle so the supervisor can mark the wake stuck (issue #146 S4)', async () => {
+    const server = new FakeCodexServer();
+    respondHandshake(server, {
+      onTurnStart: (_msg, srv) => {
+        // Turn genuinely starts, THEN dies fatally mid-flight.
+        sendTurnStarted(srv);
+        srv.send({
+          method: 'error',
+          params: { error: { message: 'fatal boom' }, threadId: THREAD_ID, turnId: TURN_ID, willRetry: false },
+        });
+      },
+    });
+    const driver = makeDriver(server);
+
+    const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch' });
+    await expect(driver.runTurn(threadId, 'x')).rejects.toBeInstanceOf(MachineDriverProtocolError);
+
+    // A fatal turn settle that is NOT a completion clears `alive` — mirrors the
+    // PTY "session vanished → stuck" fast path. The next supervisor tick sees the
+    // thread gone and transitions the wake to `stuck` instead of waiting out the
+    // full deadline. (The OS process may still run; the next resume re-marks it.)
+    expect(driver.isThreadLive(threadId)).toBe(false);
 
     await driver.dispose();
   });

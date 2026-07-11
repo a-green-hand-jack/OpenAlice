@@ -12,8 +12,11 @@ import {
   buildMachineDriver,
   decideStewardControlFace,
   dispatchMachineWake,
+  dispatchStewardWakeControlFace,
   resolveStewardControlFace,
   type DispatchMachineWakeInput,
+  type StewardWakeControlFaceDeps,
+  type StewardWakeControlFaceInput,
 } from './dispatch.js';
 import { createMachineThreadStore } from './thread-store.js';
 import type {
@@ -21,6 +24,7 @@ import type {
   EnsureThreadOptions,
   RunTurnOptions,
   StewardMachineDriver,
+  ThreadTelemetry,
   TurnOutcome,
 } from './types.js';
 import {
@@ -62,13 +66,14 @@ interface MockDriverOverrides {
   readonly ensureThread?: (o: EnsureThreadOptions) => Promise<{ threadId: string; resumed: boolean }>;
   readonly runTurn?: (threadId: string, input: string, o?: RunTurnOptions) => Promise<TurnOutcome>;
   readonly isThreadLive?: (threadId: string) => boolean;
+  readonly readTelemetry?: (threadId: string) => ThreadTelemetry | null;
 }
 
 interface MockDriver {
   readonly driver: StewardMachineDriver;
   readonly calls: {
     ensureThread: EnsureThreadOptions[];
-    runTurn: { threadId: string; input: string }[];
+    runTurn: { threadId: string; input: string; deadlineMs?: number }[];
   };
 }
 
@@ -78,7 +83,7 @@ interface MockDriver {
 function makeMockDriver(overrides: MockDriverOverrides = {}): MockDriver {
   const calls = {
     ensureThread: [] as EnsureThreadOptions[],
-    runTurn: [] as { threadId: string; input: string }[],
+    runTurn: [] as { threadId: string; input: string; deadlineMs?: number }[],
   };
   const driver: StewardMachineDriver = {
     ensureThread: async (o) => {
@@ -87,14 +92,14 @@ function makeMockDriver(overrides: MockDriverOverrides = {}): MockDriver {
       return { threadId: 'thread-fresh', resumed: o.threadId !== undefined };
     },
     runTurn: async (threadId, input, o) => {
-      calls.runTurn.push({ threadId, input });
+      calls.runTurn.push({ threadId, input, ...(o?.deadlineMs !== undefined ? { deadlineMs: o.deadlineMs } : {}) });
       if (overrides.runTurn) return overrides.runTurn(threadId, input, o);
       o?.onEvent?.({ type: 'turn-started', threadId, turnId: 'turn-1' });
       return COMPLETED;
     },
     interruptTurn: async () => {},
     isThreadLive: (threadId) => (overrides.isThreadLive ? overrides.isThreadLive(threadId) : true),
-    readTelemetry: () => null,
+    readTelemetry: (threadId) => (overrides.readTelemetry ? overrides.readTelemetry(threadId) : null),
     dispose: async () => {},
   };
   return { driver, calls };
@@ -375,6 +380,189 @@ describe('dispatchMachineWake (issue #146, S3)', () => {
     });
     expect(dead.transitions[0]).toMatchObject({ wakeId: 'wake-m', to: 'stuck', reason: 'session_not_running' });
     expect((await createStewardWakeStore(dir).get('wake-m'))?.status).toBe('stuck');
+  });
+});
+
+describe('dispatchMachineWake deadline + interrupt (issue #146 S4, item 2)', () => {
+  it('threads the wake deadline into runTurn as deadlineMs (> 0)', async () => {
+    const { driver, calls } = makeMockDriver();
+    await dispatchMachineWake(baseInput(driver));
+    expect(calls.runTurn[0]?.deadlineMs).toBeGreaterThan(0);
+  });
+
+  it('a deadline-interrupted turn emits machine_turn_interrupted (NOT _failed) and the wake stays injected', async () => {
+    const { driver } = makeMockDriver({
+      runTurn: async (threadId, _input, o) => {
+        o?.onEvent?.(turnStarted(threadId)); // turn/start accepted → injected
+        return { turnId: 'turn-1', status: 'interrupted', agentMessage: null, durationMs: null, interrupted: true };
+      },
+    });
+    const result = await dispatchMachineWake(baseInput(driver));
+    expect(result.injectedAt).toBeTruthy();
+
+    // The dispatcher marked it injected — the supervisor still owns `timeout`.
+    expect((await createStewardWakeStore(dir).get('wake-m'))?.status).toBe('injected');
+
+    await waitFor(async () => (await readSupervisorEvents()).some((e) => e['type'] === 'machine_turn_interrupted'));
+    const events = await readSupervisorEvents();
+    expect(events.some((e) => e['type'] === 'machine_turn_failed')).toBe(false);
+    expect(events.find((e) => e['type'] === 'machine_turn_interrupted')).toMatchObject({
+      wakeId: 'wake-m',
+      status: 'interrupted',
+    });
+  });
+});
+
+describe('dispatchMachineWake bounded turn/started wait (issue #146 S4, item 3)', () => {
+  it('fails the dispatch when turn/started is never observed, leaving the wake queued + emitting an event', async () => {
+    let wakeCreated = false;
+    const { driver } = makeMockDriver({
+      // turn/start is accepted (never rejects) but turn/started never fires and
+      // the turn never settles — the bounded wait must break the deadlock.
+      runTurn: () => new Promise<TurnOutcome>(() => undefined),
+    });
+    await expect(
+      dispatchMachineWake(baseInput(driver, { startedTimeoutMs: 20, onWakeCreated: () => { wakeCreated = true; } })),
+    ).rejects.toThrow(/not observed within/);
+
+    expect(wakeCreated).toBe(true);
+    // Same path as a pre-start rejection: created but never injected.
+    expect((await createStewardWakeStore(dir).get('wake-m'))?.status).toBe('queued');
+    const timeout = (await readSupervisorEvents()).find((e) => e['type'] === 'machine_turn_dispatch_timeout');
+    expect(timeout).toMatchObject({ wakeId: 'wake-m', timeoutMs: 20 });
+  });
+});
+
+describe('machine-thread rotation on context overflow (issue #146 S4, item 5)', () => {
+  const CONTEXT_WINDOW = 100_000;
+  const overThreshold: ThreadTelemetry = {
+    totalTokens: 80_000, inputTokens: 80_000, cachedInputTokens: 0, outputTokens: 0,
+    contextWindow: CONTEXT_WINDOW, updatedAt: NOW,
+  };
+  const underThreshold: ThreadTelemetry = {
+    totalTokens: 1_000, inputTokens: 1_000, cachedInputTokens: 0, outputTokens: 0,
+    contextWindow: CONTEXT_WINDOW, updatedAt: NOW,
+  };
+  const echoResume = async (o: EnsureThreadOptions): Promise<{ threadId: string; resumed: boolean }> => ({
+    threadId: o.threadId ?? 'thread-fresh',
+    resumed: o.threadId !== undefined,
+  });
+
+  async function seedThread(threadId = 'thread-old'): Promise<void> {
+    await createMachineThreadStore(dir).write({
+      threadId, createdAt: '2026-07-01T00:00:00.000Z', lastTurnAt: '2026-07-07T00:00:00.000Z',
+    });
+  }
+
+  it('over threshold: disposes the poisoned driver, starts a fresh thread, records session_rotated', async () => {
+    await seedThread('thread-old');
+    const poisoned = makeMockDriver({ readTelemetry: () => overThreshold });
+    const fresh = makeMockDriver({
+      ensureThread: async (o) => {
+        expect(o.threadId).toBeUndefined(); // rotation forces a FRESH thread
+        return { threadId: 'thread-rotated', resumed: false };
+      },
+    });
+    const rotateThread = vi.fn(async () => fresh.driver);
+
+    const result = await dispatchMachineWake(baseInput(poisoned.driver, { rotateThread, config: {} }));
+
+    expect(rotateThread).toHaveBeenCalledTimes(1);
+    expect(result.threadId).toBe('thread-rotated');
+    // The turn ran on the FRESH driver, never the poisoned one.
+    expect(fresh.calls.runTurn).toHaveLength(1);
+    expect(poisoned.calls.runTurn).toHaveLength(0);
+    expect((await createStewardWakeStore(dir).get('wake-m'))?.sessionId).toBe('thread-rotated');
+    expect((await createMachineThreadStore(dir).read())?.threadId).toBe('thread-rotated');
+    const rotated = (await readSupervisorEvents()).find((e) => e['type'] === 'session_rotated');
+    expect(rotated).toMatchObject({ disposedSessionId: 'thread-old', newSessionId: 'thread-rotated' });
+  });
+
+  it('under threshold: resumes the stored thread, never rotates', async () => {
+    await seedThread('thread-old');
+    const { driver } = makeMockDriver({ readTelemetry: () => underThreshold, ensureThread: echoResume });
+    const rotateThread = vi.fn(async () => makeMockDriver().driver);
+
+    const result = await dispatchMachineWake(baseInput(driver, { rotateThread, config: {} }));
+
+    expect(rotateThread).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ threadId: 'thread-old', resumed: true });
+    expect((await readSupervisorEvents()).some((e) => e['type'] === 'session_rotated')).toBe(false);
+  });
+
+  it('no telemetry: resumes the stored thread (never blocks a wake on a missing snapshot)', async () => {
+    await seedThread('thread-old');
+    const { driver } = makeMockDriver({ readTelemetry: () => null, ensureThread: echoResume });
+    const rotateThread = vi.fn(async () => makeMockDriver().driver);
+
+    const result = await dispatchMachineWake(baseInput(driver, { rotateThread, config: {} }));
+
+    expect(rotateThread).not.toHaveBeenCalled();
+    expect(result.threadId).toBe('thread-old');
+  });
+});
+
+describe('dispatchStewardWakeControlFace — shared gate + factory seam (issue #146 S4, item 1)', () => {
+  function baseDeps(
+    acquireDriver: (adapter: unknown) => StewardMachineDriver,
+    over: Partial<StewardWakeControlFaceDeps> = {},
+  ): StewardWakeControlFaceDeps {
+    return {
+      wsId: 'ws-1',
+      workspaceDir: dir,
+      cwd: dir,
+      workspaceAgents: ['codex'],
+      getAdapter: (id) => (id === 'codex' ? codexAdapter : undefined),
+      wakeStore: createStewardWakeStore(dir),
+      lockStore: createStewardLockStore(dir),
+      threadStore: createMachineThreadStore(dir),
+      logger: NOOP_LOGGER,
+      acquireDriver,
+      rotateDriver: async (adapter) => acquireDriver(adapter),
+      ...over,
+    };
+  }
+  const input = (config: Record<string, unknown>): StewardWakeControlFaceInput => ({
+    config, requestedAgent: undefined, wakeId: 'wake-cf', deadline: FUTURE_DEADLINE, now: NOW, envelope,
+  });
+
+  it('PTY config: returns face:pty, never invokes the driver factory, no wake/lock side effects', async () => {
+    const factory = vi.fn(() => makeMockDriver().driver);
+    const outcome = await dispatchStewardWakeControlFace(input({}), baseDeps(factory));
+
+    expect(outcome).toEqual({ face: 'pty' });
+    expect(factory).not.toHaveBeenCalled();
+    expect(await createStewardWakeStore(dir).get('wake-cf')).toBeNull();
+  });
+
+  it('machine config: invokes the factory once, dispatches, returns the injected wake', async () => {
+    const factory = vi.fn(() => makeMockDriver().driver);
+    const outcome = await dispatchStewardWakeControlFace(input({ controlFace: 'machine' }), baseDeps(factory));
+
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(outcome.face).toBe('machine');
+    if (outcome.face === 'machine') {
+      expect(outcome.wake.status).toBe('injected');
+      expect(outcome.wake.controlFace).toBe('machine');
+      expect(outcome.threadId).toBe('thread-fresh');
+    }
+  });
+
+  it('machine dispatch failure before injection releases the account lock and rethrows', async () => {
+    const factory = vi.fn(() => makeMockDriver({
+      runTurn: async () => { throw new Error('turn/start rejected'); },
+    }).driver);
+
+    await expect(
+      dispatchStewardWakeControlFace(input({ controlFace: 'machine' }), baseDeps(factory)),
+    ).rejects.toThrow(/turn\/start rejected/);
+
+    // Lock released → the same account can be re-acquired for a new wake.
+    await expect(
+      createStewardLockStore(dir).acquire({
+        accountId: envelope.accountId, wakeId: 'wake-next', now: NOW, expiresAt: FUTURE_DEADLINE,
+      }),
+    ).resolves.toBeTruthy();
   });
 });
 
