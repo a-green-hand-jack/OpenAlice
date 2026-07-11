@@ -17,6 +17,8 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { canonicalDecisionFingerprint } from '../../steward/ledger-receipt.js';
+
 const here = dirname(fileURLToPath(import.meta.url));
 const bootstrapPath = join(here, 'bootstrap.mjs');
 
@@ -176,5 +178,166 @@ describe('generated steward validate-ledger.mjs (issue #125 v2)', () => {
     ], 'wake-dup');
     expect(res.code).toBe(1);
     expect(res.stderr).toMatch(/exactly one is allowed/);
+  });
+});
+
+describe('generated steward validate-ledger.mjs integrity cross-check (issue #134)', () => {
+  async function writeWakeRecord(rec: Record<string, unknown>): Promise<void> {
+    const file = join(wsDir, '.alice', 'steward', 'wakes', `${encodeURIComponent(rec.wakeId as string)}.json`);
+    await writeFile(file, `${JSON.stringify(rec, null, 2)}\n`, 'utf8');
+  }
+
+  function terminalWakeRecord(wakeId: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      version: 1,
+      wakeId,
+      status: 'done',
+      createdAt: '2026-07-10T14:00:00.000Z',
+      injectedAt: '2026-07-10T14:00:05.000Z',
+      completedAt: '2026-07-10T14:01:23.000Z',
+      deadline: '2026-07-10T14:10:00.000Z',
+      sessionId: 'sess-1',
+      envelope: {
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      },
+      ...over,
+    };
+  }
+
+  it('passes the current wake when a prior terminal wake still matches its receipt (TS/JS fingerprint agreement)', async () => {
+    const prior = entry({ wakeId: 'wake-prior', thesis: 'prior decision' });
+    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
+    await writeWakeRecord(terminalWakeRecord('wake-prior', {
+      ledgerReceipt: {
+        version: 1,
+        wakeId: 'wake-prior',
+        status: 'done',
+        decision: 'no_trade',
+        at: prior.at,
+        accountId: prior.accountId,
+        fingerprint: canonicalDecisionFingerprint(prior),
+        recordedAt: '2026-07-10T14:02:00.000Z',
+      },
+    }));
+    const res = await runValidator([prior, current], 'wake-cur');
+    expect(res.stderr).toBe('');
+    expect(res.code).toBe(0);
+  });
+
+  it('fails the current wake when a prior terminal wake\'s ledger entry disappeared (regression 4)', async () => {
+    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
+    // A prior done wake exists, but its ledger line is gone — only the current
+    // wake's entry remains.
+    await writeWakeRecord(terminalWakeRecord('wake-prior'));
+    const res = await runValidator([current], 'wake-cur');
+    expect(res.code).toBe(1);
+    expect(res.stderr).toMatch(/terminal wake wake-prior .*has no ledger entry/);
+  });
+
+  it('fails the current wake when a prior terminal wake\'s ledger entry was mutated in place', async () => {
+    const original = entry({ wakeId: 'wake-prior', thesis: 'original prior decision' });
+    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
+    await writeWakeRecord(terminalWakeRecord('wake-prior', {
+      ledgerReceipt: {
+        version: 1,
+        wakeId: 'wake-prior',
+        status: 'done',
+        decision: 'no_trade',
+        at: original.at,
+        accountId: original.accountId,
+        fingerprint: canonicalDecisionFingerprint(original),
+        recordedAt: '2026-07-10T14:02:00.000Z',
+      },
+    }));
+    // Ledger now carries a REWRITTEN prior entry (different thesis + decision).
+    const mutated = entry({ wakeId: 'wake-prior', thesis: 'rewritten', decision: 'propose_trade' });
+    const res = await runValidator([mutated, current], 'wake-cur');
+    expect(res.code).toBe(1);
+    expect(res.stderr).toMatch(/fingerprint mismatch/);
+  });
+
+  it('ignores timeout/stuck wakes in the cross-check (they carry no ledger entry)', async () => {
+    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
+    await writeWakeRecord(terminalWakeRecord('wake-to', { status: 'timeout' }));
+    const res = await runValidator([current], 'wake-cur');
+    expect(res.stderr).toBe('');
+    expect(res.code).toBe(0);
+  });
+
+  it('ignores a never-dispatched terminal error (no injectedAt, no receipt) — PR #135 regression 1', async () => {
+    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
+    // A POST-time failure marked the wake `error` but it never dispatched.
+    await writeWakeRecord(terminalWakeRecord('wake-nodispatch', { status: 'error', injectedAt: null }));
+    const res = await runValidator([current], 'wake-cur');
+    expect(res.stderr).toBe('');
+    expect(res.code).toBe(0);
+  });
+
+  // The generated validator computes the SAME canonical fingerprint as
+  // src/workspaces/steward/ledger-receipt.ts. This pins the identical golden
+  // constant asserted (in TS) by ledger-receipt.spec.ts — if the two diverge,
+  // the validator's recomputed fingerprint won't equal this receipt and the
+  // run fails. (Keep GOLDEN_FINGERPRINT in sync across both specs.)
+  const GOLDEN_ENTRY = {
+    version: 2,
+    wakeId: 'golden-wake',
+    at: '2026-07-11T00:00:00.000Z',
+    accountId: 'mock-simulator-1',
+    decision: 'no_trade',
+    status: 'done',
+    completion: { reason: 'checklist complete; no entry signal', evidenceRefs: ['wake:golden-wake', 'tool:risk'] },
+    checklist: { account: 'ok', positions: 'ok', orders: 'ok', risk: 'NORMAL', market: 'open', history: 'checked' },
+    thesis: 'No trade: no thesis or entry signal.',
+    actions: [],
+    pendingHash: null,
+    invalidation: 'A new explicit thesis or entry signal would reopen the decision.',
+    cost: {
+      model: 'codex', inputTokens: null, outputTokens: null, modelCostUsd: null,
+      allocatedServerCostUsd: null, tradingFeesUsd: null, estimatedSlippageUsd: null, totalEstimatedCostUsd: null,
+    },
+  } as const;
+  const GOLDEN_FINGERPRINT = 'a00e0bc4ff92f38b3e7bfab09e797e73d5f9248664cee740ac1efedf4849ef9f';
+
+  it('agrees with the TS golden fingerprint vector (JS/TS parity anchor)', async () => {
+    // The TS helper agrees with the pinned constant here...
+    expect(canonicalDecisionFingerprint(GOLDEN_ENTRY)).toBe(GOLDEN_FINGERPRINT);
+    // ...and so must the generated JS validator: a receipt carrying the pinned
+    // constant validates iff the validator recomputes the same hex.
+    await writeWakeRecord(terminalWakeRecord('golden-wake', {
+      ledgerReceipt: {
+        version: 1, wakeId: 'golden-wake', status: 'done', decision: 'no_trade',
+        at: GOLDEN_ENTRY.at, accountId: GOLDEN_ENTRY.accountId,
+        fingerprint: GOLDEN_FINGERPRINT, recordedAt: '2026-07-11T00:02:00.000Z',
+      },
+    }));
+    const res = await runValidator([
+      GOLDEN_ENTRY as unknown as Record<string, unknown>,
+      entry({ wakeId: 'wake-cur', at: '2026-07-11T01:00:00.000Z' }),
+    ], 'wake-cur');
+    expect(res.stderr).toBe('');
+    expect(res.code).toBe(0);
+  });
+
+  it('selects the same first-wins line as TS when a schema-invalid line precedes a valid one (parity)', async () => {
+    const invalidFirst = { ...entry({ wakeId: 'wake-prior', thesis: 'first, schema-invalid' }) } as Record<string, unknown>;
+    delete invalidFirst.decision; // JSON-valid, schema-invalid
+    const validSecond = entry({ wakeId: 'wake-prior', thesis: 'second, valid' });
+    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
+
+    // Receipt fingerprint = fingerprint of the FIRST (schema-invalid) line: the
+    // validator must select that same line, so this matches and the run passes.
+    await writeWakeRecord(terminalWakeRecord('wake-prior', {
+      ledgerReceipt: {
+        version: 1, wakeId: 'wake-prior', status: 'done', decision: 'no_trade',
+        at: (invalidFirst as { at: string }).at, accountId: (invalidFirst as { accountId: string }).accountId,
+        fingerprint: canonicalDecisionFingerprint(invalidFirst), recordedAt: '2026-07-10T14:02:00.000Z',
+      },
+    }));
+    const res = await runValidator([invalidFirst, validSecond, current], 'wake-cur');
+    expect(res.stderr).toBe('');
+    expect(res.code).toBe(0);
   });
 });

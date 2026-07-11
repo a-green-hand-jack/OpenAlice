@@ -42,6 +42,7 @@ import { join, resolve } from 'node:path';
 import {
   WEEKS, BARS_PER_WEEK, WINDOW_LEN, START_CASH, HAIKU_PRICE,
   sleep, maxDrawdown, regimeVerdict, maxWeeklyLongReturnUnderExposure, login, makeClient, tokenFromLog,
+  finalizationTrust,
 } from './_lib.mjs';
 
 // Fictional sim-clock epoch: day 0 → 2020-01-01, +1 day per bar. Keeps the
@@ -415,6 +416,26 @@ async function main() {
     const finalEquity = await netLiquidation(c, acctId);
     const ledgerAll = await c.get(`/api/workspaces/${wsId}/steward/ledger?limit=100`).then((r) => r.entries ?? []).catch(() => []);
 
+    // ── audit finalization / trust verdict (issue #134) ─────────────────────
+    // The set of ledger-backed terminal wakes must equal the set of first-wins
+    // wakeIds in the exported ledger, AND the supervisor must have flagged no
+    // ledger_integrity_violation. If a completed decision disappeared or mutated
+    // (as the persistent session once caused by deleting decisions.jsonl mid-run)
+    // this diverges and the run is marked NOT trustworthy rather than written as
+    // a normal result.
+    let integrityViolations = [];
+    const supervisorLogPath = join(wsDir, '.alice', 'steward', 'supervisor.jsonl');
+    if (existsSync(supervisorLogPath)) {
+      try {
+        integrityViolations = readFileSync(supervisorLogPath, 'utf8')
+          .split('\n').filter(Boolean)
+          .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+          .filter((e) => e && e.type === 'ledger_integrity_violation')
+          .map((e) => ({ wakeId: e.wakeId, kind: e.kind, status: e.status, detail: e.detail }));
+      } catch { /* ignore */ }
+    }
+    const { trustworthy, audit } = finalizationTrust({ weeks, ledgerEntries: ledgerAll, integrityViolations });
+
     // Supervisor cost state (written to .alice/steward/state.json).
     let stewardState = null;
     const statePath = join(wsDir, '.alice', 'steward', 'state.json');
@@ -462,7 +483,12 @@ async function main() {
         transcript: { found: cost.found, turns: cost.turns, inputTokens: cost.inputTokens, outputTokens: cost.outputTokens, cacheReadTokens: cost.cacheReadTokens, cacheWriteTokens: cost.cacheWriteTokens, reasoningOutputTokens: cost.reasoningOutputTokens ?? 0, dir: cost.transcriptDir, files: cost.files },
       },
       net: { netPnL, netReturn: netPnL === null ? null : netPnL / START_CASH },
-      verdict: { regime, pass: verdict.pass, rule: verdict.rule },
+      // Top-level trust gate (issue #134): a consumer must not read `verdict.pass`
+      // as a clean result without seeing `trustworthy`. When false, the ledger
+      // audit failed and the numbers below are not to be trusted.
+      trustworthy,
+      verdict: { regime, pass: verdict.pass, rule: verdict.rule, trustworthy },
+      audit,
       weeks,
       decisions: ledgerAll.map((e) => ({ wakeId: e.wakeId, at: e.at, decision: e.decision, status: e.status, thesis: e.thesis, actions: e.actions, checklist: e.checklist })),
     };
@@ -473,7 +499,15 @@ async function main() {
     log(`\n─── ${runId} ───`);
     log(`gross PnL $${grossPnL.toFixed(2)} (${(totalReturn * 100).toFixed(1)}%)  agent maxDD ${(agentMaxDD * 100).toFixed(1)}%  vs buy-hold ${(buyHold.netReturn * 100).toFixed(1)}% / ${(buyHold.maxDD * 100).toFixed(1)}%`);
     log(`model cost ${cost.modelCostUsd === null ? 'n/a' : `$${modelCostUsd.toFixed(4)}`} (${cost.inputTokens} in / ${cost.outputTokens} out tok, ${opts.model ?? opts.agent})  → net PnL ${netPnL === null ? 'n/a' : `$${netPnL.toFixed(2)}`}`);
-    log(`verdict ${regime}: ${verdict.pass ? 'PASS' : 'FAIL'} (${verdict.rule})`);
+    log(`verdict ${regime}: ${verdict.pass ? 'PASS' : 'FAIL'} (${verdict.rule})${trustworthy ? '' : ' [NOT TRUSTWORTHY]'}`);
+    if (!trustworthy) {
+      log(`AUDIT INVALID (issue #134): ${audit.terminalLedgerBackedWakes} ledger-backed terminal wakes vs ` +
+        `${audit.finalLedgerEntries} final ledger entries; ` +
+        `missing=[${audit.missingFromLedger.join(', ')}] extra=[${audit.extraInLedger.join(', ')}]` +
+        `${integrityViolations.length ? ` integrityViolations=${integrityViolations.length}` : ''}. ` +
+        `result.trustworthy=false — written for evidence but NOT a valid pass.`);
+      process.exitCode = 1;
+    }
     log(`result → ${join(runDir, 'result.json')}`);
   } finally {
     if (!opts.keep) {

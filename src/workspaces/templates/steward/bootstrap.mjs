@@ -36,7 +36,9 @@ end with one JSON line in ledger/decisions.jsonl.
   instructions and skills are written.
 - wakes/<wakeId>.json: one structured input envelope per wake.
 - ledger/decisions.jsonl: one structured decision/completion marker per wake.
-- validate-ledger.mjs: local schema sanity check for one wake's ledger marker.
+- validate-ledger.mjs: local schema sanity check for one wake's ledger marker,
+  plus an integrity cross-check that every already-completed wake still has its
+  ledger entry (a prior completed decision must never silently disappear).
 - tmp/: gitignored scratch space for --json-file payloads (order/commit/reject
   free-text fields written here via the Write tool, then passed to alice-uta
   by path — never embedded in a Bash argument).
@@ -151,6 +153,74 @@ if (anyExecuted && entry.pendingHash !== null) fail('line ' + found.line + ' pen
 if (!entry.cost || typeof entry.cost !== 'object' || Array.isArray(entry.cost)) fail('line ' + found.line + ' cost must be an object')
 const missingCost = requiredCost.filter((key) => !(key in entry.cost))
 if (missingCost.length) fail('line ' + found.line + ' cost is missing field(s): ' + missingCost.join(', '))
+
+// Issue #134: ledger-integrity cross-check (corruption-evident, not tamper-
+// proof -- wake/ledger/receipt share one agent-writable trust domain). A wake
+// that ALREADY reached a ledger-backed terminal state (done|blocked|error) AND
+// was dispatched must still have its first-wins ledger entry, unchanged.
+// Compare every such terminal wake record against the current ledger, so
+// validating THIS wake fails if an earlier completed decision disappeared or
+// was mutated -- exactly what happened when the persistent session deleted and
+// rebuilt decisions.jsonl mid-run. The semantic projection + canonical
+// fingerprint mirror src/workspaces/steward/ledger-receipt.ts byte for byte (a
+// pinned golden vector guards the parity); keep them in lockstep. First-wins
+// selection is the first JSON-parseable object line per wakeId (schema-
+// independent), matching the supervisor. timeout/stuck wakes, and wakes that
+// never dispatched (no injectedAt and no receipt), write no ledger entry and
+// are skipped.
+const { createHash } = await import('node:crypto')
+const LEDGER_SEMANTIC_KEYS = ['version', 'wakeId', 'at', 'accountId', 'decision', 'status', 'context', 'completion', 'checklist', 'thesis', 'actions', 'pendingHash', 'invalidation', 'cost']
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize)
+  if (value && typeof value === 'object') {
+    const out = {}
+    for (const key of Object.keys(value).sort()) out[key] = canonicalize(value[key])
+    return out
+  }
+  return value
+}
+function semanticProjection(obj) {
+  const source = obj && typeof obj === 'object' ? obj : {}
+  const out = {}
+  for (const key of LEDGER_SEMANTIC_KEYS) if (key in source) out[key] = source[key]
+  return out
+}
+function ledgerFingerprint(obj) {
+  return createHash('sha256').update(JSON.stringify(canonicalize(semanticProjection(obj)))).digest('hex')
+}
+const firstWins = new Map()
+for (let i = 0; i < lines.length; i++) {
+  let p
+  try { p = JSON.parse(lines[i]) } catch { continue }
+  if (p && typeof p === 'object' && typeof p.wakeId === 'string' && !firstWins.has(p.wakeId)) firstWins.set(p.wakeId, p)
+}
+const wakesDir = '.alice/steward/wakes'
+let wakeFiles = []
+try {
+  wakeFiles = (await fs.readdir(wakesDir)).filter((n) => n.endsWith('.json'))
+} catch (err) {
+  if (err.code !== 'ENOENT') fail('cannot read ' + wakesDir + ': ' + err.message)
+}
+const terminalBacked = ['done', 'blocked', 'error']
+for (const name of wakeFiles) {
+  let rec
+  try {
+    rec = JSON.parse(await fs.readFile(wakesDir + '/' + name, 'utf8'))
+  } catch (err) {
+    fail('wake record ' + name + ' is invalid JSON: ' + err.message)
+  }
+  if (!rec || typeof rec !== 'object' || !terminalBacked.includes(rec.status)) continue
+  // Skip a wake that never actually dispatched (no injectedAt and no receipt):
+  // a POST-time failure marked terminal was never ledger-backed.
+  if (!rec.injectedAt && !rec.ledgerReceipt) continue
+  const priorEntry = firstWins.get(rec.wakeId)
+  if (!priorEntry) fail('terminal wake ' + rec.wakeId + ' (status ' + rec.status + ') has no ledger entry -- an earlier completed decision disappeared from ' + path)
+  if (rec.ledgerReceipt && typeof rec.ledgerReceipt.fingerprint === 'string') {
+    const fp = ledgerFingerprint(priorEntry)
+    if (fp !== rec.ledgerReceipt.fingerprint) fail('terminal wake ' + rec.wakeId + ' ledger entry changed since it was recorded (fingerprint mismatch) -- ledger history was mutated in place')
+  }
+}
+
 console.log('ok: ledger entry for ' + wakeId + ' validates at line ' + found.line)
 
 function fail(message) {
