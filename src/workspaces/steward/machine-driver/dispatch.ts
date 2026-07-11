@@ -11,13 +11,17 @@
  * stores in the steward spec style (CI has no codex login).
  */
 
+import { readCodexModelOverride } from '../../adapters/codex.js';
+import type { CliAdapter } from '../../cli-adapter.js';
 import type { Logger } from '../../logger.js';
+import type { WorkspaceMeta } from '../../workspace-registry.js';
 import { formatStewardWakeMessage } from '../injector.js';
 import { appendSupervisorEvent } from '../supervisor.js';
 import type { StewardWakeEnvelope } from '../types.js';
 import type { StewardWakeStore } from '../wake-store.js';
+import { CodexAppServerDriver } from './codex-app-server-driver.js';
 import type { MachineThreadStore } from './thread-store.js';
-import type { DriverEvent, StewardMachineDriver } from './types.js';
+import type { DriverEvent, EnsureThreadOptions, StewardMachineDriver } from './types.js';
 
 export interface StewardControlFaceDecision {
   /** Take the machine (codex app-server) path when true; the PTY path otherwise. */
@@ -59,6 +63,73 @@ export function decideStewardControlFace(input: {
     };
   }
   return { useMachine: true, agent };
+}
+
+export interface ResolvedStewardControlFace extends StewardControlFaceDecision {
+  /** Set only when `useMachine` is true — the resolved, confirmed-registered
+   *  adapter instance. */
+  readonly adapter?: CliAdapter;
+}
+
+/**
+ * `decideStewardControlFace` plus adapter resolution (issue #146 MINOR-3
+ * review): an honored machine decision whose agent has no registered adapter
+ * declines to PTY with a reason, exactly like the non-codex / codex-not-enabled
+ * cases `decideStewardControlFace` already handles — S3's principle is that
+ * control-face reasons never fail the wake, so this must decline, not throw. In
+ * practice `codex` is always registered (service.ts registers every built-in
+ * adapter at startup); this only guards a future adapter-registry customization
+ * that drops it. Deliberately does NOT touch the machine-driver registry or
+ * construct a driver — that stays a side effect the caller triggers only once
+ * it has actually committed to dispatching (after the wake-exists check + lock
+ * acquisition), so a duplicate-wakeId early-throw never spins up a live driver.
+ */
+export function resolveStewardControlFace(input: {
+  readonly config: Record<string, unknown>;
+  readonly requestedAgent: string | undefined;
+  readonly workspaceAgents: readonly string[];
+  readonly getAdapter: (agentId: string) => CliAdapter | undefined;
+}): ResolvedStewardControlFace {
+  const decision = decideStewardControlFace({
+    config: input.config,
+    requestedAgent: input.requestedAgent,
+    workspaceAgents: input.workspaceAgents,
+  });
+  if (!decision.useMachine) return decision;
+  const adapter = input.getAdapter(decision.agent);
+  if (!adapter) {
+    return {
+      useMachine: false,
+      agent: decision.agent,
+      declineReason: `machine control face: adapter not registered: ${decision.agent}`,
+    };
+  }
+  return { useMachine: true, agent: decision.agent, adapter };
+}
+
+/**
+ * Build (or reuse via `factory`) the driver for a machine-face workspace (issue
+ * #146 MINOR-1 review). Extracted out of `service.ts`'s closure so the "factory
+ * seam vs. real driver" decision is directly unit-testable without booting the
+ * full `WorkspaceService` (process lock, disk registries, self-arming
+ * scanners) — `factory` mirrors `CreateWorkspaceServiceOptions
+ * .machineDriverFactory` exactly, so `service.ts` passes it straight through.
+ */
+export function buildMachineDriver(input: {
+  readonly ws: WorkspaceMeta;
+  readonly adapter: CliAdapter;
+  readonly cwd: string;
+  readonly env: Record<string, string>;
+  readonly logger: Logger;
+  readonly factory?: (input: { ws: WorkspaceMeta; adapter: CliAdapter }) => StewardMachineDriver;
+}): StewardMachineDriver {
+  if (input.factory) return input.factory({ ws: input.ws, adapter: input.adapter });
+  return new CodexAppServerDriver({
+    cwd: input.cwd,
+    env: input.env,
+    ...(input.adapter.binary ? { codexBin: input.adapter.binary } : {}),
+    logger: input.logger.child({ scope: 'machine-driver', wsId: input.ws.id, agent: input.adapter.id }),
+  });
 }
 
 export interface DispatchMachineWakeInput {
@@ -154,10 +225,26 @@ interface ResolvedThread {
 
 async function resolveMachineThread(input: DispatchMachineWakeInput): Promise<ResolvedThread> {
   const { driver, threadStore, cwd } = input;
+  // Issue #146 MAJOR-2: apply the steward core-model override
+  // (`.alice/steward/core-agent-model.txt`) the PTY path applies via `-m`
+  // (`adapters/codex.ts` `codexModelHead`) — reused here, not reparsed, so both
+  // control faces honor the SAME override file identically.
+  const model = readCodexModelOverride(cwd) ?? undefined;
+  const ensureOpts = (threadId?: string): EnsureThreadOptions => ({
+    cwd,
+    // Issue #146 MAJOR-1: every steward machine thread requests network-enabled
+    // workspace-write, mirroring the PTY codex adapter's unconditional
+    // `-c sandbox_workspace_write.network_access=true` — without it `alice*`
+    // cannot reach the loopback CLI gateway and the UTA checklist can't run.
+    networkAccess: true,
+    ...(model !== undefined ? { model } : {}),
+    ...(threadId !== undefined ? { threadId } : {}),
+  });
+
   const existing = await threadStore.read();
   if (existing) {
     try {
-      const { threadId, resumed } = await driver.ensureThread({ threadId: existing.threadId, cwd });
+      const { threadId, resumed } = await driver.ensureThread(ensureOpts(existing.threadId));
       return { threadId, resumed, reset: false, createdAt: existing.createdAt };
     } catch (err) {
       // S3 resume-failure policy: don't fail the wake — start a FRESH thread,
@@ -175,11 +262,11 @@ async function resolveMachineThread(input: DispatchMachineWakeInput): Promise<Re
         priorThreadId: existing.threadId,
         reason: errText(err),
       }).catch(() => undefined);
-      const fresh = await driver.ensureThread({ cwd });
+      const fresh = await driver.ensureThread(ensureOpts());
       return { threadId: fresh.threadId, resumed: false, reset: true, createdAt: input.now };
     }
   }
-  const fresh = await driver.ensureThread({ cwd });
+  const fresh = await driver.ensureThread(ensureOpts());
   return { threadId: fresh.threadId, resumed: false, reset: false, createdAt: input.now };
 }
 

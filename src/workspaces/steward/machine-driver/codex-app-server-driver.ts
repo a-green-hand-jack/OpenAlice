@@ -24,6 +24,7 @@ import {
   type StewardMachineDriver,
   type ThreadTelemetry,
   type TurnOutcome,
+  type WorkspaceWriteSandboxPolicyOverride,
 } from './types.js';
 
 /** The codex-cli version the committed schema snapshot was generated from. */
@@ -51,6 +52,11 @@ export interface CodexAppServerDriverOptions {
 
 interface ThreadState {
   alive: boolean;
+  /** Set from `EnsureThreadOptions.networkAccess` (issue #146 MAJOR-1); read by
+   *  `runTurn` to attach a `sandboxPolicy` override so every turn on this
+   *  thread gets network-enabled workspace-write, mirroring the PTY codex
+   *  adapter's unconditional `-c sandbox_workspace_write.network_access=true`. */
+  networkAccess?: boolean;
 }
 
 /**
@@ -92,14 +98,19 @@ export class CodexAppServerDriver implements StewardMachineDriver {
     const client = await this.connect();
     const sandbox = opts.sandbox ?? 'workspace-write';
     if (opts.threadId) {
-      const result = (await client.request('thread/resume', {
+      const resumeParams: Record<string, unknown> = {
         threadId: opts.threadId,
         cwd: opts.cwd,
         approvalPolicy: 'never',
         sandbox,
-      })) as { thread?: { id?: string } };
+      };
+      // Issue #146 MAJOR-2: `.alice/steward/core-agent-model.txt` override, same
+      // field `thread/start` already honors below — `ThreadResumeParams.model`
+      // carries "Configuration overrides for the resumed thread, if any."
+      if (opts.model !== undefined) resumeParams.model = opts.model;
+      const result = (await client.request('thread/resume', resumeParams)) as { thread?: { id?: string } };
       const threadId = result?.thread?.id ?? opts.threadId;
-      this.threads.set(threadId, { alive: true });
+      this.threads.set(threadId, { alive: true, networkAccess: opts.networkAccess });
       return { threadId, resumed: true };
     }
     const startParams: Record<string, unknown> = {
@@ -112,7 +123,7 @@ export class CodexAppServerDriver implements StewardMachineDriver {
     const result = (await client.request('thread/start', startParams)) as { thread?: { id?: string } };
     const threadId = result?.thread?.id;
     if (!threadId) throw new MachineDriverProtocolError('thread/start response missing thread.id');
-    this.threads.set(threadId, { alive: true });
+    this.threads.set(threadId, { alive: true, networkAccess: opts.networkAccess });
     return { threadId, resumed: false };
   }
 
@@ -152,6 +163,17 @@ export class CodexAppServerDriver implements StewardMachineDriver {
     };
     if (opts.effort !== undefined) turnParams.effort = opts.effort;
     if (opts.model !== undefined) turnParams.model = opts.model;
+    // Issue #146 MAJOR-1: a thread that requested `networkAccess` at ensureThread
+    // time gets the override resent on EVERY turn (idempotent — the schema
+    // documents it as persisting "for this turn and subsequent turns" anyway,
+    // but resending is the robust choice against process-restart/resume edge
+    // cases where in-process persistence can't be assumed). Minimal payload —
+    // `writableRoots` / `excludeTmpdirEnvVar` / `excludeSlashTmp` keep the
+    // server's documented defaults when omitted.
+    if (this.threads.get(threadId)?.networkAccess) {
+      const sandboxPolicy: WorkspaceWriteSandboxPolicyOverride = { type: 'workspaceWrite', networkAccess: true };
+      turnParams.sandboxPolicy = sandboxPolicy;
+    }
 
     try {
       const started = (await client.request('turn/start', turnParams)) as { turn?: { id?: string } };

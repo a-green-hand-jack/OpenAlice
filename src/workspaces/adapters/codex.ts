@@ -12,7 +12,9 @@ const CODEX_CONFIG_PATH = '.codex/config.toml';
 const CODEX_ENV_PATH = '.codex/env.json';
 const CODEX_KEY_ENV_NAME = 'OPENALICE_WORKSPACE_KEY';
 const CODEX_PROVIDER_NAME = 'workspace';
-const CODEX_MODEL_OVERRIDE_PATH = '.alice/steward/core-agent-model.txt';
+/** Exported so callers (and tests) can locate the override file without
+ *  duplicating the path literal — issue #146 MAJOR-2 review. */
+export const CODEX_MODEL_OVERRIDE_PATH = '.alice/steward/core-agent-model.txt';
 
 /**
  * OpenAI Codex CLI (Rust rewrite, `codex-cli`).
@@ -511,7 +513,15 @@ function codexModelHead(ctx: SpawnContext, head: string[]): string[] {
   return [...head, '-m', model];
 }
 
-function readCodexModelOverride(cwd: string): string | null {
+/**
+ * Read `.alice/steward/core-agent-model.txt`, if present — the steward core
+ * model override the PTY path applies via `-m` (`codexModelHead` above).
+ * Exported (issue #146 MAJOR-2 review) so the machine control face's
+ * `dispatchMachineWake` reuses this SAME parsing instead of duplicating it —
+ * the override must apply to a machine-face steward wake exactly like a
+ * PTY-face one.
+ */
+export function readCodexModelOverride(cwd: string): string | null {
   const path = join(cwd, CODEX_MODEL_OVERRIDE_PATH);
   if (!existsSync(path)) return null;
   const model = readFileSync(path, 'utf8').trim();

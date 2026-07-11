@@ -89,9 +89,8 @@ import {
   type StewardWakeEnvelope,
 } from './steward/index.js';
 import { MachineDriverRegistry } from './steward/machine-driver/driver-registry.js';
-import { CodexAppServerDriver } from './steward/machine-driver/codex-app-server-driver.js';
 import { createMachineThreadStore } from './steward/machine-driver/thread-store.js';
-import { decideStewardControlFace, dispatchMachineWake } from './steward/machine-driver/dispatch.js';
+import { buildMachineDriver, dispatchMachineWake, resolveStewardControlFace } from './steward/machine-driver/dispatch.js';
 import type { StewardMachineDriver } from './steward/machine-driver/types.js';
 
 /**
@@ -683,16 +682,19 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
   // Build a workspace's machine driver (issue #146). Env/cwd come from the SAME
   // `composeSpawnInputs` seam the PTY + headless spawns use, so the codex
   // app-server child sees an identical toolbox (alice* shims, OPENALICE_TOOL_URL,
-  // AQ_WS_ID, git identity, CODEX_HOME/credential files). Injectable via
-  // `opts.machineDriverFactory` so integration tests supply a mock driver.
+  // AQ_WS_ID, git identity, CODEX_HOME/credential files). The factory-vs-real
+  // decision itself lives in `buildMachineDriver` (issue #146 MINOR-1 review) so
+  // it's directly unit-testable without booting the full service; `opts
+  // .machineDriverFactory` is passed straight through for integration tests.
   const makeMachineDriver = (ws: WorkspaceMeta, adapter: CliAdapter): StewardMachineDriver => {
-    if (opts.machineDriverFactory) return opts.machineDriverFactory({ ws, adapter });
     const { cwd, env } = composeSpawnInputs(ws, adapter, undefined);
-    return new CodexAppServerDriver({
+    return buildMachineDriver({
+      ws,
+      adapter,
       cwd,
       env,
-      ...(adapter.binary ? { codexBin: adapter.binary } : {}),
-      logger: launcherLogger.child({ scope: 'machine-driver', wsId: ws.id, agent: adapter.id }),
+      logger: launcherLogger,
+      ...(opts.machineDriverFactory ? { factory: opts.machineDriverFactory } : {}),
     });
   };
 
@@ -724,12 +726,15 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     };
     // Issue #146: pick the control face. Machine is opt-in via
     // `.alice/steward/config.json` `controlFace:'machine'` and honored ONLY for a
-    // codex-enabled workspace; any other configuration warns and takes the
-    // historical PTY path (S3 never fails the wake for this reason).
-    const controlFace = decideStewardControlFace({
+    // codex-enabled, adapter-registered workspace; any other configuration warns
+    // and takes the historical PTY path (S3 never fails the wake for this
+    // reason — MINOR-3 review: an unregistered adapter declines too, it does not
+    // throw).
+    const controlFace = resolveStewardControlFace({
       config,
       requestedAgent: wake.agent,
       workspaceAgents: ws.agents,
+      getAdapter: (id) => adapters.get(id),
     });
     if (controlFace.declineReason) {
       launcherLogger.warn('schedule.steward_machine_face_declined', {
@@ -757,14 +762,16 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
 
     let created = false;
     try {
-      if (controlFace.useMachine) {
+      if (controlFace.useMachine && controlFace.adapter) {
         // Issue #146 (S3): dispatch through the codex app-server driver instead of
         // PTY spawn+inject. Same preflight above (refresh, wake-exists, lock); the
         // wake is created inside `dispatchMachineWake` keyed off the native thread
         // UUID. The turn runs detached — the supervisor terminalizes it from the
-        // ledger + finalize markers exactly as for a PTY wake.
-        const adapter = adapters.get(controlFace.agent);
-        if (!adapter) throw new Error(`machine control face: adapter not registered: ${controlFace.agent}`);
+        // ledger + finalize markers exactly as for a PTY wake. Driver construction
+        // (real spawn or `opts.machineDriverFactory`) happens HERE, only once
+        // dispatch is actually committed — not during the earlier decline-vs-honor
+        // decision — so a duplicate-wakeId early-throw never spins up a live driver.
+        const adapter = controlFace.adapter;
         const driver = machineDriverRegistry.getOrCreate(ws.id, () => makeMachineDriver(ws, adapter));
         const result = await dispatchMachineWake({
           workspaceDir: ws.dir,

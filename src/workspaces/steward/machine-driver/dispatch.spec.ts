@@ -1,11 +1,20 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { CODEX_MODEL_OVERRIDE_PATH, codexAdapter } from '../../adapters/codex.js';
+import type { WorkspaceMeta } from '../../workspace-registry.js';
+import { CodexAppServerDriver } from './codex-app-server-driver.js';
 import { NOOP_LOGGER } from './jsonrpc-stdio.js';
-import { decideStewardControlFace, dispatchMachineWake, type DispatchMachineWakeInput } from './dispatch.js';
+import {
+  buildMachineDriver,
+  decideStewardControlFace,
+  dispatchMachineWake,
+  resolveStewardControlFace,
+  type DispatchMachineWakeInput,
+} from './dispatch.js';
 import { createMachineThreadStore } from './thread-store.js';
 import type {
   DriverEvent,
@@ -194,6 +203,11 @@ describe('dispatchMachineWake (issue #146, S3)', () => {
 
     // ensureThread THEN runTurn, in that order.
     expect(calls.ensureThread).toHaveLength(1);
+    // Issue #146 MAJOR-1: every steward machine thread requests network-enabled
+    // workspace-write, mirroring the PTY codex adapter's unconditional
+    // `-c sandbox_workspace_write.network_access=true` — without this `alice*`
+    // cannot reach the loopback CLI gateway and the UTA checklist can't run.
+    expect(calls.ensureThread[0]).toMatchObject({ networkAccess: true });
     expect(calls.runTurn).toHaveLength(1);
     expect(calls.runTurn[0]?.threadId).toBe('thread-uuid-abc');
     // The turn body is the STEWARD_WAKE envelope (the PTY body), carrying the wake id.
@@ -254,10 +268,13 @@ describe('dispatchMachineWake (issue #146, S3)', () => {
     });
     const result = await dispatchMachineWake(baseInput(driver));
 
-    // Two ensureThread calls: the failed resume, then the fresh start.
+    // Two ensureThread calls: the failed resume, then the fresh start. Both
+    // still request network access (issue #146 MAJOR-1) — a reset must not
+    // silently drop the sandbox override.
     expect(calls.ensureThread).toHaveLength(2);
-    expect(calls.ensureThread[0]?.threadId).toBe('thread-stale');
+    expect(calls.ensureThread[0]).toMatchObject({ threadId: 'thread-stale', networkAccess: true });
     expect(calls.ensureThread[1]?.threadId).toBeUndefined();
+    expect(calls.ensureThread[1]).toMatchObject({ networkAccess: true });
     expect(result).toMatchObject({ threadId: 'thread-new', threadReset: true, resumed: false });
 
     // Store overwritten with the fresh id (and a fresh createdAt).
@@ -270,6 +287,25 @@ describe('dispatchMachineWake (issue #146, S3)', () => {
     const events = await readSupervisorEvents();
     const reset = events.find((e) => e['type'] === 'machine_thread_reset');
     expect(reset).toMatchObject({ wakeId: 'wake-m', priorThreadId: 'thread-stale' });
+  });
+
+  it('applies the steward core-model override to ensureThread when the file is present (issue #146 MAJOR-2)', async () => {
+    const overridePath = join(dir, CODEX_MODEL_OVERRIDE_PATH);
+    await mkdir(dirname(overridePath), { recursive: true });
+    await writeFile(overridePath, 'gpt-5.5-steward\n', 'utf8');
+    const { driver, calls } = makeMockDriver();
+
+    await dispatchMachineWake(baseInput(driver));
+
+    expect(calls.ensureThread[0]).toMatchObject({ model: 'gpt-5.5-steward' });
+  });
+
+  it('omits model from ensureThread when no override file exists (issue #146 MAJOR-2)', async () => {
+    const { driver, calls } = makeMockDriver();
+
+    await dispatchMachineWake(baseInput(driver));
+
+    expect(calls.ensureThread[0]?.model).toBeUndefined();
   });
 
   it('runTurn rejection AFTER start: wake stays injected (supervisor owns terminal states) + event emitted', async () => {
@@ -339,5 +375,171 @@ describe('dispatchMachineWake (issue #146, S3)', () => {
     });
     expect(dead.transitions[0]).toMatchObject({ wakeId: 'wake-m', to: 'stuck', reason: 'session_not_running' });
     expect((await createStewardWakeStore(dir).get('wake-m'))?.status).toBe('stuck');
+  });
+});
+
+describe('buildMachineDriver (issue #146 MINOR-1)', () => {
+  const ws: WorkspaceMeta = { id: 'ws-1', tag: 'ws-1', dir: '/tmp/ws-1', createdAt: NOW, agents: ['codex'] };
+
+  it('invokes the factory when provided, and never constructs a real CodexAppServerDriver', () => {
+    const fakeDriver = makeMockDriver().driver;
+    const factory = vi.fn(() => fakeDriver);
+
+    const result = buildMachineDriver({
+      ws,
+      adapter: codexAdapter,
+      cwd: ws.dir,
+      env: {},
+      logger: NOOP_LOGGER,
+      factory,
+    });
+
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(factory).toHaveBeenCalledWith({ ws, adapter: codexAdapter });
+    expect(result).toBe(fakeDriver);
+    expect(result).not.toBeInstanceOf(CodexAppServerDriver);
+  });
+
+  it('constructs a real CodexAppServerDriver when no factory is provided', () => {
+    const result = buildMachineDriver({
+      ws,
+      adapter: codexAdapter,
+      cwd: ws.dir,
+      env: {},
+      logger: NOOP_LOGGER,
+    });
+
+    expect(result).toBeInstanceOf(CodexAppServerDriver);
+  });
+});
+
+describe('resolveStewardControlFace (issue #146 MINOR-1 + MINOR-3)', () => {
+  it('never consults getAdapter when controlFace is absent/pty', () => {
+    const getAdapter = vi.fn(() => codexAdapter);
+
+    const result = resolveStewardControlFace({
+      config: {},
+      requestedAgent: undefined,
+      workspaceAgents: ['codex'],
+      getAdapter,
+    });
+
+    expect(result.useMachine).toBe(false);
+    expect(result.adapter).toBeUndefined();
+    expect(getAdapter).not.toHaveBeenCalled();
+  });
+
+  it('resolves the adapter and honors machine for a codex-enabled, adapter-registered workspace', () => {
+    const getAdapter = vi.fn(() => codexAdapter);
+
+    const result = resolveStewardControlFace({
+      config: { controlFace: 'machine' },
+      requestedAgent: undefined,
+      workspaceAgents: ['codex'],
+      getAdapter,
+    });
+
+    expect(result).toMatchObject({ useMachine: true, agent: 'codex' });
+    expect(result.adapter).toBe(codexAdapter);
+    expect(getAdapter).toHaveBeenCalledWith('codex');
+  });
+
+  it('declines to PTY (does not throw) when the resolved agent has no registered adapter (issue #146 MINOR-3)', () => {
+    const getAdapter = vi.fn(() => undefined);
+
+    const result = resolveStewardControlFace({
+      config: { controlFace: 'machine' },
+      requestedAgent: undefined,
+      workspaceAgents: ['codex'],
+      getAdapter,
+    });
+
+    expect(result.useMachine).toBe(false);
+    expect(result.declineReason).toMatch(/adapter not registered/);
+    expect(result.adapter).toBeUndefined();
+  });
+
+  it('declines to PTY for a non-codex agent without ever calling getAdapter', () => {
+    const getAdapter = vi.fn(() => codexAdapter);
+
+    const result = resolveStewardControlFace({
+      config: { controlFace: 'machine' },
+      requestedAgent: 'claude',
+      workspaceAgents: ['codex', 'claude'],
+      getAdapter,
+    });
+
+    expect(result.useMachine).toBe(false);
+    expect(result.declineReason).toMatch(/codex-only/);
+    expect(getAdapter).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * End-to-end composition of `resolveStewardControlFace` + `buildMachineDriver`
+ * — the SAME two functions `service.ts`'s `dispatchStewardWakeMethod` calls,
+ * wired together exactly as it wires them (issue #146 MINOR-1 review): "the
+ * factory seam must be exercised." This is deliberately narrower than booting
+ * `createWorkspaceService()` (process lock, disk registries, self-arming
+ * scanners) — see the review's own escape hatch — while still exercising the
+ * REAL production functions, not a re-implementation of their decision logic.
+ */
+describe('machine driver factory wiring end-to-end (issue #146 MINOR-1)', () => {
+  const ws: WorkspaceMeta = { id: 'ws-1', tag: 'ws-1', dir: '/tmp/ws-1', createdAt: NOW, agents: ['codex'] };
+  const getAdapter = (id: string): typeof codexAdapter | undefined => (id === 'codex' ? codexAdapter : undefined);
+
+  /** Mirrors service.ts's `if (controlFace.useMachine && controlFace.adapter) { ... makeMachineDriver(...) }` guard. */
+  function dispatchDriverOrUndefined(
+    controlFace: ReturnType<typeof resolveStewardControlFace>,
+    factory: (input: { ws: WorkspaceMeta; adapter: typeof codexAdapter }) => StewardMachineDriver,
+  ): StewardMachineDriver | undefined {
+    if (!controlFace.useMachine || !controlFace.adapter) return undefined;
+    return buildMachineDriver({ ws, adapter: controlFace.adapter, cwd: ws.dir, env: {}, logger: NOOP_LOGGER, factory });
+  }
+
+  it('factory is NOT invoked when controlFace is absent/pty', () => {
+    const factory = vi.fn(() => makeMockDriver().driver);
+    const controlFace = resolveStewardControlFace({
+      config: {},
+      requestedAgent: undefined,
+      workspaceAgents: ws.agents,
+      getAdapter,
+    });
+
+    dispatchDriverOrUndefined(controlFace, factory);
+
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it('factory IS invoked on an honored machine config', () => {
+    const fakeDriver = makeMockDriver().driver;
+    const factory = vi.fn(() => fakeDriver);
+    const controlFace = resolveStewardControlFace({
+      config: { controlFace: 'machine' },
+      requestedAgent: undefined,
+      workspaceAgents: ws.agents,
+      getAdapter,
+    });
+
+    const driver = dispatchDriverOrUndefined(controlFace, factory);
+
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(driver).toBe(fakeDriver);
+  });
+
+  it('decline path (non-codex agent) falls back to PTY without constructing a driver', () => {
+    const factory = vi.fn(() => makeMockDriver().driver);
+    const controlFace = resolveStewardControlFace({
+      config: { controlFace: 'machine' },
+      requestedAgent: 'claude',
+      workspaceAgents: ['codex', 'claude'],
+      getAdapter,
+    });
+
+    const driver = dispatchDriverOrUndefined(controlFace, factory);
+
+    expect(controlFace.declineReason).toMatch(/codex-only/);
+    expect(driver).toBeUndefined();
+    expect(factory).not.toHaveBeenCalled();
   });
 });
