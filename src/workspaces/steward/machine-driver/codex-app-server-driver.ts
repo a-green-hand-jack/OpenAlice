@@ -30,6 +30,53 @@ import {
 /** The codex-cli version the committed schema snapshot was generated from. */
 export const SUPPORTED_CODEX_VERSION = '0.144.0';
 
+/**
+ * Process-wide memoization of the `codex --version` probe (issue #152), keyed
+ * by the resolved binary — multiple steward workspaces sharing the default
+ * `codex` bin spawn the probe at most once per process, not once per driver.
+ * Only exercised by the DEFAULT probe below; a test-injected `versionProbe`
+ * (`CodexAppServerDriverOptions.versionProbe`) bypasses it entirely.
+ */
+const versionProbeCache = new Map<string, Promise<string | null>>();
+
+/**
+ * Spawn `<bin> --version` and parse the semver-shaped substring out of stdout
+ * (codex prints e.g. `codex-cli 0.144.0`). Resolves `null` — NEVER rejects —
+ * on any failure: binary missing, non-zero exit, unparsable output. A failed
+ * probe is itself just a warning input (issue #152); it must never throw into
+ * the wake path.
+ */
+function probeCodexVersion(bin: string): Promise<string | null> {
+  const cached = versionProbeCache.get(bin);
+  if (cached) return cached;
+  const probe = new Promise<string | null>((resolve) => {
+    try {
+      const child = spawn(bin, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'] });
+      // A hung binary must not pin the event loop or leave the cached promise
+      // pending forever — kill after a bound and settle null (warn-only path).
+      const timer = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch { /* already gone */ }
+        resolve(null);
+      }, 5000);
+      timer.unref();
+      child.unref();
+      let out = '';
+      child.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString('utf8'); });
+      child.on('error', () => { clearTimeout(timer); resolve(null); });
+      child.on('close', () => { clearTimeout(timer); resolve(parseCodexVersionOutput(out)); });
+    } catch {
+      resolve(null);
+    }
+  });
+  versionProbeCache.set(bin, probe);
+  return probe;
+}
+
+function parseCodexVersionOutput(output: string): string | null {
+  const match = /(\d+\.\d+\.\d+)/.exec(output);
+  return match?.[1] ?? null;
+}
+
 const CLIENT_INFO = {
   name: 'openalice-steward',
   title: 'OpenAlice steward machine driver',
@@ -48,6 +95,10 @@ export interface CodexAppServerDriverOptions {
   /** Test seam: override how the app-server child is created. Production leaves
    *  this undefined and spawns `codex app-server`. */
   readonly spawn?: () => MachineTransport;
+  /** Test seam: override the `codex --version` probe (issue #152). Production
+   *  leaves this undefined and spawns `<codexBin> --version`, memoized per bin
+   *  for the life of the process (see `probeCodexVersion`). */
+  readonly versionProbe?: (bin: string) => Promise<string | null>;
 }
 
 interface ThreadState {
@@ -88,10 +139,60 @@ export class CodexAppServerDriver implements StewardMachineDriver {
   private connectPromise: Promise<JsonRpcStdioClient> | null = null;
   private closed = false;
   private disposed = false;
+  private versionChecked = false;
 
   constructor(options: CodexAppServerDriverOptions) {
     this.options = options;
     this.logger = options.logger ?? NOOP_LOGGER;
+  }
+
+  /**
+   * Runtime guard against codex-cli protocol drift (issue #152): the driver's
+   * wire usage is pinned to the committed schema snapshot generated from
+   * `SUPPORTED_CODEX_VERSION`, but the system `codex` binary upgrades
+   * independently of this repo. This probes `codex --version` and WARNS —
+   * never blocks — on a mismatch or a failed probe (binary missing /
+   * unparsable output): patch-level drift is usually wire-compatible, and a
+   * genuine protocol break already degrades into the existing stuck→alert
+   * supervisor path, so there is nothing safer to do here than make the drift
+   * observable. Fire-and-forget (never awaited) and idempotent per driver
+   * instance (a second call is a no-op) — the caller (`buildMachineDriver` via
+   * `service.ts`'s `makeMachineDriver`) invokes this ONCE at driver init, NOT
+   * on every wake, so it never adds dispatch latency. Not wired into the
+   * connect/constructor lifecycle on purpose, so constructing or connecting a
+   * driver directly (as this file's own unit tests do) never spawns a real
+   * `codex --version` process.
+   */
+  checkCodexVersion(): void {
+    if (this.versionChecked) return;
+    this.versionChecked = true;
+    const bin = this.options.codexBin ?? 'codex';
+    const probe = this.options.versionProbe ?? probeCodexVersion;
+    void probe(bin).then(
+      (installed) => {
+        if (installed === null) {
+          this.logger.warn('steward.codex_version_probe_failed', {
+            bin,
+            supportedVersion: SUPPORTED_CODEX_VERSION,
+          });
+          return;
+        }
+        if (installed !== SUPPORTED_CODEX_VERSION) {
+          this.logger.warn('steward.codex_version_mismatch', {
+            bin,
+            installedVersion: installed,
+            supportedVersion: SUPPORTED_CODEX_VERSION,
+          });
+        }
+      },
+      (err: unknown) => {
+        this.logger.warn('steward.codex_version_probe_failed', {
+          bin,
+          supportedVersion: SUPPORTED_CODEX_VERSION,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      },
+    );
   }
 
   async ensureThread(opts: EnsureThreadOptions): Promise<{ threadId: string; resumed: boolean }> {

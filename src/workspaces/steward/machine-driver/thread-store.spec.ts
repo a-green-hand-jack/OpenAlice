@@ -67,6 +67,29 @@ describe('MachineThreadStore', () => {
     expect(await store.read()).toEqual(written);
   });
 
+  it('records an explicit accountId and round-trips it (issue #155)', async () => {
+    const store = createMachineThreadStore(dir);
+    const written = await store.write({
+      threadId: 'thread-with-account',
+      createdAt: '2026-07-11T00:00:00.000Z',
+      accountId: 'account-1',
+    });
+
+    expect(written.accountId).toBe('account-1');
+    expect(await store.read()).toEqual(written);
+  });
+
+  it('omits accountId when not provided (legacy shape, no key present)', async () => {
+    const store = createMachineThreadStore(dir);
+    const written = await store.write({
+      threadId: 'thread-no-account',
+      createdAt: '2026-07-11T00:00:00.000Z',
+    });
+
+    expect(written.accountId).toBeUndefined();
+    expect(Object.keys(written)).not.toContain('accountId');
+  });
+
   it('treats a corrupt file as no thread (null), never throwing', async () => {
     const store = createMachineThreadStore(dir);
     await mkdir(dirname(store.path()), { recursive: true });

@@ -2,7 +2,8 @@ import { PassThrough } from 'node:stream';
 
 import { describe, expect, it } from 'vitest';
 
-import { CodexAppServerDriver } from './codex-app-server-driver.js';
+import type { Logger } from '../../logger.js';
+import { CodexAppServerDriver, SUPPORTED_CODEX_VERSION } from './codex-app-server-driver.js';
 import { MachineDriverProtocolError, type DriverEvent, type JsonRpcId, type MachineTransport } from './types.js';
 
 // Real thread/turn ids lifted from fixtures/transcripts/single-turn.jsonl so the
@@ -500,5 +501,122 @@ describe('CodexAppServerDriver', () => {
     } finally {
       process.off('unhandledRejection', onUnhandled);
     }
+  });
+});
+
+// --- checkCodexVersion (issue #152) ----------------------------------------
+
+interface CapturedWarning {
+  readonly msg: string;
+  readonly fields: Record<string, unknown>;
+}
+
+function capturingLogger(): { logger: Logger; warnings: CapturedWarning[] } {
+  const warnings: CapturedWarning[] = [];
+  const logger: Logger = {
+    debug: () => {},
+    info: () => {},
+    warn: (msg, fields) => warnings.push({ msg, fields: fields ?? {} }),
+    error: () => {},
+    event: () => {},
+    child: () => logger,
+  };
+  return { logger, warnings };
+}
+
+describe('CodexAppServerDriver.checkCodexVersion (issue #152)', () => {
+  it('does not warn when the probed version matches SUPPORTED_CODEX_VERSION', async () => {
+    const { logger, warnings } = capturingLogger();
+    const versionProbe = async (): Promise<string | null> => SUPPORTED_CODEX_VERSION;
+    const driver = new CodexAppServerDriver({ cwd: '/tmp/scratch', logger, versionProbe });
+
+    driver.checkCodexVersion();
+    await flush();
+
+    expect(warnings).toEqual([]);
+  });
+
+  it('warns with BOTH the installed and supported versions on a mismatch', async () => {
+    const { logger, warnings } = capturingLogger();
+    const versionProbe = async (): Promise<string | null> => '0.150.0';
+    const driver = new CodexAppServerDriver({ cwd: '/tmp/scratch', logger, versionProbe });
+
+    driver.checkCodexVersion();
+    await flush();
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.msg).toBe('steward.codex_version_mismatch');
+    expect(warnings[0]?.fields).toMatchObject({
+      installedVersion: '0.150.0',
+      supportedVersion: SUPPORTED_CODEX_VERSION,
+    });
+  });
+
+  it('warns (does not throw / does not block) when the probe fails to resolve a version', async () => {
+    const { logger, warnings } = capturingLogger();
+    const versionProbe = async (): Promise<string | null> => null; // binary missing / unparsable output
+    const driver = new CodexAppServerDriver({ cwd: '/tmp/scratch', logger, versionProbe });
+
+    expect(() => driver.checkCodexVersion()).not.toThrow();
+    await flush();
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.msg).toBe('steward.codex_version_probe_failed');
+    expect(warnings[0]?.fields).toMatchObject({ supportedVersion: SUPPORTED_CODEX_VERSION });
+  });
+
+  it('warns when the probe itself rejects, and the wake path is never blocked', async () => {
+    const { logger, warnings } = capturingLogger();
+    const versionProbe = (): Promise<string | null> => Promise.reject(new Error('spawn ENOENT'));
+    const driver = new CodexAppServerDriver({ cwd: '/tmp/scratch', logger, versionProbe });
+
+    expect(() => driver.checkCodexVersion()).not.toThrow();
+    await flush();
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.msg).toBe('steward.codex_version_probe_failed');
+    expect(warnings[0]?.fields['err']).toContain('ENOENT');
+  });
+
+  it('caches the probe result: calling checkCodexVersion twice on the same driver only probes once', async () => {
+    const { logger } = capturingLogger();
+    let calls = 0;
+    const versionProbe = async (): Promise<string | null> => {
+      calls += 1;
+      return SUPPORTED_CODEX_VERSION;
+    };
+    const driver = new CodexAppServerDriver({ cwd: '/tmp/scratch', logger, versionProbe });
+
+    driver.checkCodexVersion();
+    driver.checkCodexVersion();
+    driver.checkCodexVersion();
+    await flush();
+
+    expect(calls).toBe(1);
+  });
+
+  it('is fire-and-forget: does not block ensureThread/runTurn from proceeding', async () => {
+    const { logger, warnings } = capturingLogger();
+    let resolveProbe!: (v: string | null) => void;
+    const versionProbe = (): Promise<string | null> => new Promise((resolve) => { resolveProbe = resolve; });
+    const server = new FakeCodexServer();
+    respondHandshake(server, {
+      onTurnStart: (_msg, srv) => {
+        sendTurnStarted(srv);
+        sendTurnCompleted(srv, 'completed');
+      },
+    });
+    const driver = new CodexAppServerDriver({ cwd: '/tmp/scratch', logger, versionProbe, spawn: () => server.transport() });
+
+    driver.checkCodexVersion(); // probe never resolves during this test
+    const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch' });
+    const outcome = await driver.runTurn(threadId, 'do the thing');
+
+    expect(outcome.status).toBe('completed');
+    expect(warnings).toEqual([]); // probe still pending — no warning yet, nothing blocked
+
+    resolveProbe(SUPPORTED_CODEX_VERSION); // avoid leaving a dangling unresolved promise
+    await flush();
+    await driver.dispose();
   });
 });

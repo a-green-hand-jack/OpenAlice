@@ -657,6 +657,84 @@ describe('machine-thread provider match (issue #146 S5)', () => {
   });
 });
 
+describe('machine-thread account identity guard (issue #155)', () => {
+  async function seedThread(accountId?: string): Promise<void> {
+    await createMachineThreadStore(dir).write({
+      provider: 'codex',
+      threadId: 'thread-owned',
+      createdAt: '2026-07-01T00:00:00.000Z',
+      lastTurnAt: '2026-07-07T00:00:00.000Z',
+      ...(accountId !== undefined ? { accountId } : {}),
+    });
+  }
+
+  it('a fresh dispatch records the wake envelope accountId in the thread store', async () => {
+    const { driver } = makeMockDriver();
+    await dispatchMachineWake(baseInput(driver));
+
+    const stored = await createMachineThreadStore(dir).read();
+    expect(stored?.accountId).toBe(envelope.accountId);
+  });
+
+  it('a stored thread owned by the SAME account resumes normally — no mismatch event', async () => {
+    await seedThread(envelope.accountId);
+    const { driver, calls } = makeMockDriver({
+      ensureThread: async (o) => ({ threadId: o.threadId ?? 'fresh', resumed: o.threadId !== undefined }),
+    });
+    const result = await dispatchMachineWake(baseInput(driver));
+
+    expect(result).toMatchObject({ threadId: 'thread-owned', resumed: true, threadReset: false });
+    expect(calls.ensureThread[0]?.threadId).toBe('thread-owned');
+    expect((await readSupervisorEvents()).some((e) => e['type'] === 'machine_thread_account_mismatch')).toBe(false);
+    const stored = await createMachineThreadStore(dir).read();
+    expect(stored?.accountId).toBe(envelope.accountId);
+  });
+
+  it('a stored thread owned by a DIFFERENT account is NOT resumed — fresh thread + mismatch event, store adopts the current account', async () => {
+    await seedThread('some-other-account');
+    const { driver, calls } = makeMockDriver({
+      ensureThread: async (o) => {
+        expect(o.threadId).toBeUndefined(); // mismatch forces a FRESH thread, not resume
+        return { threadId: 'thread-fresh-for-new-account', resumed: false };
+      },
+    });
+    const result = await dispatchMachineWake(baseInput(driver));
+
+    expect(result).toMatchObject({ threadId: 'thread-fresh-for-new-account', resumed: false });
+    expect(calls.ensureThread[0]?.threadId).toBeUndefined();
+
+    const stored = await createMachineThreadStore(dir).read();
+    expect(stored?.threadId).toBe('thread-fresh-for-new-account');
+    expect(stored?.accountId).toBe(envelope.accountId);
+
+    const mismatch = (await readSupervisorEvents()).find((e) => e['type'] === 'machine_thread_account_mismatch');
+    expect(mismatch).toMatchObject({
+      wakeId: 'wake-m',
+      priorThreadId: 'thread-owned',
+      storedAccountId: 'some-other-account',
+      accountId: envelope.accountId,
+    });
+  });
+
+  it('a LEGACY stored thread (no accountId at all) resumes normally and is adopted on write — no mismatch, no reset', async () => {
+    await seedThread(undefined);
+    const { driver, calls } = makeMockDriver({
+      ensureThread: async (o) => ({ threadId: o.threadId ?? 'fresh', resumed: o.threadId !== undefined }),
+    });
+    const result = await dispatchMachineWake(baseInput(driver));
+
+    // Resumed, NOT reset — a legacy record is adoptable, not a mismatch.
+    expect(result).toMatchObject({ threadId: 'thread-owned', resumed: true, threadReset: false });
+    expect(calls.ensureThread[0]?.threadId).toBe('thread-owned');
+    expect((await readSupervisorEvents()).some((e) => e['type'] === 'machine_thread_account_mismatch')).toBe(false);
+
+    // Adopted on this write — the next wake for the same account now matches.
+    const stored = await createMachineThreadStore(dir).read();
+    expect(stored?.accountId).toBe(envelope.accountId);
+    expect(stored?.threadId).toBe('thread-owned');
+  });
+});
+
 describe('dispatchStewardWakeControlFace — shared gate + factory seam (issue #146 S4, item 1)', () => {
   function baseDeps(
     acquireDriver: (adapter: unknown) => StewardMachineDriver,

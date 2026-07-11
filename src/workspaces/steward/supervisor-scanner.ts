@@ -222,7 +222,9 @@ export class StewardSupervisorScanner {
 
   private async tickWorkspace(ws: WorkspaceMeta): Promise<void> {
     try {
-      const config = await readStewardConfig(ws);
+      const config = await readStewardConfig(ws, {
+        onWarn: (message, detail) => this.deps.logger.warn(message, { wsId: ws.id, ...detail }),
+      });
       const readContextTelemetry = this.deps.readContextTelemetry;
       const isMachineThreadLive = this.deps.isMachineThreadLive;
       const readMachineTelemetry = this.deps.readMachineTelemetry;

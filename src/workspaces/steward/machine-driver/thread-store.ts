@@ -22,6 +22,14 @@ export interface MachineThreadWriteInput {
   readonly createdAt: string;
   /** ISO of the last turn; omit/null when the thread has not taken a turn yet. */
   readonly lastTurnAt?: string | null;
+  /**
+   * The account this write's dispatch ran for (issue #155). Optional so
+   * pre-#155 callers/tests are unaffected; `dispatchMachineWake` always passes
+   * the current wake's `envelope.accountId`, which both records a fresh
+   * thread's owner and adopts the identity onto a resumed legacy record (one
+   * with no stored `accountId` yet) on its very next write.
+   */
+  readonly accountId?: string;
 }
 
 /**
@@ -43,6 +51,16 @@ export interface MachineThreadWriteInput {
  * one-turn-per-thread invariant would simply serialize them. Per-account thread
  * partitioning, if ever needed, is out of scope and would key this store by
  * accountId.
+ *
+ * GUARD, NOT PARTITIONING (issue #155): the record now carries the `accountId`
+ * of the wake that last dispatched onto it. This does NOT change the
+ * single-thread-per-workspace assumption above — it only stops a SILENT
+ * cross-account resume: `dispatch.ts`'s `resolveStoredForAccount` treats a
+ * stored record whose `accountId` differs from the current wake's as absent
+ * (fresh thread + a `machine_thread_account_mismatch` event), exactly like the
+ * existing provider-mismatch guard. A record with no `accountId` at all is
+ * LEGACY (pre-#155) and is adopted on the next write, never treated as a
+ * mismatch.
  */
 export class MachineThreadStore {
   constructor(private readonly workspaceDir: string) {}
@@ -74,6 +92,7 @@ export class MachineThreadStore {
       ...(input.model !== undefined ? { model: input.model } : {}),
       createdAt: input.createdAt,
       lastTurnAt: input.lastTurnAt ?? null,
+      ...(input.accountId !== undefined ? { accountId: input.accountId } : {}),
     });
     const path = this.path();
     await mkdir(dirname(path), { recursive: true });
