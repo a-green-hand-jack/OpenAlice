@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import {
   WAKE_SCHEMA_VERSION,
   parseStewardWakeRecord,
+  type StewardLedgerIntegrity,
   type StewardLedgerReceipt,
   type StewardWakeAttribution,
   type StewardWakeEnvelope,
@@ -30,11 +31,18 @@ export interface WakeStatusPatch {
   /**
    * Ledger-integrity receipt (issue #134). Set on the first terminal
    * reconciliation of a ledger-backed wake (and once on bootstrap of a
-   * pre-#134 terminal wake). Treated as immutable thereafter — the supervisor
-   * never overwrites an existing receipt, so this only ever transitions
-   * absent → present.
+   * pre-#134 terminal wake). Write-once — the supervisor never overwrites an
+   * existing receipt, so this only ever transitions absent → present. (Write-once
+   * within the workspace's own trust domain; not tamper-proof against a
+   * coordinated rewrite.)
    */
   readonly ledgerReceipt?: StewardLedgerReceipt;
+  /**
+   * Ledger-integrity violation marker (issue #134). A value sets/updates it (so
+   * the supervisor emits a given violation event once); `null` clears it (on
+   * recovery). Unlike the receipt, this is deliberately mutable.
+   */
+  readonly ledgerIntegrity?: StewardLedgerIntegrity | null;
   readonly now?: string;
 }
 
@@ -101,10 +109,15 @@ export class StewardWakeStore {
       candidate.attribution = patch.attribution;
     }
     // A receipt is write-once: capture it if this wake has none yet, but never
-    // overwrite an existing one (issue #134 — the whole point is that the
-    // original terminal proof is immutable).
+    // overwrite an existing one (issue #134 — the original terminal marker stays
+    // fixed so a later tick can detect drift against it).
     if (patch.ledgerReceipt !== undefined && candidate.ledgerReceipt === undefined) {
       candidate.ledgerReceipt = patch.ledgerReceipt;
+    }
+    if (patch.ledgerIntegrity === null) {
+      delete candidate.ledgerIntegrity;
+    } else if (patch.ledgerIntegrity !== undefined) {
+      candidate.ledgerIntegrity = patch.ledgerIntegrity;
     }
     const next = parseStewardWakeRecord(candidate);
     await writeJsonAtomic(this.pathFor(wakeId), next);

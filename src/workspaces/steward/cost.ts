@@ -13,7 +13,7 @@ export interface StewardCostPolicyInput {
 
 /**
  * First-wins de-duplication by `wakeId`, preserving file order. Issue #125
- * D3: a later duplicate entry for the same wake is a tamper-evident violation
+ * D3: a later duplicate entry for the same wake is a corruption-evident violation
  * that must never alter recorded truth — including the aggregate cost/state
  * surface (`state.json`, consumed downstream e.g. as `ledgerReportedCostUsd`
  * by `tools/campaigns/run-cell.mjs`). `readDiagnostics().entries` intentionally

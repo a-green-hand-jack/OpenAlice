@@ -19,4 +19,15 @@ export interface FinalizationAudit {
 
 export function auditFinalization(input?: FinalizationAuditInput): FinalizationAudit;
 
+export interface FinalizationTrustInput extends FinalizationAuditInput {
+  integrityViolations?: unknown[];
+}
+
+export interface FinalizationTrust {
+  trustworthy: boolean;
+  audit: FinalizationAudit & { setEqual: boolean; integrityViolations: unknown[] };
+}
+
+export function finalizationTrust(input?: FinalizationTrustInput): FinalizationTrust;
+
 export const LEDGER_BACKED_TERMINAL: Set<string>;

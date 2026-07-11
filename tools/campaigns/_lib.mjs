@@ -192,6 +192,32 @@ export function auditFinalization({ weeks = [], ledgerEntries = [] } = {}) {
 }
 
 /**
+ * Compute the finalization trust verdict (issue #134, PR #135 review). Folds the
+ * set-equality audit AND any structured `ledger_integrity_violation` events the
+ * supervisor recorded into a single `trustworthy` boolean, and returns the audit
+ * block a run result should persist. This is the wiring `run-cell.mjs` uses so a
+ * run is `trustworthy:false` whenever EITHER the terminal-wake/ledger sets
+ * diverge OR the supervisor flagged a corruption drift — a result must never
+ * read as a normal pass while either is true.
+ *
+ * @param {{ weeks?: Array<{ wakeId?: string, status?: string }>, ledgerEntries?: Array<{ wakeId?: string }>, integrityViolations?: unknown[] }} input
+ * @returns {{ trustworthy: boolean, audit: object }}
+ */
+export function finalizationTrust({ weeks = [], ledgerEntries = [], integrityViolations = [] } = {}) {
+  const base = auditFinalization({ weeks, ledgerEntries });
+  const trustworthy = base.valid && integrityViolations.length === 0;
+  return {
+    trustworthy,
+    audit: {
+      ...base,
+      valid: trustworthy,
+      setEqual: base.valid,
+      integrityViolations,
+    },
+  };
+}
+
+/**
  * Optimistic upper bound for a long-only weekly steward under the configured
  * max-position guard: enter at each weekly decision close with max allowed
  * notional and hold to the final close, then keep the best result. This is not

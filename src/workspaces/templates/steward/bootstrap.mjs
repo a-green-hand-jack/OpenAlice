@@ -154,16 +154,22 @@ if (!entry.cost || typeof entry.cost !== 'object' || Array.isArray(entry.cost)) 
 const missingCost = requiredCost.filter((key) => !(key in entry.cost))
 if (missingCost.length) fail('line ' + found.line + ' cost is missing field(s): ' + missingCost.join(', '))
 
-// Issue #134: ledger-integrity cross-check. A wake that ALREADY reached a
-// ledger-backed terminal state (done|blocked|error) must still have its
-// first-wins ledger entry, unchanged. Compare every terminal wake record
-// against the current ledger, so validating THIS wake fails if any earlier
-// completed decision disappeared or was mutated -- exactly what happened when
-// the persistent session deleted and rebuilt decisions.jsonl mid-run. The
-// canonical fingerprint mirrors src/workspaces/steward/ledger-receipt.ts byte
-// for byte; keep them in lockstep. timeout/stuck wakes write no ledger entry
-// and are skipped.
+// Issue #134: ledger-integrity cross-check (corruption-evident, not tamper-
+// proof -- wake/ledger/receipt share one agent-writable trust domain). A wake
+// that ALREADY reached a ledger-backed terminal state (done|blocked|error) AND
+// was dispatched must still have its first-wins ledger entry, unchanged.
+// Compare every such terminal wake record against the current ledger, so
+// validating THIS wake fails if an earlier completed decision disappeared or
+// was mutated -- exactly what happened when the persistent session deleted and
+// rebuilt decisions.jsonl mid-run. The semantic projection + canonical
+// fingerprint mirror src/workspaces/steward/ledger-receipt.ts byte for byte (a
+// pinned golden vector guards the parity); keep them in lockstep. First-wins
+// selection is the first JSON-parseable object line per wakeId (schema-
+// independent), matching the supervisor. timeout/stuck wakes, and wakes that
+// never dispatched (no injectedAt and no receipt), write no ledger entry and
+// are skipped.
 const { createHash } = await import('node:crypto')
+const LEDGER_SEMANTIC_KEYS = ['version', 'wakeId', 'at', 'accountId', 'decision', 'status', 'context', 'completion', 'checklist', 'thesis', 'actions', 'pendingHash', 'invalidation', 'cost']
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize)
   if (value && typeof value === 'object') {
@@ -173,8 +179,14 @@ function canonicalize(value) {
   }
   return value
 }
+function semanticProjection(obj) {
+  const source = obj && typeof obj === 'object' ? obj : {}
+  const out = {}
+  for (const key of LEDGER_SEMANTIC_KEYS) if (key in source) out[key] = source[key]
+  return out
+}
 function ledgerFingerprint(obj) {
-  return createHash('sha256').update(JSON.stringify(canonicalize(obj))).digest('hex')
+  return createHash('sha256').update(JSON.stringify(canonicalize(semanticProjection(obj)))).digest('hex')
 }
 const firstWins = new Map()
 for (let i = 0; i < lines.length; i++) {
@@ -198,6 +210,9 @@ for (const name of wakeFiles) {
     fail('wake record ' + name + ' is invalid JSON: ' + err.message)
   }
   if (!rec || typeof rec !== 'object' || !terminalBacked.includes(rec.status)) continue
+  // Skip a wake that never actually dispatched (no injectedAt and no receipt):
+  // a POST-time failure marked terminal was never ledger-backed.
+  if (!rec.injectedAt && !rec.ledgerReceipt) continue
   const priorEntry = firstWins.get(rec.wakeId)
   if (!priorEntry) fail('terminal wake ' + rec.wakeId + ' (status ' + rec.status + ') has no ledger entry -- an earlier completed decision disappeared from ' + path)
   if (rec.ledgerReceipt && typeof rec.ledgerReceipt.fingerprint === 'string') {

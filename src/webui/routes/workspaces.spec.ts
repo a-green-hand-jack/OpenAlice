@@ -464,6 +464,46 @@ describe('steward wake API', () => {
     }
   });
 
+  it('marks the wake stuck (not error) when injection fails because the session is not live (issue #134 / PR #135)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
+    try {
+      await mkdir(join(dir, '.alice', 'steward'), { recursive: true });
+      await writeFile(
+        join(dir, '.alice/steward/config.json'),
+        JSON.stringify({ version: 1, agent: 'codex', sessionId: 'configured-session' }, null, 2) + '\n',
+        'utf8',
+      );
+      const { app, pool, live } = buildSteward({ dir });
+      live.set('configured-session', { recordId: 'configured-session' });
+      // Force the wake injection to fail (target session not writable) — the
+      // wake never actually ran, so it must be `stuck`, not `error`, and must
+      // never trip ledger-integrity reconciliation.
+      pool.writeToSession = vi.fn(() => false);
+
+      // Plain `post` (not `postWake`): injection fails immediately, so the
+      // 3s submit-gap timer `postWake` waits for is never scheduled.
+      const r = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-inject-fail',
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+
+      expect(r.status).toBe(500);
+      expect(r.body.error).toBe('inject_failed');
+      expect(r.body.wake.status).toBe('stuck');
+
+      const stored = JSON.parse(
+        await readFile(join(dir, '.alice/steward/wakes/wake-inject-fail.json'), 'utf8'),
+      ) as { status: string; injectedAt: string | null };
+      expect(stored.status).toBe('stuck');
+      expect(stored.injectedAt).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('resumes a configured paused steward session before injecting the wake', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
     try {

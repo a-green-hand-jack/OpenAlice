@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { auditFinalization } from '../../../tools/campaigns/_lib.mjs';
+import { auditFinalization, finalizationTrust } from '../../../tools/campaigns/_lib.mjs';
 
 describe('auditFinalization (issue #134)', () => {
   const week = (n: number, status: string) => ({ wakeId: `wake-${n}`, status });
@@ -57,5 +57,45 @@ describe('auditFinalization (issue #134)', () => {
     const audit = auditFinalization({ weeks, ledgerEntries: [ledger(1)] });
     expect(audit.valid).toBe(false);
     expect(audit.missingFromLedger).toEqual(['wake-2']);
+  });
+});
+
+describe('finalizationTrust (issue #134, PR #135 review)', () => {
+  const week = (n: number, status: string) => ({ wakeId: `wake-${n}`, status });
+  const ledger = (n: number) => ({ wakeId: `wake-${n}` });
+
+  it('is trustworthy only when sets match AND no integrity violations were flagged', () => {
+    const { trustworthy, audit } = finalizationTrust({
+      weeks: [1, 2].map((n) => week(n, 'done')),
+      ledgerEntries: [1, 2].map(ledger),
+      integrityViolations: [],
+    });
+    expect(trustworthy).toBe(true);
+    expect(audit.valid).toBe(true);
+    expect(audit.setEqual).toBe(true);
+    expect(audit.integrityViolations).toEqual([]);
+  });
+
+  it('is NOT trustworthy when the sets match but the supervisor flagged an integrity violation', () => {
+    const { trustworthy, audit } = finalizationTrust({
+      weeks: [1, 2].map((n) => week(n, 'done')),
+      ledgerEntries: [1, 2].map(ledger),
+      integrityViolations: [{ wakeId: 'wake-1', kind: 'entry_mutated' }],
+    });
+    expect(trustworthy).toBe(false);
+    // set-equality alone still held, but overall validity folds in the violation.
+    expect(audit.setEqual).toBe(true);
+    expect(audit.valid).toBe(false);
+    expect(audit.integrityViolations).toHaveLength(1);
+  });
+
+  it('is NOT trustworthy when six terminal wakes export only five decisions (the original bug)', () => {
+    const { trustworthy, audit } = finalizationTrust({
+      weeks: [1, 2, 3, 4, 5, 6].map((n) => week(n, 'done')),
+      ledgerEntries: [2, 3, 4, 5, 6].map(ledger),
+    });
+    expect(trustworthy).toBe(false);
+    expect(audit.valid).toBe(false);
+    expect(audit.missingFromLedger).toEqual(['wake-1']);
   });
 });

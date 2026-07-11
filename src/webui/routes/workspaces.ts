@@ -916,7 +916,12 @@ export function createWorkspaceRoutes(
       record,
     });
     if (!injected) {
-      const failed = await wakeStore.updateStatus(wakeId, 'error', {
+      // The wake never actually ran (the target session isn't live), so it is
+      // NOT ledger-backed. Mark it `stuck` — the same status the supervisor's
+      // liveness check uses for "session not running" — rather than `error`, so
+      // ledger-integrity reconciliation (issue #134) never expects a decision
+      // entry for a wake that was never dispatched.
+      const failed = await wakeStore.updateStatus(wakeId, 'stuck', {
         now: new Date().toISOString(),
         completedAt: new Date().toISOString(),
         sessionId: selected.sessionId,
