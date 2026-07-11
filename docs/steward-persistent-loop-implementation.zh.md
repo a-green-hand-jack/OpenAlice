@@ -1,5 +1,13 @@
 # Persistent Steward 最小实现方案
 
+> 版本：v0.9（2026-07-11）——当前 consolidation 状态：#124 trust-config 双层锁、#125
+> strict v2 ledger、#127 restart owner、#132 session rotation/overflow attribution、
+> #134/#136/#139/#140 ledger receipt/finalize/identity/atomic writer 与 #137 MockBroker
+> `cashQty` 均已落地。Canonical `v8matrix7` 完成 10/10 audit-clean、60/60 wakes；这验证了
+> isolated serial runtime load，但 #126 participation candidate 仍是 7/8 gateable，并在 review
+> 中暴露无 `max-position-size` guard 时的集中度风险，因此**实验记录合并、默认 prompt 不启用**，
+> holdout/live 继续封存。证据见
+> [appendix/steward-v8-candidate-20260711.md](appendix/steward-v8-candidate-20260711.md)。
 > 版本：v0.8（2026-07-10）——PR #122 合入后的 v7 Spark baseline 已完成：
 > isolated-stack 10 cells × 6 weeks 共 60/60 wake `done`，exact contract、三方对账、
 > cleanup 均通过；但 NVDA 仍低于 bull gate，prompt 不冻结、holdout 不打开。
@@ -299,7 +307,9 @@ writeToSession(recordId: string, input: string, opts: WriteInputOptions): boolea
 <STEWARD_WAKE id="..." deadline="...">
 Read .alice/steward/wakes/<wakeId>.json.
 Run the fixed UTA checklist.
-Append exactly one JSON object to .alice/steward/ledger/decisions.jsonl.
+Write one decision object to .alice/steward/drafts/<wakeId>.json.
+Run node .alice/steward/validate-ledger.mjs <wakeId>.
+The validator is the only supported ledger writer and publishes the finalize marker.
 Do not inspect OpenAlice source. Do not call push.
 </STEWARD_WAKE>
 ```
