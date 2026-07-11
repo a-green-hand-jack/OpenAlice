@@ -60,6 +60,35 @@ export type StewardWakeStatus = z.infer<typeof stewardWakeStatusSchema>;
 export const stewardControlFaceSchema = z.enum(['pty', 'machine']);
 export type StewardControlFace = z.infer<typeof stewardControlFaceSchema>;
 
+// Steward config validation (issue #153). `.alice/steward/config.json` is
+// hand-edited JSON with no write-time validation; the S6 read-time fail-safe
+// in `decideStewardControlFace` (machine-driver/dispatch.ts) already refuses
+// to interpret an unrecognized `controlFace` value as `machine` — it declines
+// to PTY, loudly. That fail-safe STAYS the sole enforcement point. This schema
+// is used PURELY for a load-time OBSERVABILITY warning (`readStewardConfig` in
+// `config.ts`) — it never blocks the read or rewrites the config. Every
+// recognized field is optional and every object level is `.passthrough()`, so
+// an absent field, or a genuinely new forward-compatible key, never triggers a
+// warning — only a RECOGNIZED key carrying a value of the wrong shape does
+// (e.g. `controlFace: 'PTY'`, `sessionRotation.threshold: "high"`).
+export const stewardConfigSchema = z.object({
+  version: z.number().optional(),
+  agent: z.string().optional(),
+  sessionId: z.string().optional(),
+  controlFace: stewardControlFaceSchema.optional(),
+  sessionRotation: z.object({
+    threshold: z.number().optional(),
+  }).passthrough().optional(),
+  monthlyBudget: z.object({
+    modelUsd: z.number().optional(),
+    serverUsd: z.number().optional(),
+  }).passthrough().optional(),
+  costPolicy: z.object({
+    warnAtPct: z.number().optional(),
+  }).passthrough().optional(),
+}).passthrough();
+export type StewardConfig = z.infer<typeof stewardConfigSchema>;
+
 export const stewardDecisionSchema = z.enum(['no_trade', 'propose_trade', 'blocked']);
 export type StewardDecision = z.infer<typeof stewardDecisionSchema>;
 

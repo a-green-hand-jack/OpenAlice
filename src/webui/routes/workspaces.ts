@@ -834,7 +834,9 @@ export function createWorkspaceRoutes(
 
     let config: Record<string, unknown>;
     try {
-      config = await readStewardConfig(meta);
+      config = await readStewardConfig(meta, {
+        onWarn: (message, detail) => launcherLogger.warn(message, { id: meta.id, ...detail }),
+      });
     } catch (err) {
       return c.json({ error: 'invalid_steward_config', message: (err as Error).message }, 500);
     }
@@ -1040,7 +1042,9 @@ export function createWorkspaceRoutes(
 
     let config: Record<string, unknown>;
     try {
-      config = await readStewardConfig(meta);
+      config = await readStewardConfig(meta, {
+        onWarn: (message, detail) => launcherLogger.warn(message, { id: meta.id, ...detail }),
+      });
     } catch (err) {
       return c.json({ error: 'invalid_steward_config', message: (err as Error).message }, 500);
     }

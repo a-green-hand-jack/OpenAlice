@@ -280,7 +280,8 @@ export async function dispatchMachineWake(input: DispatchMachineWakeInput): Prom
   // thread's last driver telemetry is over the SAME rotation threshold, dispose
   // the poisoned driver, swap in a fresh one, and force a fresh thread below.
   // Reuses `resolveRotationThreshold` / `decideStewardRotation` — no new numbers.
-  const stored = await resolveStoredForProvider(input, provider);
+  const storedForProvider = await resolveStoredForProvider(input, provider);
+  const stored = await resolveStoredForAccount(input, storedForProvider);
   const rotation = await maybeRotateMachineThread(input, stored);
   const driver = rotation.driver;
 
@@ -293,6 +294,12 @@ export async function dispatchMachineWake(input: DispatchMachineWakeInput): Prom
     threadId: resolved.threadId,
     createdAt: resolved.createdAt,
     lastTurnAt: now,
+    // Issue #155: adopt the current wake's account identity on EVERY write —
+    // this is what migrates a legacy (pre-#155, no-`accountId`) record forward
+    // with no separate special case, and keeps a same-account resume's record
+    // current. `envelope.accountId` is a required, non-empty field (see
+    // `stewardWakeEnvelopeSchema`), so this is always a real value.
+    accountId: input.wake.envelope.accountId,
   });
 
   // Record the rotation now that the fresh thread id is known — the SAME
@@ -381,6 +388,48 @@ async function resolveStoredForProvider(
     priorThreadId: stored.threadId,
     storedProvider: stored.provider,
     provider,
+  }).catch(() => undefined);
+  return null;
+}
+
+/**
+ * Read the (provider-checked) stored thread, but treat a record belonging to a
+ * DIFFERENT account as ABSENT (issue #155): the machine face persists ONE
+ * thread per workspace (`MachineThreadStore`), which assumes a steward
+ * workspace manages exactly one trading account. If a later wake's
+ * `envelope.accountId` differs from the thread's recorded owner, resuming it
+ * would bleed one account's conversational context into another account's
+ * decisions — so the stored record is dropped (⇒ `resolveMachineThread` starts
+ * a FRESH thread and the store is overwritten with the CURRENT account) and a
+ * structured `machine_thread_account_mismatch` event is emitted, mirroring
+ * {@link resolveStoredForProvider}'s provider-mismatch handling exactly.
+ *
+ * A record with NO `accountId` at all is LEGACY (pre-#155) — that is NOT a
+ * mismatch: it resumes as normal, and `dispatchMachineWake`'s unconditional
+ * `threadStore.write` adopts the current wake's `accountId` on the very next
+ * write, with no separate special case and no spurious reset.
+ */
+async function resolveStoredForAccount(
+  input: DispatchMachineWakeInput,
+  stored: MachineThreadState | null,
+): Promise<MachineThreadState | null> {
+  if (!stored || stored.accountId === undefined) return stored;
+  const accountId = input.wake.envelope.accountId;
+  if (stored.accountId === accountId) return stored;
+  input.logger.warn('schedule.steward_machine_thread_account_mismatch', {
+    wsId: input.wsId,
+    wakeId: input.wake.wakeId,
+    priorThreadId: stored.threadId,
+    storedAccountId: stored.accountId,
+    accountId,
+  });
+  await appendSupervisorEvent(input.workspaceDir, {
+    at: input.now,
+    type: 'machine_thread_account_mismatch',
+    wakeId: input.wake.wakeId,
+    priorThreadId: stored.threadId,
+    storedAccountId: stored.accountId,
+    accountId,
   }).catch(() => undefined);
   return null;
 }

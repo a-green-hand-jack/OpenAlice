@@ -192,6 +192,13 @@ export const machineThreadStateSchema = z.object({
   // ISO of the last turn that ran on this thread, or null when the thread was
   // created but has not yet taken a turn.
   lastTurnAt: z.string().min(1).nullable(),
+  // The account this thread was last dispatched for (issue #155). Optional:
+  // absence means a LEGACY (pre-#155) record, which `dispatchMachineWake`
+  // treats as adoptable, not a mismatch — see `resolveStoredForAccount` in
+  // `dispatch.ts`. A present value that differs from a later wake's
+  // `envelope.accountId` is a cross-account resume risk; that wake starts a
+  // fresh thread instead of resuming this record.
+  accountId: z.string().min(1).optional(),
 }).passthrough();
 export type MachineThreadState = z.infer<typeof machineThreadStateSchema>;
 

@@ -10,7 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
 import { cliBinPath } from '@/core/paths.js';
@@ -84,11 +84,13 @@ import {
   evaluateStewardRotation,
   formatStewardWakeMessage,
   injectStewardWake,
+  readStewardConfig,
   recordStewardRotation,
   StewardLockConflictError,
   StewardSupervisorScanner,
   type StewardWakeEnvelope,
 } from './steward/index.js';
+import { CodexAppServerDriver } from './steward/machine-driver/codex-app-server-driver.js';
 import { MachineDriverRegistry } from './steward/machine-driver/driver-registry.js';
 import { createMachineThreadStore } from './steward/machine-driver/thread-store.js';
 import {
@@ -712,7 +714,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
   // .machineDriverFactory` is passed straight through for integration tests.
   const makeMachineDriver = (ws: WorkspaceMeta, adapter: CliAdapter): StewardMachineDriver => {
     const { cwd, env } = composeSpawnInputs(ws, adapter, undefined);
-    return buildMachineDriver({
+    const driver = buildMachineDriver({
       ws,
       adapter,
       cwd,
@@ -720,6 +722,12 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       logger: launcherLogger,
       ...(opts.machineDriverFactory ? { factory: opts.machineDriverFactory } : {}),
     });
+    // Issue #152: runtime codex-cli version probe, fire-and-forget, once per
+    // REAL driver init — warn-only, never blocks a wake. Deliberately called
+    // here (not inside `CodexAppServerDriver` itself) so a factory-provided
+    // (test) driver never triggers a real `codex --version` spawn.
+    if (driver instanceof CodexAppServerDriver) driver.checkCodexVersion();
+    return driver;
   };
 
   // Issue #146 S4 (item 1): the SHARED control-face gate + machine dispatch, used
@@ -780,7 +788,9 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     if (!refreshed.ok) {
       throw new Error(`steward runtime refresh failed; not dispatching wake: ${refreshed.message}`);
     }
-    const config = await readStewardConfig(ws);
+    const config = await readStewardConfig(ws, {
+      onWarn: (message, detail) => launcherLogger.warn(message, { id: ws.id, ...detail }),
+    });
     const envelope: StewardWakeEnvelope = {
       reason: wake.reason,
       accountId: wake.accountId,
@@ -900,21 +910,6 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       throw err;
     }
   };
-
-  async function readStewardConfig(ws: WorkspaceMeta): Promise<Record<string, unknown>> {
-    try {
-      const raw = await readFile(join(ws.dir, '.alice', 'steward', 'config.json'), 'utf8');
-      if (raw.trim() === '') return {};
-      const parsed = JSON.parse(raw) as unknown;
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        throw new Error('.alice/steward/config.json must be an object');
-      }
-      return parsed as Record<string, unknown>;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
-      throw err;
-    }
-  }
 
   async function writeStewardSessionConfig(
     ws: WorkspaceMeta,
