@@ -29,9 +29,16 @@ import { stewardLedgerLockPath, stewardLedgerPath } from './paths.js';
  */
 
 export const LOCK_TTL_MS = 30_000;
-const LOCK_ACQUIRE_ATTEMPTS = 120;
+// Total acquire budget must OUTLAST the stale TTL so a lock left by a dead
+// writer is always reclaimed rather than giving up first: after the short ramp
+// this is ~200 attempts × 200ms ≈ 40s > LOCK_TTL_MS (30s). (Mirrored in the
+// generated validator — see the parity test.)
+const LOCK_ACQUIRE_ATTEMPTS = 200;
 const LOCK_BACKOFF_BASE_MS = 15;
 const LOCK_BACKOFF_CAP_MS = 200;
+/** Retry codes a rename may transiently fail with on Windows/macOS. Shared,
+ *  parity-checked against the generated validator. */
+export const LEDGER_RENAME_RETRY_CODES = ['EPERM', 'EACCES', 'EEXIST', 'EBUSY'] as const;
 const RENAME_ATTEMPTS = 20;
 const RENAME_BACKOFF_MS = 25;
 
@@ -70,7 +77,10 @@ export async function acquireLedgerLock(workspaceDir: string): Promise<LedgerLoc
       await sleep(Math.min(LOCK_BACKOFF_BASE_MS * (attempt + 1), LOCK_BACKOFF_CAP_MS));
     }
   }
-  throw new Error(`could not acquire steward ledger lock: ${lockPath}`);
+  throw new Error(
+    `could not acquire steward ledger lock ${lockPath} within the acquire budget ` +
+      `(a stale lock is auto-reclaimed after ${LOCK_TTL_MS}ms; this is safe to retry)`,
+  );
 }
 
 function makeLock(lockPath: string, token: string): LedgerLock {
@@ -102,8 +112,9 @@ async function reclaimIfStale(lockPath: string): Promise<void> {
   if (!info || typeof info.at !== 'number' || Date.now() - info.at <= LOCK_TTL_MS) return;
   // Stale: reclaim by renaming aside. Only one racer's rename succeeds; the loser
   // gets ENOENT and simply retries the exclusive create.
-  await rename(lockPath, `${lockPath}.stale-${process.pid}-${tmpCounter++}`).catch(() => undefined);
-  await rm(`${lockPath}.stale-${process.pid}-${tmpCounter - 1}`, { force: true }).catch(() => undefined);
+  const aside = `${lockPath}.stale-${process.pid}-${tmpCounter++}`;
+  await rename(lockPath, aside).catch(() => undefined);
+  await rm(aside, { force: true }).catch(() => undefined);
 }
 
 /**
@@ -145,7 +156,7 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
       return;
     } catch (err) {
       // Windows/macOS can transiently fail an atomic rename over an open target.
-      if (attempt < RENAME_ATTEMPTS && isCode(err, 'EPERM', 'EACCES', 'EEXIST', 'EBUSY')) {
+      if (attempt < RENAME_ATTEMPTS && isCode(err, ...LEDGER_RENAME_RETRY_CODES)) {
         await sleep(RENAME_BACKOFF_MS * (attempt + 1));
         continue;
       }

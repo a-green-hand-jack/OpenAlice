@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { canonicalDecisionFingerprint } from '../../steward/ledger-receipt.js';
+import { LEDGER_RENAME_RETRY_CODES, LOCK_TTL_MS } from '../../steward/ledger-writer.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const bootstrapPath = join(here, 'bootstrap.mjs');
@@ -303,6 +304,95 @@ describe('generated validate-ledger.mjs — golden fingerprint parity (TS ↔ JS
     expect(runValidate('golden-wake').code).toBe(0);
     const marker = JSON.parse(await readFile(markerPathFor('golden-wake'), 'utf8'));
     expect(marker.fingerprint).toBe(GOLDEN_FINGERPRINT);
+  });
+});
+
+describe('generated validate-ledger.mjs ↔ ledger-writer.ts lock-protocol parity (issue #140)', () => {
+  it('shares the lock TTL, retry codes, lock-path suffix, and record shape with the TS writer', async () => {
+    const src = await readFile(join(wsDir, '.alice', 'steward', 'validate-ledger.mjs'), 'utf8');
+    // TTL parity (TS constant is the source of truth).
+    expect(LOCK_TTL_MS).toBe(30_000);
+    expect(src).toContain(`const LOCK_TTL_MS = ${LOCK_TTL_MS}`);
+    // Rename retry codes parity.
+    for (const code of LEDGER_RENAME_RETRY_CODES) expect(src).toContain(`'${code}'`);
+    // Lock path suffix + record shape.
+    expect(src).toContain("ledgerPath + '.lock'");
+    expect(src).toContain('pid: process.pid, token, at: Date.now()');
+    // Acquire budget outlasts the TTL (200 attempts) in both.
+    expect(src).toContain('attempt < 200');
+  });
+});
+
+describe('bootstrap.mjs --refresh-runtime (issue #140 merge gate)', () => {
+  const stewardFile = (p: string) => join(wsDir, '.alice', 'steward', p);
+  function refresh(): { code: number; stderr: string } {
+    const res = spawnSync(process.execPath, [bootstrapPath, '--refresh-runtime', wsDir], { encoding: 'utf8' });
+    return { code: res.status ?? -1, stderr: res.stderr };
+  }
+
+  it('upgrades an OLD workspace in place: new validator + drafts dir, user content byte-preserved, next wake commits', async () => {
+    // Simulate a workspace bootstrapped before #140: old ledger-based validator,
+    // no drafts/ dir, no runtime marker.
+    await writeFile(stewardFile('validate-ledger.mjs'), '// OLD LEDGER-BASED VALIDATOR\n', 'utf8');
+    await rm(stewardFile('drafts'), { recursive: true, force: true });
+    await rm(stewardFile('runtime.json'), { force: true });
+    // Existing user content: a prior completed wake + its ledger line + config.
+    const prior = await terminalWakeWithReceipt('wake-old');
+    await seedLedger([prior]);
+    const ledgerBefore = await readFile(ledgerFile(), 'utf8');
+    const configBefore = await readFile(stewardFile('config.json'), 'utf8');
+    const wakeBefore = await readFile(wakePathFor('wake-old'), 'utf8');
+
+    const r = refresh();
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+
+    // Launcher-owned artifacts upgraded:
+    const validator = await readFile(stewardFile('validate-ledger.mjs'), 'utf8');
+    expect(validator).not.toContain('OLD LEDGER-BASED');
+    expect(validator).toContain('drafts');
+    expect(existsSync(stewardFile('drafts'))).toBe(true);
+    expect(JSON.parse(await readFile(stewardFile('runtime.json'), 'utf8')).protocol).toBe(2);
+    // User content preserved byte-for-byte:
+    expect(await readFile(ledgerFile(), 'utf8')).toBe(ledgerBefore);
+    expect(await readFile(stewardFile('config.json'), 'utf8')).toBe(configBefore);
+    expect(await readFile(wakePathFor('wake-old'), 'utf8')).toBe(wakeBefore);
+
+    // The next wake now works end-to-end (draft → commit → marker), history intact.
+    await seedWakeRecord('wake-new');
+    await writeDraft('wake-new');
+    expect(runValidate('wake-new').code).toBe(0);
+    expect((await ledgerLines()).map((l) => JSON.parse(l).wakeId)).toEqual(['wake-old', 'wake-new']);
+    expect(existsSync(markerPathFor('wake-new'))).toBe(true);
+  });
+
+  it('is idempotent: repeated refresh succeeds and never duplicates git excludes', async () => {
+    expect(refresh().code).toBe(0);
+    expect(refresh().code).toBe(0);
+    const exclude = await readFile(join(wsDir, '.git', 'info', 'exclude'), 'utf8');
+    expect(exclude.split('\n').filter((l) => l.trim() === '.alice/steward/drafts/')).toHaveLength(1);
+    expect(exclude.split('\n').filter((l) => l.trim() === '.alice/steward/ledger/decisions.jsonl.lock')).toHaveLength(1);
+  });
+
+  it('never touches user content when nothing changed (config/ledger/wakes untouched)', async () => {
+    await seedLedger([entry({ wakeId: 'wake-keep' })]);
+    const before = {
+      config: await readFile(stewardFile('config.json'), 'utf8'),
+      ledger: await readFile(ledgerFile(), 'utf8'),
+    };
+    expect(refresh().code).toBe(0);
+    expect(await readFile(stewardFile('config.json'), 'utf8')).toBe(before.config);
+    expect(await readFile(ledgerFile(), 'utf8')).toBe(before.ledger);
+  });
+
+  it('concurrent refreshes are safe', async () => {
+    const runs = await Promise.all([0, 1, 2, 3].map(() => new Promise<number>((resolve) => {
+      const child = spawn(process.execPath, [bootstrapPath, '--refresh-runtime', wsDir]);
+      child.on('close', (code) => resolve(code ?? -1));
+    })));
+    expect(runs.every((c) => c === 0)).toBe(true);
+    expect(existsSync(stewardFile('drafts'))).toBe(true);
+    expect(JSON.parse(await readFile(stewardFile('runtime.json'), 'utf8')).protocol).toBe(2);
   });
 });
 

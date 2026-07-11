@@ -261,11 +261,12 @@ When a steward wake arrives:
    replacing your own earlier line in place for a pre-terminal correction) and
    publishes a finalization marker. The supervisor completes the wake only after
    that marker matches the committed entry. Exactly one entry per wake: to
-   correct a decision before it completes, edit `drafts/<wakeId>.json` and re-run
-   the validator — it replaces your line in place (never a second line; a
-   duplicate wakeId is a validation error). If validation fails, fix the DRAFT
-   and re-run; nothing is committed and no marker is written until it passes.
-   Writing the draft alone never completes the wake; validating it does.
+   correct a decision before it completes, WRITE `drafts/<wakeId>.json` again (a
+   successful run removes the draft) and re-run the validator — it replaces your
+   line in place (never a second line; a duplicate wakeId is a validation error).
+   If validation FAILS the draft is kept, so fix that same draft and re-run;
+   nothing is committed and no marker is written until it passes. Writing the
+   draft alone never completes the wake; validating it does.
 8. Stop the wake after the validator succeeds (and after re-running it on any
    later draft edit). The validated finalization marker is the completion
    boundary for one wake.

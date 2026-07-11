@@ -7,20 +7,48 @@
  * context manifest after this script returns. This script owns only the
  * workspace-local steward file layout.
  *
- *   argv: process.argv[2] = tag, process.argv[3] = outDir
- *   env:  AQ_TEMPLATE_ROOT - abs path to this template's root
+ *   create:  argv[2] = tag,               argv[3] = outDir (new workspace)
+ *   refresh: argv[2] = '--refresh-runtime', argv[3] = existing workspaceDir
+ *   env:     AQ_TEMPLATE_ROOT - abs path to this template's root
+ *
+ * Issue #140 merge gate: an EXISTING persistent steward workspace is never
+ * re-bootstrapped, but the injector now emits the new draft-based wake
+ * instruction. `--refresh-runtime` idempotently updates ONLY the launcher-owned
+ * operational artifacts (validate-ledger.mjs, .alice/steward/README.md, the
+ * runtime-protocol marker, the operational dirs, and the git excludes) via
+ * same-dir atomic replace — it never inits a repo and never touches user content
+ * (config.json, wakes/, ledger/decisions.jsonl, finalize/ markers, drafts/).
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, renameSync, appendFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { initWorkspaceDir, copyReadme, setupGitExcludes, git } from '../_common.mjs'
 
 const tag = process.argv[2]
 const outDir = process.argv[3]
 if (!tag || !outDir) {
-  console.error('usage: bootstrap.mjs <tag> <outDir>')
+  console.error('usage: bootstrap.mjs <tag> <outDir>   |   bootstrap.mjs --refresh-runtime <workspaceDir>')
   process.exit(1)
 }
+const REFRESH_MODE = tag === '--refresh-runtime'
+
+/** The draft-based ledger runtime protocol (issue #140). Bumped when the
+ *  launcher-owned validator/dir contract changes so a refresh is detectable. */
+const STEWARD_RUNTIME_PROTOCOL = 2
+/** Operational subdirs the launcher owns (created idempotently). */
+const STEWARD_RUNTIME_DIRS = ['wakes', 'ledger', 'locks', 'tmp', 'finalize', 'drafts']
+/** Git-exclude entries for launcher operational scratch. Shared by create and
+ *  refresh so the two never drift. */
+const STEWARD_EXCLUDES = [
+  '.alice/steward/state.json',
+  '.alice/steward/locks/',
+  '.alice/steward/supervisor.jsonl',
+  '.alice/steward/tmp/',
+  '.alice/steward/finalize/',
+  '.alice/steward/drafts/',
+  '.alice/steward/ledger/decisions.jsonl.lock',
+  '.alice/steward/ledger/.decisions.jsonl.tmp-*',
+]
 
 const stewardReadme = `# Steward Workspace
 
@@ -45,7 +73,8 @@ end with one validated decision recorded for that wake.
   is the COMMIT POINT: it atomically appends (or, for a same-wake pre-terminal
   correction, replaces in place) your entry in the ledger and publishes a
   finalization marker. The supervisor completes the wake only after that marker
-  matches the committed entry. Edit the draft and re-run it to correct.
+  matches the committed entry. To correct before the wake completes, WRITE the
+  draft again (a successful run removes it) and re-run the validator.
 - finalize/: gitignored per-wake finalization markers. You do not edit these.
 - tmp/: gitignored scratch space for --json-file payloads (order/commit/reject
   free-text fields written here via the Write tool, then passed to alice-uta
@@ -184,7 +213,9 @@ async function reclaimIfStale() {
 }
 async function acquireLock() {
   const token = process.pid + '-' + Date.now() + '-' + (tmpCounter++)
-  for (let attempt = 0; attempt < 120; attempt++) {
+  // 200 attempts x up-to-200ms outlast the 30000ms stale TTL (parity with
+  // src/workspaces/steward/ledger-writer.ts).
+  for (let attempt = 0; attempt < 200; attempt++) {
     let fh
     try {
       fh = await fs.open(lockPath, 'wx')
@@ -202,7 +233,7 @@ async function acquireLock() {
     }
     return token
   }
-  fail('could not acquire steward ledger lock: ' + lockPath)
+  fail('could not acquire steward ledger lock ' + lockPath + ' within the acquire budget (a stale lock is auto-reclaimed after ' + LOCK_TTL_MS + 'ms; this is safe to retry)')
 }
 async function releaseLock(token) {
   try {
@@ -237,6 +268,13 @@ async function atomicWrite(target, content) {
 const token = await acquireLock()
 let committedLine
 try {
+  // Re-read the active wake record UNDER the lock: the supervisor may have
+  // terminalized this wake between our first binding check and now. If it is
+  // terminal, do not write the ledger or a marker (avoids a post-terminal
+  // rewrite racing the supervisor).
+  let recheck
+  try { recheck = JSON.parse(await fs.readFile(wakePath, 'utf8')) } catch (err) { if (isCode(err, ['ENOENT'])) fail('wake record for "' + wakeId + '" vanished before commit'); fail('cannot re-read wake record for "' + wakeId + '": ' + err.message) }
+  if (recheck && terminalStatuses.includes(recheck.status)) fail('wake "' + wakeId + '" became ' + recheck.status + ' before commit; not re-finalizing a completed wake')
   let raw = ''
   try { raw = await fs.readFile(ledgerPath, 'utf8') } catch (err) { if (!isCode(err, ['ENOENT'])) fail('cannot read ' + ledgerPath + ': ' + err.message) }
   const rawLines = raw.split('\\n')
@@ -315,37 +353,73 @@ const config = {
   },
 }
 
-initWorkspaceDir(outDir)
-copyReadme(outDir)
+const runtimeJson = `${JSON.stringify({ protocol: STEWARD_RUNTIME_PROTOCOL }, null, 2)}\n`
 
-await git(['init', '-q'], outDir)
-setupGitExcludes(
-  outDir,
-  '.alice/steward/state.json',
-  '.alice/steward/locks/',
-  '.alice/steward/supervisor.jsonl',
-  '.alice/steward/tmp/',
-  '.alice/steward/finalize/',
-  // Issue #140: per-wake decision drafts, the ledger write lock, and any
-  // atomic-write temp files are all operational scratch — never committed.
-  '.alice/steward/drafts/',
-  '.alice/steward/ledger/decisions.jsonl.lock',
-  '.alice/steward/ledger/.decisions.jsonl.tmp-*',
-)
+if (REFRESH_MODE) {
+  // outDir is an EXISTING workspace directory.
+  if (!existsSync(outDir)) {
+    console.error(`refresh-runtime: workspace does not exist: ${outDir}`)
+    process.exit(1)
+  }
+  const stewardRoot = join(outDir, '.alice', 'steward')
+  for (const d of STEWARD_RUNTIME_DIRS) mkdirSync(join(stewardRoot, d), { recursive: true })
+  // Launcher-owned operational files: atomic same-dir replace, skip if identical.
+  // NEVER touch config.json, wakes/, ledger/decisions.jsonl, finalize/ markers,
+  // or drafts/ — those are workspace/user content and are not migrated.
+  writeLauncherOwnedFilesAtomic(stewardRoot)
+  ensureGitExcludesIdempotent(outDir, STEWARD_EXCLUDES)
+  console.log(`refreshed steward runtime at ${outDir}`)
+} else {
+  initWorkspaceDir(outDir)
+  copyReadme(outDir)
 
-const stewardRoot = join(outDir, '.alice', 'steward')
-mkdirSync(join(stewardRoot, 'wakes'), { recursive: true })
-mkdirSync(join(stewardRoot, 'ledger'), { recursive: true })
-mkdirSync(join(stewardRoot, 'locks'), { recursive: true })
-mkdirSync(join(stewardRoot, 'tmp'), { recursive: true })
-mkdirSync(join(stewardRoot, 'finalize'), { recursive: true })
-mkdirSync(join(stewardRoot, 'drafts'), { recursive: true })
+  await git(['init', '-q'], outDir)
+  setupGitExcludes(outDir, ...STEWARD_EXCLUDES)
 
-writeFileSync(join(stewardRoot, 'README.md'), stewardReadme)
-writeFileSync(join(stewardRoot, 'config.json'), `${JSON.stringify(config, null, 2)}\n`)
-writeFileSync(join(stewardRoot, 'validate-ledger.mjs'), validateLedger)
-writeFileSync(join(stewardRoot, 'wakes', '.gitkeep'), '')
-writeFileSync(join(stewardRoot, 'ledger', 'decisions.jsonl'), '')
-writeFileSync(join(stewardRoot, 'supervisor.jsonl'), '')
+  const stewardRoot = join(outDir, '.alice', 'steward')
+  for (const d of STEWARD_RUNTIME_DIRS) mkdirSync(join(stewardRoot, d), { recursive: true })
 
-console.log(`bootstrapped steward workspace '${tag}' at ${outDir}`)
+  // Launcher-owned operational files (same constants the refresh path writes).
+  writeFileSync(join(stewardRoot, 'README.md'), stewardReadme)
+  writeFileSync(join(stewardRoot, 'validate-ledger.mjs'), validateLedger)
+  writeFileSync(join(stewardRoot, 'runtime.json'), runtimeJson)
+  // Fresh workspace user content.
+  writeFileSync(join(stewardRoot, 'config.json'), `${JSON.stringify(config, null, 2)}\n`)
+  writeFileSync(join(stewardRoot, 'wakes', '.gitkeep'), '')
+  writeFileSync(join(stewardRoot, 'ledger', 'decisions.jsonl'), '')
+  writeFileSync(join(stewardRoot, 'supervisor.jsonl'), '')
+
+  console.log(`bootstrapped steward workspace '${tag}' at ${outDir}`)
+}
+
+/** Write the launcher-owned operational files with a same-dir atomic replace,
+ *  skipping any file whose content already matches (issue #140 refresh). */
+function writeLauncherOwnedFilesAtomic(stewardRoot) {
+  atomicReplaceIfChanged(join(stewardRoot, 'validate-ledger.mjs'), validateLedger)
+  atomicReplaceIfChanged(join(stewardRoot, 'README.md'), stewardReadme)
+  atomicReplaceIfChanged(join(stewardRoot, 'runtime.json'), runtimeJson)
+}
+
+/** Atomic same-dir replace; returns false (no write) when content is unchanged. */
+function atomicReplaceIfChanged(path, content) {
+  let existing = null
+  try { existing = readFileSync(path, 'utf8') } catch { /* missing */ }
+  if (existing === content) return false
+  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`
+  writeFileSync(tmp, content)
+  renameSync(tmp, path)
+  return true
+}
+
+/** Append only the exclude entries not already present (idempotent). No-op if
+ *  the workspace has no git exclude file — refresh must never init a repo. */
+function ensureGitExcludesIdempotent(workspaceDir, entries) {
+  const excludePath = join(workspaceDir, '.git', 'info', 'exclude')
+  if (!existsSync(excludePath)) return
+  const existing = readFileSync(excludePath, 'utf8')
+  const have = new Set(existing.split('\n').map((l) => l.trim()))
+  const missing = entries.filter((e) => !have.has(e))
+  if (missing.length === 0) return
+  const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : ''
+  appendFileSync(excludePath, `${prefix}${missing.join('\n')}\n`)
+}

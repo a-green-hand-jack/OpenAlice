@@ -116,6 +116,15 @@ export interface WorkspaceService {
   readonly pool: SessionPool;
   readonly transcriptWatcher: TranscriptWatcher;
   resolveAdapter(meta: WorkspaceMeta, agentId?: string): CliAdapter;
+  /**
+   * Idempotently refresh a steward workspace's launcher-owned runtime artifacts
+   * (issue #140). No-op for non-steward workspaces. Both wake-dispatch paths call
+   * this before creating/injecting a wake so a persistent workspace predating the
+   * draft protocol is upgraded in place. Returns an actionable error on failure.
+   */
+  refreshStewardRuntime(
+    meta: Pick<WorkspaceMeta, 'template' | 'dir'>,
+  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly message: string }>;
   publicMeta(w: WorkspaceMeta): Promise<unknown>;
   /**
    * Probe the host PATH for each registered adapter's CLI binary. Keyed by
@@ -657,6 +666,14 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
   ): Promise<{ wakeId: string }> => {
     const now = new Date(wake.nowMs).toISOString();
     const deadline = new Date(wake.nowMs + (wake.deadlineMs ?? 180_000)).toISOString();
+    // Issue #140 merge gate: bring a persistent workspace's launcher-owned runtime
+    // (validator, drafts dir) up to date BEFORE dispatching, so an older workspace
+    // handles the new draft-based wake instruction instead of timing out. Failure
+    // blocks dispatch with an actionable error.
+    const refreshed = await creator.refreshStewardRuntime(ws);
+    if (!refreshed.ok) {
+      throw new Error(`steward runtime refresh failed; not dispatching wake: ${refreshed.message}`);
+    }
     const wakeStore = createStewardWakeStore(ws.dir);
     const lockStore = createStewardLockStore(ws.dir);
     const config = await readStewardConfig(ws);
@@ -1381,6 +1398,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     pool,
     transcriptWatcher,
     resolveAdapter,
+    refreshStewardRuntime: (meta) => creator.refreshStewardRuntime(meta),
     publicMeta,
     detectAgents,
     computeSpawnPlan,

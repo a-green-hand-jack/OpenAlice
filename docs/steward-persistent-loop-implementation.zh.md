@@ -562,6 +562,18 @@ corruption），所以采**结构性方案 A**：
   #134 的用例，证明证据未被弱化）。
 - **legacy 边界**：读旧 ledger 仍读宽（结构性 v2 / v1）；新模板的 supported write path 走
   draft+validator。draft/lock/temp 全部 gitignored，路径编码安全。
+- **已有 workspace 的幂等 runtime refresh（merge gate）**：已 bootstrap 的常驻 steward
+  workspace 不会重新 bootstrap，但 injector 已发新的 draft 指令——旧 validator 会忽略 draft
+  让 wake 超时。`bootstrap.mjs --refresh-runtime <workspaceDir>` 只幂等更新
+  **launcher-owned operational artifacts**：`validate-ledger.mjs`、`.alice/steward/README.md`、
+  `runtime.json`（协议版本 marker）、`wakes/ledger/locks/tmp/finalize/drafts/` 目录、git
+  excludes——全部走 same-dir atomic replace（内容相同则 skip）；**绝不** init repo、**绝不**
+  改 `config.json` / `wakes/` / `ledger/decisions.jsonl` / `finalize/` markers / `drafts/`
+  用户内容（workspace ledger/wakes/config **不迁移**，只有 launcher runtime 文件升级）。
+  `WorkspaceService.refreshStewardRuntime(meta)`（委托 `WorkspaceCreator`，复用
+  `runScript` + Electron bundled Node）是唯一实现；**HTTP manual wake 与 schedule dispatch
+  两条路径**都在创建/注入 wake **之前**调用它，非-steward workspace 是 no-op；refresh 失败
+  会**阻止** wake 投递并返回 actionable error。直接手改 decisions.jsonl 仍按 corruption 论处。
 
 ## 8. Lock 策略
 

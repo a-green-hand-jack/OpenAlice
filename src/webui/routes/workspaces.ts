@@ -838,6 +838,15 @@ export function createWorkspaceRoutes(
       return c.json({ error: 'invalid_steward_config', message: (err as Error).message }, 500);
     }
 
+    // Issue #140 merge gate: refresh the workspace's launcher-owned runtime
+    // (validator + drafts dir) BEFORE creating/injecting the wake, so a persistent
+    // workspace predating the draft protocol handles the new instruction instead
+    // of timing out. On failure, refuse to create the wake with an actionable error.
+    const refreshed = await svc.refreshStewardRuntime(meta);
+    if (!refreshed.ok) {
+      return c.json({ error: 'runtime_refresh_failed', message: refreshed.message }, 500);
+    }
+
     const now = new Date();
     const wakeId = body.wakeId ?? `${now.toISOString()}:${body.reason}:${randomUUID()}`;
     const deadline = body.deadline ?? new Date(now.getTime() + (body.deadlineMs ?? 180_000)).toISOString();

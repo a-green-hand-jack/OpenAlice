@@ -4,6 +4,7 @@
  * (no real spawn). Modeled on trading-config.spec's harness.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -248,11 +249,13 @@ function buildSteward(opts: { dir: string; inboxStore?: IInboxStore }) {
     pool,
     adapters: { get: (id: string) => (id === 'codex' ? adapter : undefined) },
     resolveAdapter: () => adapter,
+    refreshStewardRuntime: vi.fn(async () => ({ ok: true })),
     config: { launcherRepoRoot: '/repo' },
     publicMeta: vi.fn(async (m: any) => m),
   } as unknown as WorkspaceService;
   return {
     app: createWorkspaceRoutes(svc, { inboxStore: opts.inboxStore }),
+    svc,
     pool,
     sessionRegistry,
     writtenInputs,
@@ -474,6 +477,41 @@ describe('steward wake API', () => {
       });
       expect(pool.spawn).not.toHaveBeenCalled();
       expect(writtenInputs[0]?.sessionId).toBe('configured-session');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refreshes the steward runtime before creating a wake, and refuses the wake when refresh fails (issue #140)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
+    try {
+      const { app, svc } = buildSteward({ dir });
+      // Failure path: refresh reports an actionable error → no wake is created.
+      (svc.refreshStewardRuntime as any).mockResolvedValueOnce({ ok: false, message: 'validator write failed' });
+      const failed = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-refresh-fail',
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+      expect(failed.status).toBe(500);
+      expect(failed.body.error).toBe('runtime_refresh_failed');
+      expect(failed.body.message).toContain('validator write failed');
+      // No wake record was written.
+      expect(existsSync(join(dir, '.alice/steward/wakes/wake-refresh-fail.json'))).toBe(false);
+
+      // Success path: refresh is invoked with this workspace's meta before dispatch.
+      // Fresh spawn seeds via the initial prompt (no submit-gap timer), so plain post.
+      const ok = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-refresh-ok',
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+      expect(ok.status).toBe(202);
+      expect(svc.refreshStewardRuntime).toHaveBeenCalledWith(expect.objectContaining({ id: 'ws-1', template: 'steward' }));
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

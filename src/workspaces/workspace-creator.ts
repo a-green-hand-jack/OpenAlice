@@ -295,6 +295,49 @@ export class WorkspaceCreator {
     log.info('bootstrap.ok', { stdout: result.stdout.slice(-400) });
     return { ok: true, workspace };
   }
+
+  /**
+   * Idempotently refresh a steward workspace's launcher-owned runtime artifacts
+   * (issue #140 merge gate): re-run the template's bootstrap script in
+   * `--refresh-runtime` mode, which updates ONLY validate-ledger.mjs, the steward
+   * README, the runtime-protocol marker, the operational dirs, and git excludes
+   * via atomic same-dir replace. It never inits a repo and never touches user
+   * content (config/wakes/ledger/finalize/drafts). A no-op for non-steward
+   * workspaces. Both wake-dispatch paths (HTTP manual + schedule) call this
+   * BEFORE creating/injecting a wake, so an already-running persistent workspace
+   * that predates the draft protocol is upgraded in place rather than timing out
+   * on the new instruction. Returns an actionable error on failure so the caller
+   * can refuse to dispatch the wake.
+   */
+  async refreshStewardRuntime(
+    meta: Pick<WorkspaceMeta, 'template' | 'dir'>,
+  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly message: string }> {
+    if (meta.template !== 'steward') return { ok: true };
+    const template = this.opts.templateRegistry.get('steward');
+    if (!template) {
+      return { ok: false, message: 'steward template is not registered; cannot refresh workspace runtime' };
+    }
+    const result = await runScript(
+      template.bootstrapScript,
+      ['--refresh-runtime', meta.dir],
+      {
+        AQ_TEMPLATE_DIR: this.opts.bootstrapEnv.templateDir,
+        AQ_TEMPLATE_FILES_DIR: template.filesDir,
+        AQ_TEMPLATE_ROOT: template.templateDir,
+        AQ_LAUNCHER_REPO_ROOT: this.opts.bootstrapEnv.launcherRepoRoot,
+      },
+      this.opts.bootstrapTimeoutMs,
+    );
+    if (!result.ok) {
+      const reason = result.stderr.trim();
+      const headline =
+        result.exitCode === null
+          ? 'steward runtime refresh could not start'
+          : `steward runtime refresh exited with code ${result.exitCode}`;
+      return { ok: false, message: reason ? `${headline}: ${reason.slice(-500)}` : headline };
+    }
+    return { ok: true };
+  }
 }
 
 /**
