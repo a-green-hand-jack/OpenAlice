@@ -95,7 +95,25 @@ export function decideStewardControlFace(input: {
   const configuredAgent =
     typeof input.config['agent'] === 'string' ? (input.config['agent'] as string) : undefined;
   const agent = input.requestedAgent ?? configuredAgent ?? 'codex';
-  if (input.config['controlFace'] === 'pty') return { useMachine: false, agent };
+  // Fleet-wide kill switch: OPENALICE_STEWARD_CONTROL_FACE=pty forces every
+  // steward wake onto PTY without touching N per-workspace config files. Only
+  // 'pty' is honored — the env var can only push toward the safe face.
+  if (process.env['OPENALICE_STEWARD_CONTROL_FACE'] === 'pty') {
+    return { useMachine: false, agent, declineReason: 'OPENALICE_STEWARD_CONTROL_FACE=pty override' };
+  }
+  const cf = input.config['controlFace'];
+  if (cf === 'pty') return { useMachine: false, agent };
+  // Escape-hatch robustness (S6 review MAJOR): `controlFace` is hand-edited,
+  // unvalidated JSON and 'pty' is the ONLY rollback lever — a typo ('PTY',
+  // trailing space, true, …) must fail toward the SAFE face, loudly, never
+  // silently resolve to machine.
+  if (cf !== undefined && cf !== 'machine') {
+    return {
+      useMachine: false,
+      agent,
+      declineReason: `unrecognized controlFace ${JSON.stringify(cf)}; using PTY (valid: 'pty' | 'machine')`,
+    };
+  }
   if (!MACHINE_FACE_AGENTS.includes(agent)) {
     return {
       useMachine: false,

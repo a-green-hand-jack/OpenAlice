@@ -183,6 +183,33 @@ describe('decideStewardControlFace (issue #146)', () => {
     expect(d.declineReason).toBeUndefined();
   });
 
+  it('fails SAFE on an unrecognized controlFace value — typo of the escape hatch must land on PTY, loudly (S6 review MAJOR)', () => {
+    for (const junk of ['PTY', 'pty ', 'ptty', true, 0, null, {}]) {
+      const d = decideStewardControlFace({
+        config: { controlFace: junk },
+        requestedAgent: undefined,
+        workspaceAgents: ['codex'],
+      });
+      expect(d.useMachine).toBe(false);
+      expect(d.declineReason).toMatch(/unrecognized controlFace/);
+    }
+  });
+
+  it('OPENALICE_STEWARD_CONTROL_FACE=pty forces PTY fleet-wide, overriding config and the default', () => {
+    const prior = process.env['OPENALICE_STEWARD_CONTROL_FACE'];
+    process.env['OPENALICE_STEWARD_CONTROL_FACE'] = 'pty';
+    try {
+      for (const config of [{}, { controlFace: 'machine' }]) {
+        const d = decideStewardControlFace({ config, requestedAgent: undefined, workspaceAgents: ['codex'] });
+        expect(d.useMachine).toBe(false);
+        expect(d.declineReason).toMatch(/OPENALICE_STEWARD_CONTROL_FACE/);
+      }
+    } finally {
+      if (prior === undefined) delete process.env['OPENALICE_STEWARD_CONTROL_FACE'];
+      else process.env['OPENALICE_STEWARD_CONTROL_FACE'] = prior;
+    }
+  });
+
   it('declines to PTY (with reason) when controlFace is absent but the agent is neither codex nor claude (issue #146 S6)', () => {
     const d = decideStewardControlFace({
       config: {},
