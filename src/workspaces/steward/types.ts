@@ -23,6 +23,10 @@ export const STEWARD_LEDGER_RECEIPT_SCHEMA_VERSION = 1;
  *  the first time a violation is detected so the supervisor appends a given
  *  (kind, fingerprints) violation event exactly once instead of every tick. */
 export const STEWARD_LEDGER_INTEGRITY_SCHEMA_VERSION = 1;
+/** Current finalization-marker version (issue #136). The generated validator
+ *  writes one per wake AFTER all checks pass; it is the commit point the
+ *  supervisor waits for before terminalizing a marker-protocol wake. */
+export const STEWARD_FINALIZE_MARKER_SCHEMA_VERSION = 1;
 
 export const stewardWakeReasonSchema = z.enum([
   'scheduled_observe',
@@ -129,6 +133,28 @@ export const stewardLedgerIntegritySchema = z.object({
 }).passthrough();
 export type StewardLedgerIntegrity = z.infer<typeof stewardLedgerIntegritySchema>;
 
+// Finalization marker (issue #136 finalize barrier). Written atomically by the
+// generated validate-ledger.mjs ONLY after the current wake's entry passes the
+// full schema + duplicate + prior-terminal-completeness checks. `fingerprint`
+// is the canonical semantic fingerprint (see ledger-receipt.ts) of the entry
+// that was validated. The supervisor terminalizes a marker-protocol wake only
+// when a matching parseable first-wins entry AND a marker with this exact
+// fingerprint both exist — so an allowed same-wake correction made AFTER a
+// draft validated does not terminalize until the corrected line is re-validated
+// (which atomically replaces this marker). Read lenient (unknown keys allowed).
+export const stewardFinalizeMarkerSchema = z.object({
+  version: z.literal(STEWARD_FINALIZE_MARKER_SCHEMA_VERSION),
+  wakeId: z.string().min(1),
+  fingerprint: z.string().min(1),
+  validatedAt: z.string().min(1),
+  schemaVersion: z.coerce.number().int().optional(),
+}).passthrough();
+export type StewardFinalizeMarker = z.infer<typeof stewardFinalizeMarkerSchema>;
+
+export function parseStewardFinalizeMarker(value: unknown): StewardFinalizeMarker {
+  return stewardFinalizeMarkerSchema.parse(value);
+}
+
 export const stewardWakeRecordSchema = z.object({
   version: z.literal(WAKE_SCHEMA_VERSION),
   wakeId: z.string().min(1),
@@ -144,6 +170,13 @@ export const stewardWakeRecordSchema = z.object({
   attribution: stewardWakeAttributionSchema.optional(),
   ledgerReceipt: stewardLedgerReceiptSchema.optional(),
   ledgerIntegrity: stewardLedgerIntegritySchema.optional(),
+  // Finalize barrier (issue #136). New wakes are created with 'marker', so the
+  // supervisor terminalizes them only after the generated validator publishes a
+  // matching finalization marker (validation is the commit point). Absent on
+  // wakes created before this shipped — a BOUNDED compatibility rule: those
+  // legacy in-flight wakes still terminalize from raw ledger presence, but every
+  // NEW wake requires the marker (see supervisor.ts requiresFinalizeMarker).
+  finalizeProtocol: z.literal('marker').optional(),
 }).passthrough();
 export type StewardWakeRecord = z.infer<typeof stewardWakeRecordSchema>;
 

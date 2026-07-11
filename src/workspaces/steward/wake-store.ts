@@ -64,6 +64,9 @@ export class StewardWakeStore {
       deadline: input.deadline,
       sessionId: input.sessionId ?? null,
       envelope: input.envelope,
+      // Issue #136: every new wake uses the finalize barrier — the supervisor
+      // terminalizes it only after the validator publishes a matching marker.
+      finalizeProtocol: 'marker',
     });
     await writeJsonAtomic(this.pathFor(input.wakeId), record);
     return record;

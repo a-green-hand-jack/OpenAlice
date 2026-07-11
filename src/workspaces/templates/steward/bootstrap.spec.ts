@@ -10,7 +10,8 @@
  * wakeIds.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -339,5 +340,64 @@ describe('generated steward validate-ledger.mjs integrity cross-check (issue #13
     const res = await runValidator([invalidFirst, validSecond, current], 'wake-cur');
     expect(res.stderr).toBe('');
     expect(res.code).toBe(0);
+  });
+
+  // ── issue #136 finalize marker ────────────────────────────────────────
+  function markerPathFor(wakeId: string): string {
+    return join(wsDir, '.alice', 'steward', 'finalize', `${encodeURIComponent(wakeId)}.json`);
+  }
+
+  it('publishes a finalization marker with the entry fingerprint on success', async () => {
+    const e = entry({ wakeId: 'wake-1' });
+    const res = await runValidator([e], 'wake-1');
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain('finalization marker published');
+    const marker = JSON.parse(await readFile(markerPathFor('wake-1'), 'utf8'));
+    expect(marker).toMatchObject({ version: 1, wakeId: 'wake-1', schemaVersion: 2 });
+    expect(marker.fingerprint).toBe(canonicalDecisionFingerprint(e));
+    expect(typeof marker.validatedAt).toBe('string');
+  });
+
+  it('writes NO marker when validation fails (regression 5)', async () => {
+    const res = await runValidator([entry({ version: 1 })], 'wake-1');
+    expect(res.code).toBe(1);
+    expect(existsSync(markerPathFor('wake-1'))).toBe(false);
+  });
+
+  it('writes NO marker for the current wake when a prior terminal integrity check fails (regression: prior integrity blocks publish)', async () => {
+    // A prior dispatched terminal wake exists, but its ledger entry is gone.
+    await writeWakeRecord(terminalWakeRecord('wake-prior'));
+    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
+    const res = await runValidator([current], 'wake-cur'); // prior entry missing
+    expect(res.code).toBe(1);
+    expect(res.stderr).toMatch(/has no ledger entry/);
+    expect(existsSync(markerPathFor('wake-cur'))).toBe(false);
+  });
+
+  it('writes the marker at a path-safe encoded location for an arbitrary wakeId', async () => {
+    const wakeId = '2026-07-11T14:00:00Z:aapl/risk-check';
+    const e = entry({ wakeId });
+    const res = await runValidator([e], wakeId);
+    expect(res.code).toBe(0);
+    // Slashes/colons are percent-encoded — no path traversal, single flat file.
+    const p = markerPathFor(wakeId);
+    expect(p.endsWith(`${encodeURIComponent(wakeId)}.json`)).toBe(true);
+    const marker = JSON.parse(await readFile(p, 'utf8'));
+    expect(marker.wakeId).toBe(wakeId);
+    expect(marker.fingerprint).toBe(canonicalDecisionFingerprint(e));
+  });
+
+  it('atomically REPLACES the marker when re-run on a corrected entry', async () => {
+    const draft = entry({ wakeId: 'wake-1', thesis: 'draft' });
+    await runValidator([draft], 'wake-1');
+    const first = JSON.parse(await readFile(markerPathFor('wake-1'), 'utf8'));
+    expect(first.fingerprint).toBe(canonicalDecisionFingerprint(draft));
+
+    const corrected = entry({ wakeId: 'wake-1', thesis: 'corrected', decision: 'propose_trade' });
+    const res = await runValidator([corrected], 'wake-1');
+    expect(res.code).toBe(0);
+    const second = JSON.parse(await readFile(markerPathFor('wake-1'), 'utf8'));
+    expect(second.fingerprint).toBe(canonicalDecisionFingerprint(corrected));
+    expect(second.fingerprint).not.toBe(first.fingerprint);
   });
 });

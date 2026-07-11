@@ -2,6 +2,7 @@ import { appendFile, mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { buildStewardState, type StewardCostPolicyInput } from './cost.js';
+import { createStewardFinalizeStore } from './finalize-store.js';
 import { buildLedgerReceipt } from './ledger-receipt.js';
 import { createStewardLedgerStore, type LedgerIndex } from './ledger-store.js';
 import { createStewardLockStore } from './lock-store.js';
@@ -70,6 +71,11 @@ export class StewardSupervisor {
     // disappeared or was mutated). Collected across the loop, surfaced in the
     // tick result and as structured supervisor events.
     const integrityWarnings: string[] = [];
+    // Issue #136: finalize-barrier warnings — a marker-protocol wake whose
+    // ledger entry changed after it validated (marker fingerprint no longer
+    // matches), so the supervisor is holding off terminalization until the
+    // corrected entry is re-validated.
+    const finalizeWarnings: string[] = [];
     // Issue #134: parse the ledger ONCE per tick and reuse the index for active
     // transitions, terminal reconciliation, diagnostics, and cost — no per-wake
     // re-read (was O(n²) over wakes × file).
@@ -98,7 +104,20 @@ export class StewardSupervisor {
       // Only a schema-VALID first-wins line drives a status transition; a
       // JSON-valid-but-schema-invalid first-wins line is surfaced via the
       // invalid diagnostics below and the wake waits (deadline/liveness).
-      if (found?.valid && found.entry) {
+      //
+      // Issue #136 finalize barrier: for a marker-protocol wake, raw ledger
+      // presence is NOT enough — the generated validator must have published a
+      // finalization marker whose fingerprint matches the CURRENT first-wins
+      // entry. This closes the race where the supervisor terminalized a draft
+      // that the agent then legally corrected in place (a #125-permitted edit),
+      // making the correction look like a #134 post-terminal mutation. A missing
+      // marker means "not validated yet" (wait); a mismatching marker means the
+      // entry changed after validation (wait + warn until re-validated).
+      const finalizeGate = found?.valid && found.entry
+        ? await this.checkFinalizeBarrier(wake, found.fingerprint)
+        : { transition: false as boolean, warning: null as string | null };
+      if (finalizeGate.warning) finalizeWarnings.push(finalizeGate.warning);
+      if (found?.valid && found.entry && finalizeGate.transition) {
         const ledgerEntry = found.entry;
         const nextStatus = ledgerEntry.status === 'done'
           ? 'done'
@@ -260,6 +279,7 @@ export class StewardSupervisor {
       ...invalidWarnings,
       ...telemetryWarnings,
       ...integrityWarnings,
+      ...finalizeWarnings,
     ];
 
     const activeWakeIds = (await wakeStore.list())
@@ -317,6 +337,38 @@ export class StewardSupervisor {
           `${err instanceof Error ? err.message : String(err)}`,
       };
     }
+  }
+
+  /**
+   * Finalize barrier (issue #136). Decide whether a nonterminal wake with a
+   * schema-valid first-wins entry may transition NOW.
+   *
+   *  - Legacy wakes (created before the barrier shipped — no `finalizeProtocol`)
+   *    keep the old behavior: raw ledger presence terminalizes. This is the
+   *    BOUNDED compatibility rule — only in-flight wakes predating this change
+   *    take this path; every new wake carries `finalizeProtocol: 'marker'`.
+   *  - Marker-protocol wakes transition only when the generated validator has
+   *    published a finalization marker whose fingerprint matches the CURRENT
+   *    first-wins semantic fingerprint:
+   *      · no marker            → not validated yet; wait (no warning);
+   *      · fingerprint mismatch → entry changed after validation (a legal
+   *        same-wake correction that hasn't been re-validated); wait + warn.
+   */
+  private async checkFinalizeBarrier(
+    wake: StewardWakeRecord,
+    currentFingerprint: string,
+  ): Promise<{ transition: boolean; warning: string | null }> {
+    if (!requiresFinalizeMarker(wake)) return { transition: true, warning: null };
+    const marker = await createStewardFinalizeStore(this.workspaceDir).read(wake.wakeId);
+    if (!marker) return { transition: false, warning: null };
+    if (marker.fingerprint !== currentFingerprint) {
+      return {
+        transition: false,
+        warning: `finalize marker for wake ${wake.wakeId} does not match the current ledger entry ` +
+          `(the entry was edited after it validated); re-run validate-ledger to re-commit before it terminalizes`,
+      };
+    }
+    return { transition: true, warning: null };
   }
 
   /**
@@ -514,4 +566,11 @@ function isLedgerBacked(status: StewardWakeRecord['status']): boolean {
  */
 function wasLedgerBacked(wake: StewardWakeRecord): boolean {
   return wake.injectedAt != null || wake.ledgerReceipt !== undefined;
+}
+
+/** Whether a wake must clear the finalize barrier before terminalizing (issue
+ *  #136). True for every wake created with the marker protocol; false only for
+ *  legacy in-flight wakes that predate it (bounded compatibility). */
+function requiresFinalizeMarker(wake: StewardWakeRecord): boolean {
+  return wake.finalizeProtocol === 'marker';
 }

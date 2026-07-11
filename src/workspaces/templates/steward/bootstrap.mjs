@@ -38,7 +38,12 @@ end with one JSON line in ledger/decisions.jsonl.
 - ledger/decisions.jsonl: one structured decision/completion marker per wake.
 - validate-ledger.mjs: local schema sanity check for one wake's ledger marker,
   plus an integrity cross-check that every already-completed wake still has its
-  ledger entry (a prior completed decision must never silently disappear).
+  ledger entry (a prior completed decision must never silently disappear). It is
+  also the COMMIT POINT: on success it publishes a finalization marker in
+  finalize/, and the supervisor completes the wake only after that marker
+  matches the current entry. If you edit the ledger line afterward, re-run it.
+- finalize/: gitignored per-wake finalization markers (the write-then-validate
+  commit barrier). You do not edit these; validate-ledger.mjs writes them.
 - tmp/: gitignored scratch space for --json-file payloads (order/commit/reject
   free-text fields written here via the Write tool, then passed to alice-uta
   by path — never embedded in a Bash argument).
@@ -221,7 +226,30 @@ for (const name of wakeFiles) {
   }
 }
 
-console.log('ok: ledger entry for ' + wakeId + ' validates at line ' + found.line)
+// Issue #136 finalize barrier: every check above passed -- this wake's entry is
+// strict v2, unique (no duplicate), and every prior terminal wake is still
+// intact. Validation is the COMMIT POINT: atomically publish the finalization
+// marker the supervisor waits for before it terminalizes this wake and captures
+// its receipt. A later same-wake correction re-runs this validator, which
+// atomically REPLACES the marker with the corrected fingerprint. If any check
+// above had failed we would have exited already, so no marker is written for a
+// failing entry. tmp+rename keeps a concurrent reader from seeing a partial
+// file, and encodeURIComponent keeps an arbitrary wakeId path-safe.
+const finalizeDir = '.alice/steward/finalize'
+await fs.mkdir(finalizeDir, { recursive: true })
+const markerPath = finalizeDir + '/' + encodeURIComponent(wakeId) + '.json'
+const marker = {
+  version: 1,
+  wakeId,
+  fingerprint: ledgerFingerprint(entry),
+  validatedAt: new Date().toISOString(),
+  schemaVersion: entry.version,
+}
+const tmpMarker = markerPath + '.tmp'
+await fs.writeFile(tmpMarker, JSON.stringify(marker, null, 2) + '\\n', 'utf8')
+await fs.rename(tmpMarker, markerPath)
+
+console.log('ok: ledger entry for ' + wakeId + ' validates at line ' + found.line + '; finalization marker published')
 
 function fail(message) {
   console.error('validate-ledger: ' + message)
@@ -254,6 +282,7 @@ setupGitExcludes(
   '.alice/steward/locks/',
   '.alice/steward/supervisor.jsonl',
   '.alice/steward/tmp/',
+  '.alice/steward/finalize/',
 )
 
 const stewardRoot = join(outDir, '.alice', 'steward')
@@ -261,6 +290,7 @@ mkdirSync(join(stewardRoot, 'wakes'), { recursive: true })
 mkdirSync(join(stewardRoot, 'ledger'), { recursive: true })
 mkdirSync(join(stewardRoot, 'locks'), { recursive: true })
 mkdirSync(join(stewardRoot, 'tmp'), { recursive: true })
+mkdirSync(join(stewardRoot, 'finalize'), { recursive: true })
 
 writeFileSync(join(stewardRoot, 'README.md'), stewardReadme)
 writeFileSync(join(stewardRoot, 'config.json'), `${JSON.stringify(config, null, 2)}\n`)
