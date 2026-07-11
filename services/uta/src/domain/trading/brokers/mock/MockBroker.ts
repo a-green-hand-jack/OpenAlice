@@ -299,11 +299,35 @@ export class MockBroker implements IBroker {
     const orderId = `mock-ord-${this._nextOrderId++}`
     const isMarket = order.orderType === 'MKT'
     const side = order.action.toUpperCase()
-    const qty = !order.totalQuantity.equals(UNSET_DECIMAL) ? order.totalQuantity : new Decimal(0)
+    const hasTotalQty = !order.totalQuantity.equals(UNSET_DECIMAL) && order.totalQuantity.gt(0)
+    const hasCashQty = !order.cashQty.equals(UNSET_DECIMAL) && order.cashQty.gt(0)
 
     if (isMarket) {
       const price = this._markPriceFor(contract) ?? new Decimal(100)
       const mult = multiplierOf(contract)
+
+      // Resolve the fill quantity. A market order sizes by shares
+      // (totalQuantity) OR by notional (cashQty) — mutually exclusive, matching
+      // UTA validation and the Alpaca/CCXT notional paths. cashQty converts to
+      // shares at cashQty / (markPrice × multiplier); deriving it here keeps the
+      // mock a faithful notional-capable broker instead of silently filling zero.
+      let qty: Decimal
+      if (hasTotalQty) {
+        qty = order.totalQuantity
+      } else if (hasCashQty) {
+        const unitCost = price.mul(mult)
+        if (unitCost.lte(0)) {
+          return { success: false, error: `MockBroker[${this.id}]: cannot size cashQty order — non-positive unit price ${unitCost.toFixed()}` }
+        }
+        qty = order.cashQty.div(unitCost)
+      } else {
+        // Neither field usable → fail loudly. Never fabricate an executed
+        // zero-share fill (the #137 bug shape).
+        return { success: false, error: `MockBroker[${this.id}]: market order requires a positive totalQuantity or cashQty` }
+      }
+      if (qty.lte(0)) {
+        return { success: false, error: `MockBroker[${this.id}]: derived non-positive fill quantity ${qty.toFixed()}` }
+      }
 
       // Update position; on oversell `_applyFill` throws — match real broker
       // convention by returning PlaceOrderResult.success=false rather than
@@ -321,6 +345,10 @@ export class MockBroker implements IBroker {
       this._cash = side === 'BUY' ? this._cash.minus(cost) : this._cash.plus(cost)
 
       const filledOrder = this._cloneOrder(order, orderId)
+      // Notional (cashQty) orders resolve to a concrete share count on fill —
+      // stamp it so the order record's totalQuantity matches filledQuantity,
+      // exactly as a real broker reports a filled notional order.
+      filledOrder.totalQuantity = qty
       this._orders.set(orderId, {
         id: orderId, contract, order: filledOrder,
         status: 'Filled', fillPrice: price.toNumber(),

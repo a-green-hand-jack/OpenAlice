@@ -385,3 +385,51 @@ describe('placeOrder inputSchema', () => {
     expect(result.success).toBe(false)
   })
 })
+
+// ==================== S10 notional entry (agent surface) — #137 ====================
+
+describe('agent-surface cashQty notional entry (S10)', () => {
+  // Regression for #137 at the UTA agent surface: staging + committing a MKT
+  // order sized by cashQty must produce a REAL non-zero fill on the broker
+  // whose notional value approximates cashQty — not the silent zero-share
+  // "executed" result the pre-fix MockBroker returned.
+  it('stage → commit → push fills a real position ≈ cashQty', async () => {
+    const broker = new MockBroker({ id: 'mock-paper', cash: 100_000 })
+    broker.setQuote('AAPL', 150)
+    const mgr = makeManager(broker)
+    const uta = mgr.resolve('mock-paper')[0]
+
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', action: 'BUY', orderType: 'MKT', cashQty: '30000' })
+    uta.commit('notional buy')
+    await uta.push()
+
+    // Broker truth, not the ledger: a real 200-share fill landed.
+    const positions = await broker.getPositions()
+    expect(positions).toHaveLength(1)
+    expect(positions[0].quantity.toString()).toBe('200')
+    const notional = new Decimal(positions[0].quantity).mul(positions[0].avgCost)
+    expect(notional.toString()).toBe('30000')
+
+    const account = await broker.getAccount()
+    expect(account.totalCashValue).toBe('70000')
+  })
+
+  it('leaves accounts flat after a notional round-trip (sell back)', async () => {
+    const broker = new MockBroker({ id: 'mock-paper', cash: 100_000 })
+    broker.setQuote('AAPL', 150)
+    const mgr = makeManager(broker)
+    const uta = mgr.resolve('mock-paper')[0]
+
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', action: 'BUY', orderType: 'MKT', cashQty: '30000' })
+    uta.commit('notional buy')
+    await uta.push()
+
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', action: 'SELL', orderType: 'MKT', totalQuantity: '200' })
+    uta.commit('flat')
+    await uta.push()
+
+    expect(await broker.getPositions()).toHaveLength(0)
+    const account = await broker.getAccount()
+    expect(account.totalCashValue).toBe('100000')
+  })
+})
