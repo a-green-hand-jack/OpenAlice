@@ -25,6 +25,42 @@ export interface EnsureThreadOptions {
    *  here only so callers can thread one config object through. */
   readonly effort?: string;
   readonly sandbox?: SandboxMode;
+  /**
+   * Request a network-enabled `workspace-write` sandbox for this thread (issue
+   * #146 S3 review MAJOR-1). Mirrors the PTY codex adapter's unconditional
+   * `-c sandbox_workspace_write.network_access=true` (`adapters/codex.ts`
+   * `codexMcpHead`), which exists so `alice*` can reach the loopback CLI
+   * gateway. app-server's protocol has NO thread-level field for this — the
+   * `sandbox` field above is a coarse `SandboxMode` string enum whose
+   * `workspace-write` variant defaults `networkAccess:false` (verified against
+   * the S0-captured `thread/start` result, `fixtures/transcripts/single-turn
+   * .jsonl`: `"sandbox":{"type":"workspaceWrite",...,"networkAccess":false}`).
+   * The only schema-verified mechanism is `TurnStartParams.sandboxPolicy` (a
+   * `SandboxPolicy` discriminated union whose `workspaceWrite` variant has a
+   * `networkAccess` boolean — see `fixtures/schema/ClientRequest.json`),
+   * documented as "Override the sandbox policy for this turn and subsequent
+   * turns" — so the driver applies it once here and the app-server carries it
+   * forward. The undocumented `config` passthrough field on `thread/start` /
+   * `thread/resume` (`additionalProperties:true`, no schema description, no
+   * fixture evidence of accepted keys) was considered and rejected — using an
+   * unverified blob risks a silent no-op (the exact bug this fixes) or a
+   * protocol rejection, whereas `sandboxPolicy` is fully typed and schema-
+   * pinned (`protocol-contract.spec.ts` guards its shape).
+   */
+  readonly networkAccess?: boolean;
+}
+
+/**
+ * The `turn/start` `sandboxPolicy` payload this driver sends when a thread
+ * requested `networkAccess` (issue #146 MAJOR-1). Mirrors the app-server's
+ * `WorkspaceWriteSandboxPolicy` schema variant — deliberately minimal: only the
+ * fields this driver ever overrides. The remaining `WorkspaceWriteSandboxPolicy`
+ * fields (`writableRoots`, `excludeTmpdirEnvVar`, `excludeSlashTmp`) keep the
+ * server's documented defaults when omitted.
+ */
+export interface WorkspaceWriteSandboxPolicyOverride {
+  readonly type: 'workspaceWrite';
+  readonly networkAccess: boolean;
 }
 
 export interface RunTurnOptions {

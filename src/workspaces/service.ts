@@ -86,8 +86,12 @@ import {
   recordStewardRotation,
   StewardLockConflictError,
   StewardSupervisorScanner,
+  type StewardWakeEnvelope,
 } from './steward/index.js';
 import { MachineDriverRegistry } from './steward/machine-driver/driver-registry.js';
+import { createMachineThreadStore } from './steward/machine-driver/thread-store.js';
+import { buildMachineDriver, dispatchMachineWake, resolveStewardControlFace } from './steward/machine-driver/dispatch.js';
+import type { StewardMachineDriver } from './steward/machine-driver/types.js';
 
 /**
  * The fully-resolved spawn plan for a (workspace, adapter, resume-intent)
@@ -229,6 +233,13 @@ export interface CreateWorkspaceServiceOptions {
    *  every surface (HTTP / CLI / MCP) gets the join, not just the route.
    *  Optional: when absent, `issueDetail` returns `inboxReports: []`. */
   readonly inboxStore?: IInboxStore;
+  /**
+   * Test seam (issue #146): build the per-workspace machine control-face driver.
+   * Production leaves this undefined and a real `CodexAppServerDriver` is spawned
+   * with the same env/cwd the PTY path uses. Integration tests inject a mock
+   * `StewardMachineDriver`, so no real `codex app-server` login is needed.
+   */
+  readonly machineDriverFactory?: (input: { ws: WorkspaceMeta; adapter: CliAdapter }) => StewardMachineDriver;
 }
 
 /**
@@ -668,6 +679,25 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
   // Torn down in `dispose()` below.
   const machineDriverRegistry = new MachineDriverRegistry();
 
+  // Build a workspace's machine driver (issue #146). Env/cwd come from the SAME
+  // `composeSpawnInputs` seam the PTY + headless spawns use, so the codex
+  // app-server child sees an identical toolbox (alice* shims, OPENALICE_TOOL_URL,
+  // AQ_WS_ID, git identity, CODEX_HOME/credential files). The factory-vs-real
+  // decision itself lives in `buildMachineDriver` (issue #146 MINOR-1 review) so
+  // it's directly unit-testable without booting the full service; `opts
+  // .machineDriverFactory` is passed straight through for integration tests.
+  const makeMachineDriver = (ws: WorkspaceMeta, adapter: CliAdapter): StewardMachineDriver => {
+    const { cwd, env } = composeSpawnInputs(ws, adapter, undefined);
+    return buildMachineDriver({
+      ws,
+      adapter,
+      cwd,
+      env,
+      logger: launcherLogger,
+      ...(opts.machineDriverFactory ? { factory: opts.machineDriverFactory } : {}),
+    });
+  };
+
   const dispatchStewardWakeMethod = async (
     ws: WorkspaceMeta,
     wake: ScheduleStewardWakeInput,
@@ -685,6 +715,35 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     const wakeStore = createStewardWakeStore(ws.dir);
     const lockStore = createStewardLockStore(ws.dir);
     const config = await readStewardConfig(ws);
+    const envelope: StewardWakeEnvelope = {
+      reason: wake.reason,
+      accountId: wake.accountId,
+      authzLevel: wake.authzLevel,
+      expectedDecision: wake.expectedDecision,
+      humanRequest: wake.humanRequest,
+      ...(wake.marketContext !== undefined ? { marketContext: wake.marketContext } : {}),
+      ...(wake.riskContext !== undefined ? { riskContext: wake.riskContext } : {}),
+    };
+    // Issue #146: pick the control face. Machine is opt-in via
+    // `.alice/steward/config.json` `controlFace:'machine'` and honored ONLY for a
+    // codex-enabled, adapter-registered workspace; any other configuration warns
+    // and takes the historical PTY path (S3 never fails the wake for this
+    // reason — MINOR-3 review: an unregistered adapter declines too, it does not
+    // throw).
+    const controlFace = resolveStewardControlFace({
+      config,
+      requestedAgent: wake.agent,
+      workspaceAgents: ws.agents,
+      getAdapter: (id) => adapters.get(id),
+    });
+    if (controlFace.declineReason) {
+      launcherLogger.warn('schedule.steward_machine_face_declined', {
+        wsId: ws.id,
+        wakeId: wake.wakeId,
+        agent: controlFace.agent,
+        reason: controlFace.declineReason,
+      });
+    }
 
     if (await wakeStore.get(wake.wakeId)) {
       throw new Error(`steward wake already exists: ${wake.wakeId}`);
@@ -703,18 +762,46 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
 
     let created = false;
     try {
+      if (controlFace.useMachine && controlFace.adapter) {
+        // Issue #146 (S3): dispatch through the codex app-server driver instead of
+        // PTY spawn+inject. Same preflight above (refresh, wake-exists, lock); the
+        // wake is created inside `dispatchMachineWake` keyed off the native thread
+        // UUID. The turn runs detached — the supervisor terminalizes it from the
+        // ledger + finalize markers exactly as for a PTY wake. Driver construction
+        // (real spawn or `opts.machineDriverFactory`) happens HERE, only once
+        // dispatch is actually committed — not during the earlier decline-vs-honor
+        // decision — so a duplicate-wakeId early-throw never spins up a live driver.
+        const adapter = controlFace.adapter;
+        const driver = machineDriverRegistry.getOrCreate(ws.id, () => makeMachineDriver(ws, adapter));
+        const result = await dispatchMachineWake({
+          workspaceDir: ws.dir,
+          wsId: ws.id,
+          cwd: ws.dir,
+          driver,
+          wakeStore,
+          threadStore: createMachineThreadStore(ws.dir),
+          wake: { wakeId: wake.wakeId, deadline, envelope },
+          now,
+          logger: launcherLogger,
+          onWakeCreated: () => {
+            created = true;
+          },
+        });
+        launcherLogger.info('schedule.steward_wake_injected', {
+          wsId: ws.id,
+          issueId: wake.issueId,
+          wakeId: wake.wakeId,
+          sessionId: result.threadId,
+          controlFace: 'machine',
+          resumed: result.resumed,
+          threadReset: result.threadReset,
+        });
+        return { wakeId: wake.wakeId };
+      }
       const record = await wakeStore.create({
         wakeId: wake.wakeId,
         deadline,
-        envelope: {
-          reason: wake.reason,
-          accountId: wake.accountId,
-          authzLevel: wake.authzLevel,
-          expectedDecision: wake.expectedDecision,
-          humanRequest: wake.humanRequest,
-          ...(wake.marketContext !== undefined ? { marketContext: wake.marketContext } : {}),
-          ...(wake.riskContext !== undefined ? { riskContext: wake.riskContext } : {}),
-        },
+        envelope,
         now,
       });
       created = true;
