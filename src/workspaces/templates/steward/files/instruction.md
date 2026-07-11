@@ -255,8 +255,11 @@ When a steward wake arrives:
    never reuse or hand-retype a previous wake's id (copying a prior wake's UUID
    suffix is a real, observed failure). The required `wake:<id>` entry in
    `completion.evidenceRefs` must be that same id — the top-level `wakeId` and its
-   `wake:` self-reference must match exactly, or validation fails. Validate with
-   that exact id: `node .alice/steward/validate-ledger.mjs <wakeId>`.
+   `wake:` self-reference must match exactly, or validation fails. The `wake:`
+   namespace in `evidenceRefs` is ONLY for this self-reference; cite a previous
+   wake's decision with `ledger:previous` (or a `tool:` ref), never
+   `wake:<another wake's id>`. Validate with that exact id:
+   `node .alice/steward/validate-ledger.mjs <wakeId>`.
    Append EXACTLY ONE entry per wake: the first entry for a
    wakeId is the authoritative decision and can never be revised by a second —
    if you need to correct it, edit that same line in place, never append a new

@@ -512,7 +512,23 @@ wake 身份**，只信 entry 自报的 id。修复三层绑定：
   交回 #134 receipt 复核。
 - **保持 #134/#136 不变**：终态后 receipt 的 immutability（missing/mutated 检测）与
   write-then-validate 提交点语义均不变；first-wins 重复永不顶替历史。
-- **legacy 边界**：evidence 自洽仅约束 v2（strict 写路径）；v1 历史的 lenient 读不受影响。
+- **read-lenient / write-strict（#125 语义，re-review 修正）**：evidence 自洽只加在
+  **strict** v2（`stewardDecisionLedgerEntryV2Schema`，即 `append` 写路径 +
+  generated validator）；**lenient** 读走
+  `stewardDecisionLedgerEntryV2StructuralSchema`（结构性 v2，不含 #139 自引用），所以
+  **pre-#139 缺 `wake:<self>` 的 v2 历史行仍可读**，不会漏算成本、不会每 tick 刷
+  `ledger_invalid_lines`。strict parser 仍拒绝 v8matrix5 hybrid 与缺失自引用；lenient
+  能读历史 v2 但**绕不过 active-wake finalize gate**——marker 由 strict validator 产出，
+  缺自引用的行拿不到 marker，marker-protocol wake 就不会终态化（legacy 无 marker 的在飞行
+  wake 仍按旧 raw-presence 终态，属有界兼容）。
+- **`wake:` 命名空间只保留当前 self-reference**：evidenceRefs 里的 `wake:<id>` **只**用于本
+  entry 自身的 wakeId；要引用前一个 wake 的决策用 `ledger:previous` 等，**不要**写
+  `wake:<别的 wake>`（strict 会判 invalid）。这条命名约定就是身份绑定的根基。
+- **诚实边界**：wakes/ 外部绑定与 receipt 一样，处在**agent 可写**的 workspace 信任域内，
+  是**corruption-evident（可发现意外损坏/漂移）而非 tamper-proof**——agent 若同时伪造
+  wake record + ledger + marker 仍可绕过；它抓的是本 issue 这类**意外**的 id 抄错/错填，
+  不是对抗性篡改。
+- **legacy 边界**：evidence 自洽仅约束 v2 strict 写路径；v1 历史的 lenient 读不受影响。
   外部绑定对遗留在飞行 wake 同样适用（它们也有 wake record）。
 
 ## 8. Lock 策略

@@ -449,23 +449,50 @@ describe('StewardLedgerStore', () => {
     }))).rejects.toThrow(/self-reference/);
   });
 
-  it('surfaces a misfiled entry (evidence names another wake) as an identity mismatch in the index', async () => {
+  it('read-lenient / write-strict for the #139 self-reference (restores #125 semantics)', () => {
+    // A pre-#139 v2 history line has no wake:<self> reference.
+    const legacyV2MissingSelfRef = {
+      ...ledgerEntry({ wakeId: 'wake-legacy-v2' }),
+      completion: { reason: 'done', evidenceRefs: ['tool:risk'] },
+    };
+    // STRICT write path rejects it (missing self-ref)...
+    expect(() => parseStewardDecisionLedgerEntry(legacyV2MissingSelfRef)).toThrow(/self-reference/);
+    // ...but the LENIENT read path still accepts it as a structural v2 entry, so
+    // historical reads / cost aggregation don't silently drop it.
+    const read = parseStewardDecisionLedgerEntryLenient(legacyV2MissingSelfRef);
+    expect(read.wakeId).toBe('wake-legacy-v2');
+    expect(read.version).toBe(DECISION_LEDGER_SCHEMA_VERSION);
+
+    // The v8matrix5 hybrid (evidence names a DIFFERENT wake) is rejected strict...
+    const hybrid = {
+      ...ledgerEntry({ wakeId: 'wake-a' }),
+      completion: { reason: 'done', evidenceRefs: ['wake:wake-b', 'tool:risk'] },
+    };
+    expect(() => parseStewardDecisionLedgerEntry(hybrid)).toThrow(/different wake/);
+    // ...and still readable structurally (it's the validator/marker/active-wake
+    // gate that blocks it from finalizing, not the reader).
+    expect(parseStewardDecisionLedgerEntryLenient(hybrid).wakeId).toBe('wake-a');
+  });
+
+  it('surfaces a misfiled entry (evidence names another wake) as an identity mismatch in the index (read-lenient / write-strict)', async () => {
     const store = createStewardLedgerStore(dir);
-    // Written raw (the server schema would reject it) to model what a steward
-    // actually wrote to disk: top-level wakeId is the typo, evidence is correct.
     const misfiled = {
       ...ledgerEntry({ wakeId: 'wake-typo-suffix' }),
       completion: { reason: 'done', evidenceRefs: ['wake:wake-actually-active', 'tool:risk'] },
     };
+    // The STRICT write path rejects the contradictory self-reference (#139)...
+    await expect(store.append(misfiled as unknown as StewardDecisionLedgerEntryV2)).rejects.toThrow(/different wake/);
+
+    // ...but a raw line on disk still READS leniently (structural v2), so it
+    // counts for cost/history — while identityMismatches flags it so the
+    // supervisor can act on it.
     await mkdir(dirname(store.path()), { recursive: true });
     await writeFile(store.path(), `${JSON.stringify(misfiled)}\n`, 'utf8');
-
     const index = await store.readIndex();
     expect(index.identityMismatches).toEqual([
       { line: 1, entryWakeId: 'wake-typo-suffix', referencedWakeId: 'wake-actually-active' },
     ]);
-    // And it never counts as a valid entry for the typo id.
-    expect(index.firstWins.get('wake-typo-suffix')?.valid).toBe(false);
+    expect(index.firstWins.get('wake-typo-suffix')?.valid).toBe(true); // lenient read accepts it
   });
 
   it('takes the first entry on a duplicate wakeId and reports the duplicate (D3)', async () => {
@@ -1326,6 +1353,51 @@ describe('StewardSupervisor active identity mismatch (issue #139)', () => {
     const events = log.split('\n').filter((l) => l.includes('"type":"ledger_identity_mismatch"') && l.includes('wake-active-real'));
     expect(events).toHaveLength(1);
     expect((await createStewardWakeStore(dir).get('wake-active-real'))?.ledgerIntegrity?.kind).toBe('active_identity_mismatch');
+  });
+
+  it('a lenient-readable v2 entry missing the #139 self-reference still cannot finalize an active wake (no strict-validated marker)', async () => {
+    const ledgerStore = createStewardLedgerStore(dir);
+    await seedInjectedWake('wake-noselfref');
+    // A pre-#139-shaped entry (no wake:<self>) — lenient-readable, but the strict
+    // generated validator would refuse to publish a marker for it.
+    const missingSelfRef = {
+      ...ledgerEntry({ wakeId: 'wake-noselfref' }),
+      completion: { reason: 'checklist complete', evidenceRefs: ['tool:risk'] },
+    };
+    await mkdir(dirname(ledgerStore.path()), { recursive: true });
+    await writeFile(ledgerStore.path(), `${JSON.stringify(missingSelfRef)}\n`, 'utf8');
+    // No marker published — the finalize gate must hold.
+    const result = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:00.000Z', isSessionRunning: () => true });
+    expect(result.transitions).toEqual([]);
+    expect((await createStewardWakeStore(dir).get('wake-noselfref'))?.status).toBe('injected');
+  });
+
+  it('clears a stale active_identity_mismatch marker when the wake times out (non-ledger-backed terminal)', async () => {
+    await seedInjectedWake('wake-to-mismatch');
+    await writeMisfiledLedger('wake-wrong-to', 'wake-to-mismatch');
+    await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:00.000Z', isSessionRunning: () => true });
+    expect((await createStewardWakeStore(dir).get('wake-to-mismatch'))?.ledgerIntegrity?.kind).toBe('active_identity_mismatch');
+
+    // Past the 14:03 deadline → timeout, which must clear the stale marker.
+    const result = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:05:00.000Z', isSessionRunning: () => true });
+    expect(result.transitions.some((t) => t.wakeId === 'wake-to-mismatch' && t.to === 'timeout')).toBe(true);
+    const wake = await createStewardWakeStore(dir).get('wake-to-mismatch');
+    expect(wake?.status).toBe('timeout');
+    expect(wake?.ledgerIntegrity).toBeUndefined();
+  });
+
+  it('clears a stale active_identity_mismatch marker when the wake goes stuck', async () => {
+    await seedInjectedWake('wake-stuck-mismatch');
+    await writeMisfiledLedger('wake-wrong-stuck', 'wake-stuck-mismatch');
+    await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:00.000Z', isSessionRunning: () => true });
+    expect((await createStewardWakeStore(dir).get('wake-stuck-mismatch'))?.ledgerIntegrity?.kind).toBe('active_identity_mismatch');
+
+    // Session gone, still before deadline → stuck, which must clear the marker.
+    const result = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:02:00.000Z', isSessionRunning: () => false });
+    expect(result.transitions.some((t) => t.wakeId === 'wake-stuck-mismatch' && t.to === 'stuck')).toBe(true);
+    const wake = await createStewardWakeStore(dir).get('wake-stuck-mismatch');
+    expect(wake?.status).toBe('stuck');
+    expect(wake?.ledgerIntegrity).toBeUndefined();
   });
 
   it('clears the mismatch and terminalizes once the entry is re-filed under the correct wakeId and re-validated (recovery)', async () => {

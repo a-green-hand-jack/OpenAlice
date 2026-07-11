@@ -355,8 +355,16 @@ const decisionLedgerCommonShape = {
   cost: stewardCostSchema,
 };
 
-/** STRICT v2 entry — the only shape ever written. */
-export const stewardDecisionLedgerEntryV2Schema = z.object({
+/**
+ * STRUCTURAL v2 entry (issue #125 D1/D2): typed discriminated `actions` +
+ * strict-pending `pendingHash`. This is the LENIENT-READ shape — it does NOT
+ * enforce the issue #139 evidence self-reference, so a pre-#139 v2 history line
+ * (written before that rule existed, with no `wake:<self>` ref) still READS as a
+ * valid entry. Read-lenient / write-strict (issue #125): reconciliation, cost
+ * aggregation, and history all go through this; the strict schema below is the
+ * only shape ever WRITTEN.
+ */
+export const stewardDecisionLedgerEntryV2StructuralSchema = z.object({
   version: z.literal(DECISION_LEDGER_SCHEMA_VERSION),
   ...decisionLedgerCommonShape,
   actions: z.array(stewardLedgerActionSchema),
@@ -369,31 +377,41 @@ export const stewardDecisionLedgerEntryV2Schema = z.object({
       message: 'pendingHash must be null once an action has outcome "executed" (commit provenance belongs in actions[].commitHash)',
     });
   }
-  // Issue #139: the entry must self-identify honestly. Its `wake:` evidence
-  // self-reference must name exactly its own top-level wakeId. A steward has
-  // been observed copying a PRIOR wake's UUID suffix into the top-level wakeId
-  // while its evidence still correctly references the active wake — an
-  // internally contradictory entry that then finalized a phantom id. Require
-  // the self-ref to be present and forbid a `wake:` ref that names any other id.
-  const wakeRefs = entry.completion.evidenceRefs
-    .filter((ref) => typeof ref === 'string' && ref.startsWith('wake:'))
-    .map((ref) => ref.slice('wake:'.length));
-  if (!wakeRefs.includes(entry.wakeId)) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['completion', 'evidenceRefs'],
-      message: `completion.evidenceRefs must include the self-reference "wake:${entry.wakeId}" matching the entry's top-level wakeId`,
-    });
-  }
-  const contradictory = [...new Set(wakeRefs.filter((id) => id !== entry.wakeId))];
-  if (contradictory.length > 0) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['completion', 'evidenceRefs'],
-      message: `completion.evidenceRefs references a different wake (${contradictory.join(', ')}) than the entry's top-level wakeId (${entry.wakeId}); a copied or contradictory wake id is invalid`,
-    });
-  }
 });
+
+/**
+ * STRICT v2 entry — the ONLY shape ever WRITTEN (`ledgerStore.append`) and the
+ * commit/terminal contract the generated validator mirrors. Adds the issue #139
+ * self-consistency rule on top of the structural schema: the entry must carry
+ * exactly the `wake:<its own wakeId>` evidence self-reference and no `wake:`
+ * reference to any OTHER id. The `wake:` namespace is reserved for this single
+ * self-reference — cite a prior wake via `ledger:previous`, never `wake:<other>`.
+ * A steward was observed copying a PRIOR wake's UUID suffix into the top-level
+ * wakeId while its evidence still referenced the active wake — a contradictory
+ * entry that finalized a phantom id (issue #139). This rule is write-strict
+ * only; the lenient structural schema above still reads pre-#139 history.
+ */
+export const stewardDecisionLedgerEntryV2Schema = stewardDecisionLedgerEntryV2StructuralSchema
+  .superRefine((entry, ctx) => {
+    const wakeRefs = entry.completion.evidenceRefs
+      .filter((ref) => typeof ref === 'string' && ref.startsWith('wake:'))
+      .map((ref) => ref.slice('wake:'.length));
+    if (!wakeRefs.includes(entry.wakeId)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['completion', 'evidenceRefs'],
+        message: `completion.evidenceRefs must include the self-reference "wake:${entry.wakeId}" matching the entry's top-level wakeId`,
+      });
+    }
+    const contradictory = [...new Set(wakeRefs.filter((id) => id !== entry.wakeId))];
+    if (contradictory.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['completion', 'evidenceRefs'],
+        message: `completion.evidenceRefs references a different wake (${contradictory.join(', ')}) than the entry's top-level wakeId (${entry.wakeId}); a copied or contradictory wake id is invalid`,
+      });
+    }
+  });
 export type StewardDecisionLedgerEntryV2 = z.infer<typeof stewardDecisionLedgerEntryV2Schema>;
 
 /** LEGACY v1 entry — read-only, for pre-#125 history. `actions` stay
@@ -405,10 +423,14 @@ export const stewardDecisionLedgerEntryV1Schema = z.object({
 }).passthrough();
 export type StewardDecisionLedgerEntryV1 = z.infer<typeof stewardDecisionLedgerEntryV1Schema>;
 
-/** Lenient read schema: strict v2, or legacy v1 history. Version literals are
- *  mutually exclusive, so the union is unambiguous. */
+/** LENIENT read schema (issue #125): STRUCTURAL v2 (no #139 self-ref
+ *  requirement), or legacy v1 history. Version literals are mutually exclusive,
+ *  so the union is unambiguous. The strict #139 self-reference rule is enforced
+ *  on the WRITE path (`parseStewardDecisionLedgerEntry`) and by the generated
+ *  validator + the active-wake finalize gate — a lenient-readable pre-#139 v2
+ *  line still cannot finalize an active wake without a strict-validated marker. */
 export const stewardDecisionLedgerEntrySchema = z.union([
-  stewardDecisionLedgerEntryV2Schema,
+  stewardDecisionLedgerEntryV2StructuralSchema,
   stewardDecisionLedgerEntryV1Schema,
 ]);
 export type StewardDecisionLedgerEntry = z.infer<typeof stewardDecisionLedgerEntrySchema>;

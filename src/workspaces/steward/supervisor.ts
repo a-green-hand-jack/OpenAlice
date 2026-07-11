@@ -188,6 +188,9 @@ export class StewardSupervisor {
               `(input_tokens ${attribution.inputTokens} >= window ${attribution.modelContextWindow})`
             : `deadline expired at ${wake.deadline}`,
           ...(attribution ? { attribution } : {}),
+          // Issue #139: a timeout is not ledger-backed — clear any stale
+          // active-identity-mismatch marker so it doesn't linger on the record.
+          ...(wake.ledgerIntegrity?.kind === 'active_identity_mismatch' ? { ledgerIntegrity: null } : {}),
         });
         await lockStore.release(updated.envelope.accountId, updated.wakeId);
         transitions.push({
@@ -225,6 +228,9 @@ export class StewardSupervisor {
           now,
           completedAt: now,
           error: `session not running: ${wake.sessionId}`,
+          // Issue #139: stuck is not ledger-backed — clear any stale
+          // active-identity-mismatch marker.
+          ...(wake.ledgerIntegrity?.kind === 'active_identity_mismatch' ? { ledgerIntegrity: null } : {}),
         });
         await lockStore.release(updated.envelope.accountId, updated.wakeId);
         transitions.push({
