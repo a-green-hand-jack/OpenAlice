@@ -1,6 +1,6 @@
 # Steward 方向与实施计划
 
-> 版本：v2.0（2026-07-11）
+> 版本：v2.1（2026-07-11）
 >
 > 地位：**唯一活动路线与授权真源**。当前只授权 D0 文档与分支收口；不授权 runtime、
 > prompt、campaign、paper/live 或 broker mutation 行为变更。旧 v1.1 及 P2/P3 阶段计划已归档到
@@ -28,6 +28,16 @@ OpenAlice 继续把 trading agent 运行成 persistent workspace 中的原生 ag
 
 - OpenAlice 不拥有模型推理循环。Core-agent 运行在 Codex / Claude 等原生 CLI 中。
 - Workspace 默认不注入 MCP 配置；agent 通过 `alice*` / `traderhub` CLI 访问 OpenAlice 工具。
+- Steward 无人值守 wake 当前通过 PTY 注入 `<STEWARD_WAKE>` 文本 + 回车实现。控制面的主要
+  失败模式（TUI 未就绪、回车被吞、会话假死、上下文溢出）来自把人机 TUI 当作机器
+  接口使用，不是"借用原生 CLI"这一策略本身的必然成本。
+- 原生 CLI 均提供一等机器接口：Codex 有 `codex app-server`（JSON-RPC daemon、thread/turn
+  生命周期事件、`generate-ts` / `generate-json-schema` 类型化契约）与 `codex exec --json` /
+  `exec resume`；Claude 有 `@anthropic-ai/claude-agent-sdk` 与
+  `claude -p --output-format stream-json --resume`。订阅 OAuth 凭据在这些模式下同样有效；
+  外部 supervisor（Paseo）以 app-server + agent-sdk 驱动同款 CLI 长会话（thread resume、
+  协议内 compaction）已在本地得到验证。OpenAlice 自己的 headless dispatch adapter 也已使用
+  结构化模式，仅 persistent wake 路径仍依赖 PTY。
 - Alice 是 workspace lifecycle、wake、工具授权和 supervisor 控制面；UTA 是账户、guard、
   mutation、broker 与执行事实的权威边界。
 - Paper/mock 可以在有效授权和 policy/guard 通过时 auto-push；live 不由当前 steward 自动执行。
@@ -95,12 +105,34 @@ UTA 或独立确定性 sizing 层再根据账户风险包络，把 intent 转为
 Proposal、paper bounded autonomy、真实 paper broker 和 live 是四个不同资格，不因为前一层
 runtime 跑通而自动晋升。每层都有独立的进入门、撤权路径和证据要求。
 
+### 4.4 Wake 与会话控制面（2026-07-11 maintainer 决定）
+
+Steward 的无人值守 wake 路径从 PTY 文本注入迁移到原生 CLI 的机器协议：
+
+- **Codex 走 `codex app-server`**（thread/turn 生命周期事件、结构化 approval/sandbox、
+  类型化 bindings），**Claude 走 `@anthropic-ai/claude-agent-sdk`**。这是已被外部 supervisor
+  实践验证的组合（"Paseo 路线"）。
+- **交换器形态选择"OpenAlice 内改造"**：per-provider machine driver + thread registry + wake
+  dispatcher 三件事，落在现有 adapter / supervisor 结构内。不引入外部 supervisor 进程作为
+  运行依赖——选型标准是开发工作量最小（headless adapter、supervisor、ledger、授权、工具
+  注入均已存在，增量只是 wake 分发方式），同时避免把交易凭据边界托付给第三方应用。
+- **PTY / scrollback 保留给人机交互 workspace**。同一 thread 事后可用 `codex resume <id>` /
+  `claude --resume <id>` 人工接管，人可观察性不因迁移丢失。
+- **工具面与状态面不变**：`alice*` / `traderhub` CLI 和 `.alice/steward/` 文件契约保持。
+  finalize barrier 是否可由 turn 生命周期事件替代，属于 D1 设计输出，本节不预设。
+- **风险注记**：`codex app-server` 标记为 experimental，采用时必须版本 pin，并以
+  `generate-json-schema` 快照做契约回归测试；`@anthropic-ai/claude-agent-sdk` 同样处于
+  快速演进期，适用同一版本 pin 与契约回归纪律。
+
+本节只固化方向与选型；具体 schema、迁移与留存策略属于 D1 设计，任何 runtime 实现须按 §5
+另行授权。
+
 ## 5. 执行阶段
 
 | 阶段 | 目标                                                           | 当前授权               | 完成门                                                                                      |
 | ---- | -------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------- |
 | D0   | 统一方向、归档旧文档、收口遗留 branch                          | **已授权，当前阶段**   | canonical docs 无矛盾；旧 branch 进入 ancestry 且 runtime tree 零变化                       |
-| D1   | 设计 Decision Intent、Information Snapshot、Risk Envelope 契约 | D0 后只允许文档/设计   | schema、责任边界、失败语义、迁移影响经 maintainer 批准                                      |
+| D1   | 设计 Decision Intent、Information Snapshot、Risk Envelope 契约，以及 wake 控制面迁移（app-server / agent-sdk，§4.4）设计 | D0 后只允许文档/设计   | schema、责任边界、失败语义、迁移影响经 maintainer 批准；控制面设计含协议版本 pin 与回退策略 |
 | D2   | 补齐 autonomous execution 的确定性安全前置                     | 未授权实现             | mandatory envelope、sizing、revoke/admission、外部 ledger commit point 的范围经独立安全审查 |
 | D3   | 建立三层 eval harness                                          | 未授权实现             | protocol/decision/execution 指标分离，guard containment 不计入策略得分                      |
 | D4   | Proposal-only 决策试点                                         | 未授权运行             | 多资产/事件化 as-of replay；只产 proposal，不 auto-push                                     |
@@ -158,6 +190,9 @@ runtime 跑通而自动晋升。每层都有独立的进入门、撤权路径和
 
 ## 9. 变更记录
 
+- v2.1（2026-07-11）：新增 §4.4 wake 控制面路线：无人值守 wake 从 PTY 注入迁移到
+  `codex app-server` / `claude-agent-sdk` 机器协议；交换器采用 OpenAlice 内改造形态
+  （工作量最小原则）；控制面迁移设计并入 D1；§2 补充 PTY 现状与机器接口事实基线。
 - v2.0（2026-07-11）：Ubuntu OpenAlice freeze 后重写。停止 prompt-first participation 调优，
   把 proposal-first、Decision Intent、mandatory Risk Envelope、评测分层和 bounded autonomy
   定为新路线；旧 v1.1 与阶段文档归档。
