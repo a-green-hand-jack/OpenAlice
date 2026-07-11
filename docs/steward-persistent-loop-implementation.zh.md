@@ -329,6 +329,22 @@ Do not inspect OpenAlice source. Do not call push.
 server-side PTY stdin seam；`src/workspaces/steward/injector.ts` 只格式化
 `<STEWARD_WAKE>` message 并通过 `source: 'steward-supervisor'` 写入现有 session。
 
+**已落地（issue #146，S0–S6，PR #147–#151）——本节预期的 injector 替换已经发生**：
+本节此前写「以后如果 Codex 提供更好的 session input API，再替换 injector，不改
+wake / ledger / supervisor」，该替换现已落地。无人值守 wake 的**默认**控制面从
+PTY stdin+Enter 迁移到原生 CLI 的机器协议——codex 走 `codex app-server`（JSON-RPC daemon、
+thread/turn 生命周期事件），claude 走 `@anthropic-ai/claude-agent-sdk`（无 daemon，每轮
+`query()` spawn 自带的 Claude Code CLI，session 续接即 SDK resume）；两者共用同一
+`StewardMachineDriver` 接口（`ensureThread` + `runTurn`）。正如本节所预期，wake store /
+ledger store / supervisor / finalize marker 契约**不变**：machine wake 的 `sessionId` 改为
+原生 thread UUID、wake record `controlFace: 'machine'`，完成检测仍是 supervisor 读 ledger +
+finalize marker。injector / PTY 路径现在**只**服务人机交互 session 与显式
+`controlFace: 'pty'` 逃生舱。无人值守默认在 S6 翻转（`decideStewardControlFace`：controlFace
+缺省 ⇒ machine，显式 `'pty'` 强制 PTY，非 codex/claude agent 自动退回 PTY）。实现参考模块见
+`src/workspaces/steward/machine-driver/`（`dispatch.ts` = 控制面判定 + wake 分发、
+`codex-app-server-driver.ts`、`claude-agent-sdk-driver.ts`、`thread-store.ts`、
+`driver-registry.ts`），叙述见 `trading-agent-architecture.zh.md` §1 / §3。
+
 ## 6. HTTP / service API
 
 第一版建议只做 workspace-scoped API：
