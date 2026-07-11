@@ -1,6 +1,7 @@
-import { mkdir, open, readFile, readdir, rename, rm } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 
+import { logger } from '../logger.js';
 import {
   STEWARD_LOCK_SCHEMA_VERSION,
   parseStewardLockRecord,
@@ -23,112 +24,128 @@ export class StewardLockConflictError extends Error {
 }
 
 /**
- * Bounds the compare-and-set retry loop in `acquire` (issue #154). Each retry
- * round only happens when a concurrent acquirer changes the lock's state out
- * from under us (a released lock, or a race to reclaim an expired one) — real
- * contention resolves within one or two rounds (see `acquire` doc comment).
- * This is a defensive circuit breaker against pathological thrash, not a
- * value tuned for expected contention.
+ * Serializes `StewardLockStore.acquire` per resolved lock-file path (issue
+ * #154 review, C1). `createStewardLockStore(workspaceDir)` is called fresh at
+ * every call site (`service.ts` x2, the webui `/steward/wakes` route, the
+ * machine-dispatch preflight) — there is no shared `StewardLockStore`
+ * instance, so an instance-level mutex would not serialize concurrent
+ * acquires that happen to run through different instances pointed at the
+ * SAME on-disk lock file. Keying globally by the resolved absolute path
+ * closes that gap: every acquire for the same account, regardless of which
+ * instance issued it, funnels through the same queue.
+ *
+ * SINGLE-PROCESS ASSUMPTION — load-bearing, verified (issue #154 review):
+ * `.alice/steward/locks/*.json` (the account lock this module owns) has
+ * exactly one reader/writer in the whole codebase: this file, always
+ * constructed and called from inside Alice's own Node process (never
+ * cross-process). The workspace's generated `validate-ledger.mjs` — which
+ * DOES run as a separate OS subprocess, spawned by the agent inside the
+ * workspace — guards a completely different resource
+ * (`.alice/steward/ledger/decisions.jsonl.lock`) with its own independent
+ * open('wx')-retry protocol; it never touches `locks/*.json`. If a future
+ * change introduces a second process that writes the account lock, this
+ * in-process mutex stops being sufficient on its own and the acquire
+ * protocol needs a cross-process primitive instead (e.g. write-to-scratch +
+ * atomic link-publish) — this queue does not help across process
+ * boundaries.
  */
-const MAX_ACQUIRE_ATTEMPTS = 32;
+const acquireQueueTailByPath = new Map<string, Promise<void>>();
+
+async function withLockFileMutex<T>(lockFilePath: string, fn: () => Promise<T>): Promise<T> {
+  const key = resolve(lockFilePath);
+  const previous = acquireQueueTailByPath.get(key) ?? Promise.resolve();
+  let releaseOurs!: () => void;
+  const ours = new Promise<void>((res) => {
+    releaseOurs = res;
+  });
+  acquireQueueTailByPath.set(key, ours);
+
+  await previous; // wait our turn — `ours` predecessors always resolve, never reject
+  try {
+    return await fn();
+  } finally {
+    releaseOurs();
+    // Nobody queued behind us — drop the entry so the map doesn't grow
+    // unbounded across the process lifetime for many distinct accounts.
+    if (acquireQueueTailByPath.get(key) === ours) acquireQueueTailByPath.delete(key);
+  }
+}
 
 export class StewardLockStore {
   constructor(private readonly workspaceDir: string) {}
 
   /**
-   * Acquire-or-reject in a single atomic step (issue #154 — fixes a TOCTOU
-   * where two concurrent wake triggers for the same account could both pass a
-   * read-then-write acquire before either lock file landed, letting both
-   * wakes proceed and interleave ledger writes).
+   * Acquire-or-reject (issue #154 — fixes a TOCTOU where two concurrent wake
+   * triggers for the same account could both pass a read-then-write acquire
+   * before either lock file landed, letting both wakes proceed and
+   * interleave ledger writes).
    *
-   * The primitive is exclusive file creation (`open(path, 'wx')`, i.e.
-   * O_CREAT|O_EXCL) — the OS guarantees exactly one concurrent caller wins
-   * the create; every loser observes `EEXIST` and falls back to reading the
-   * lock that's actually there to decide: conflict (live, different wake),
-   * idempotent re-acquire (live, same wake), or stale-lock takeover.
+   * The fix is a module-level async mutex (`withLockFileMutex`, keyed by the
+   * resolved lock-file path — see its doc comment for the single-process
+   * assumption this relies on): the whole check → expiry-check → write body
+   * below runs as one serialized unit per account, so no interleaving
+   * between two acquirers is possible by construction — there's no window
+   * for a "yank a freshly-recreated live lock out from under its winner"
+   * race the way a purely-atomic-per-step (create-then-steal) design could
+   * still hit.
    *
-   * Stale-lock takeover is itself made atomic: the reclaimer `rename`s the
-   * expired lock file to a scratch path. A filesystem `rename` can only ever
-   * remove its source once — every other concurrent reclaimer's `rename` of
-   * the same source then fails with `ENOENT`, so exactly one caller wins the
-   * takeover and clears the path for a fresh exclusive create. Losers of
-   * either race simply retry the acquire from the top (bounded by
-   * `MAX_ACQUIRE_ATTEMPTS`) — a released or freshly-reclaimed slot resolves
-   * within a round; a genuinely live conflicting lock throws
-   * `StewardLockConflictError` immediately, without any retry.
+   * The write itself is the original tmp+rename `writeJsonAtomic` (no
+   * create-then-write window in the write step, so a mid-write crash/ENOSPC
+   * can never leave a torn file at the canonical lock path — the OS `rename`
+   * only ever swaps in a fully-written file). `get` additionally tolerates
+   * torn/unparseable legacy residue (pre-dating this fix, or from a manual
+   * edit) by treating it as absent rather than throwing — see `get`.
    */
   async acquire(input: AcquireStewardLockInput): Promise<StewardLockRecord> {
-    return this.acquireAttempt(input, 0);
-  }
-
-  private async acquireAttempt(
-    input: AcquireStewardLockInput,
-    attempt: number,
-  ): Promise<StewardLockRecord> {
-    if (attempt >= MAX_ACQUIRE_ATTEMPTS) {
-      throw new Error(
-        `steward lock acquire for ${input.accountId} did not converge after ${MAX_ACQUIRE_ATTEMPTS} attempts`,
-      );
-    }
     const path = this.pathFor(input.accountId);
-    const next = parseStewardLockRecord({
-      version: STEWARD_LOCK_SCHEMA_VERSION,
-      accountId: input.accountId,
-      wakeId: input.wakeId,
-      acquiredAt: input.now,
-      expiresAt: input.expiresAt,
-    });
+    return withLockFileMutex(path, async () => {
+      const current = await this.get(input.accountId);
+      if (current && current.wakeId !== input.wakeId && !isExpired(current, input.now)) {
+        throw new StewardLockConflictError(current);
+      }
+      if (current && current.wakeId === input.wakeId && !isExpired(current, input.now)) {
+        return current;
+      }
 
-    try {
-      await writeJsonExclusive(path, next);
+      const next = parseStewardLockRecord({
+        version: STEWARD_LOCK_SCHEMA_VERSION,
+        accountId: input.accountId,
+        wakeId: input.wakeId,
+        acquiredAt: input.now,
+        expiresAt: input.expiresAt,
+      });
+      await writeJsonAtomic(path, next);
       return next;
-    } catch (err) {
-      if (!isEEXIST(err)) throw err;
-    }
-
-    // A lock file already exists — inspect it to decide the outcome. It may
-    // have been removed again (released, or reclaimed by someone else)
-    // between our failed create and this read; treat that as "retry".
-    const current = await this.get(input.accountId);
-    if (current === null) {
-      return this.acquireAttempt(input, attempt + 1);
-    }
-    if (!isExpired(current, input.now)) {
-      if (current.wakeId === input.wakeId) return current;
-      throw new StewardLockConflictError(current);
-    }
-
-    // Stale (expired) lock — attempt an atomic takeover. If we lose the
-    // takeover race, someone else is handling this slot; reassess from the
-    // top rather than assume anything about the new state.
-    await this.reclaimStaleLock(path);
-    return this.acquireAttempt(input, attempt + 1);
+    });
   }
 
   /**
-   * Atomically clear an expired lock file so the caller's next exclusive
-   * create can claim the slot. `rename` only succeeds for the first caller
-   * to move a given source path; concurrent reclaimers racing the same
-   * source all but one get `ENOENT` and simply fall through (their retry
-   * will re-read the (now-vacated-or-refreshed) lock state).
+   * `null` means "no lock currently held", which covers both a genuinely
+   * absent file (ENOENT) AND a torn/unparseable one (issue #154 review M1):
+   * legacy crash residue, a manual edit, or any other corruption is treated
+   * as stale rather than bricking the account — a structured warning is
+   * logged so it's visible, and `acquire` (running under the path mutex)
+   * will happily overwrite it with a fresh lock on the next attempt.
    */
-  private async reclaimStaleLock(path: string): Promise<void> {
-    const scratch = `${path}.reclaim-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    try {
-      await rename(path, scratch);
-    } catch (err) {
-      if (isENOENT(err)) return;
-      throw err;
-    }
-    await rm(scratch, { force: true }).catch(() => undefined);
-  }
-
   async get(accountId: string): Promise<StewardLockRecord | null> {
+    const path = this.pathFor(accountId);
+    let raw: string;
     try {
-      return parseStewardLockRecord(JSON.parse(await readFile(this.pathFor(accountId), 'utf8')));
+      raw = await readFile(path, 'utf8');
     } catch (err) {
       if (isENOENT(err)) return null;
       throw err;
+    }
+    try {
+      return parseStewardLockRecord(JSON.parse(raw));
+    } catch (err) {
+      logger.warn('steward.lock_file_torn', {
+        workspaceDir: this.workspaceDir,
+        accountId,
+        path,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
     }
   }
 
@@ -174,28 +191,13 @@ function isExpired(lock: StewardLockRecord, now: string): boolean {
   return Date.parse(lock.expiresAt) <= Date.parse(now);
 }
 
-/**
- * Exclusive create-and-write: fails with `EEXIST` if `path` already exists.
- * `open(path, 'wx')` maps to `O_CREAT|O_EXCL` (POSIX) / `CREATE_NEW`
- * (Windows) — the OS itself guarantees at most one concurrent caller wins,
- * which is the atomic primitive `acquire` builds its compare-and-set on.
- */
-async function writeJsonExclusive(path: string, value: unknown): Promise<void> {
-  await mkdir(dirname(path), { recursive: true }).catch((err) => {
-    if (!isEEXIST(err)) throw err;
-  });
-  const handle = await open(path, 'wx');
-  try {
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  } finally {
-    await handle.close();
-  }
+async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  await rename(tmp, path);
 }
 
 function isENOENT(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as NodeJS.ErrnoException).code === 'ENOENT';
-}
-
-function isEEXIST(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as NodeJS.ErrnoException).code === 'EEXIST';
 }
