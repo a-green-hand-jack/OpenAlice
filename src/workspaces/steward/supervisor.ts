@@ -8,6 +8,7 @@ import { createStewardLedgerStore, type LedgerIndex } from './ledger-store.js';
 import { createStewardLockStore } from './lock-store.js';
 import { stewardStatePath, stewardSupervisorLogPath } from './paths.js';
 import { createStewardWakeStore } from './wake-store.js';
+import type { ThreadTelemetry } from './machine-driver/types.js';
 import type { ContextTelemetry } from '../cli-adapter.js';
 import {
   STEWARD_LEDGER_INTEGRITY_SCHEMA_VERSION,
@@ -34,6 +35,24 @@ export interface StewardSupervisorTickOptions {
    * throw ⇒ the timeout is classified plainly.
    */
   readonly readContextTelemetry?: (sessionId: string) => Promise<ContextTelemetry | null>;
+  /**
+   * Liveness probe for a MACHINE control-face wake (issue #146). For a wake
+   * whose `controlFace` is 'machine', `sessionId` carries the native thread
+   * UUID; this reports whether that thread's driver is still live. Bound by the
+   * caller to the workspace's `MachineDriverRegistry` (a workspace with no live
+   * driver resolves not-live). PTY wakes never consult this — they stay on
+   * `isSessionRunning`.
+   */
+  readonly isMachineThreadLive?: (threadId: string) => boolean;
+  /**
+   * Protocol token-usage telemetry for a MACHINE wake (issue #146). Replaces the
+   * PTY rollout-tailing (`readContextTelemetry`) as the timeout-attribution
+   * source for a machine wake — read straight off the driver's last
+   * `thread/tokenUsage/updated` snapshot. Null when unavailable (attribution
+   * degrades to a plain timeout, same as the PTY path). PTY wakes never consult
+   * this.
+   */
+  readonly readMachineTelemetry?: (threadId: string) => ThreadTelemetry | null;
 }
 
 export interface StewardSupervisorTransition {
@@ -175,9 +194,15 @@ export class StewardSupervisor {
         // died because the session was context-poisoned, not merely slow —
         // distinct in the terminal metadata and the supervisor event so
         // campaign reports can count context overflows apart from timeouts.
+        // Issue #146: a machine wake reads context telemetry from the driver's
+        // protocol token-usage snapshot, not the PTY rollout tail. Both sources
+        // are adapted to the same `readContextTelemetry` contract classifyTimeout
+        // already consumes — attribution logic is unchanged.
         const { attribution, warning: telemetryWarning } = await this.classifyTimeout(
           wake.sessionId,
-          opts.readContextTelemetry,
+          wake.controlFace === 'machine'
+            ? machineTelemetryReader(opts.readMachineTelemetry)
+            : opts.readContextTelemetry,
         );
         if (telemetryWarning) telemetryWarnings.push(telemetryWarning);
         const updated = await wakeStore.updateStatus(wake.wakeId, 'timeout', {
@@ -218,11 +243,16 @@ export class StewardSupervisor {
         continue;
       }
 
+      // Issue #146: dual-source liveness. A PTY wake consults the pool
+      // (`isSessionRunning`); a machine wake consults the driver registry
+      // (`isMachineThreadLive`) with the thread UUID `sessionId` carries. Both
+      // follow the SAME transition-to-`stuck` + event emission — see
+      // controlFaceVanished for the identical "only when the accessor is
+      // provided and reports gone" rule.
       if (
         wake.status === 'injected' &&
         wake.sessionId &&
-        opts.isSessionRunning &&
-        !opts.isSessionRunning(wake.sessionId)
+        controlFaceVanished(wake, opts)
       ) {
         const updated = await wakeStore.updateStatus(wake.wakeId, 'stuck', {
           now,
@@ -619,6 +649,52 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   const tmp = `${path}.tmp`;
   await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
   await rename(tmp, path);
+}
+
+/**
+ * Whether an injected wake's control face has vanished — the trigger for the
+ * `stuck` transition (issue #146). Dual-source but single-shape: a PTY wake
+ * consults `isSessionRunning` (the pool), a machine wake consults
+ * `isMachineThreadLive` (the driver registry), both keyed off `wake.sessionId`
+ * (the pool petname for PTY, the native thread UUID for machine). In BOTH cases
+ * the rule is identical to the historical PTY one: report vanished ONLY when
+ * the relevant accessor is PROVIDED and reports the face is gone — an absent
+ * accessor never transitions a wake to stuck. A PTY wake never touches the
+ * machine accessor and vice-versa.
+ */
+function controlFaceVanished(
+  wake: StewardWakeRecord,
+  opts: StewardSupervisorTickOptions,
+): boolean {
+  if (!wake.sessionId) return false;
+  const probe = wake.controlFace === 'machine' ? opts.isMachineThreadLive : opts.isSessionRunning;
+  if (!probe) return false;
+  return !probe(wake.sessionId);
+}
+
+/**
+ * Adapt a machine wake's driver telemetry (`ThreadTelemetry`) into the
+ * `readContextTelemetry` contract `classifyTimeout` already consumes (issue
+ * #146), so context-overflow attribution works identically for machine wakes
+ * without redesigning the timeout path. The driver's `contextWindow` maps onto
+ * `modelContextWindow` (0 when the driver has reported none — no window means no
+ * overflow verdict, i.e. a plain timeout). Returns undefined when no machine
+ * reader is wired, so classifyTimeout degrades to a plain, no-warning timeout
+ * exactly like the PTY path with no reader.
+ */
+function machineTelemetryReader(
+  read: StewardSupervisorTickOptions['readMachineTelemetry'],
+): StewardSupervisorTickOptions['readContextTelemetry'] | undefined {
+  if (!read) return undefined;
+  return (threadId: string) => {
+    const telemetry = read(threadId);
+    if (!telemetry) return Promise.resolve(null);
+    return Promise.resolve({
+      inputTokens: telemetry.inputTokens,
+      modelContextWindow: telemetry.contextWindow ?? 0,
+      source: `machine-driver:${threadId}`,
+    });
+  };
 }
 
 function isTerminal(status: StewardWakeRecord['status']): boolean {

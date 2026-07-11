@@ -14,6 +14,11 @@ export const STEWARD_FINALIZE_REL = `${STEWARD_ROOT_REL}/finalize`;
  *  its native Write/Edit tool; the generated validate-ledger.mjs is the ONLY
  *  supported writer of decisions.jsonl. Gitignored scratch. */
 export const STEWARD_DRAFTS_REL = `${STEWARD_ROOT_REL}/drafts`;
+/** Per-workspace machine control-face thread state (issue #146). ONE file per
+ *  workspace (not per-wake) — a machine wake resumes the SAME native thread as
+ *  the prior wake, so this id lets wake N+1 re-attach across Alice restarts.
+ *  Gitignored operational state like locks/state; no migration framework. */
+export const STEWARD_MACHINE_THREAD_REL = `${STEWARD_ROOT_REL}/machine-thread.json`;
 
 export function stewardRootPath(workspaceDir: string): string {
   return join(workspaceDir, '.alice', 'steward');
@@ -81,6 +86,11 @@ export function stewardDraftFilename(wakeId: string): string {
 
 export function stewardDraftPath(workspaceDir: string, wakeId: string): string {
   return join(stewardDraftsDir(workspaceDir), stewardDraftFilename(wakeId));
+}
+
+/** The single machine control-face thread record for a workspace (issue #146). */
+export function stewardMachineThreadPath(workspaceDir: string): string {
+  return join(stewardRootPath(workspaceDir), 'machine-thread.json');
 }
 
 /** The cross-process advisory lock guarding writes to decisions.jsonl (issue
