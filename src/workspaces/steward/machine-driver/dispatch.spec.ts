@@ -159,13 +159,21 @@ function baseInput(driver: StewardMachineDriver, over: Partial<DispatchMachineWa
 }
 
 describe('decideStewardControlFace (issue #146)', () => {
-  it('is PTY (no reason) when controlFace is absent — byte-identical pre-#146 default', () => {
+  it('defaults to machine when controlFace is absent for a codex workspace (issue #146 S6 flip)', () => {
     const d = decideStewardControlFace({ config: {}, requestedAgent: undefined, workspaceAgents: ['codex'] });
-    expect(d.useMachine).toBe(false);
-    expect(d.declineReason).toBeUndefined();
+    expect(d).toEqual({ useMachine: true, agent: 'codex' });
   });
 
-  it("is PTY (no reason) when controlFace is explicitly 'pty'", () => {
+  it('defaults to machine when controlFace is absent for a claude workspace (issue #146 S6 flip)', () => {
+    const d = decideStewardControlFace({
+      config: {},
+      requestedAgent: 'claude',
+      workspaceAgents: ['codex', 'claude'],
+    });
+    expect(d).toEqual({ useMachine: true, agent: 'claude' });
+  });
+
+  it("forces PTY (no reason) when controlFace is explicitly 'pty' — the escape hatch / rollback lever", () => {
     const d = decideStewardControlFace({
       config: { controlFace: 'pty' },
       requestedAgent: undefined,
@@ -173,6 +181,17 @@ describe('decideStewardControlFace (issue #146)', () => {
     });
     expect(d.useMachine).toBe(false);
     expect(d.declineReason).toBeUndefined();
+  });
+
+  it('declines to PTY (with reason) when controlFace is absent but the agent is neither codex nor claude (issue #146 S6)', () => {
+    const d = decideStewardControlFace({
+      config: {},
+      requestedAgent: 'opencode',
+      workspaceAgents: ['codex', 'opencode'],
+    });
+    expect(d.useMachine).toBe(false);
+    expect(d.agent).toBe('opencode');
+    expect(d.declineReason).toMatch(/supports codex or claude/);
   });
 
   it('honors machine for a codex-enabled workspace', () => {
@@ -635,13 +654,21 @@ describe('dispatchStewardWakeControlFace — shared gate + factory seam (issue #
     config, requestedAgent: undefined, wakeId: 'wake-cf', deadline: FUTURE_DEADLINE, now: NOW, envelope,
   });
 
-  it('PTY config: returns face:pty, never invokes the driver factory, no wake/lock side effects', async () => {
+  it("explicit 'pty' config: returns face:pty, never invokes the driver factory, no wake/lock side effects", async () => {
     const factory = vi.fn(() => makeMockDriver().driver);
-    const outcome = await dispatchStewardWakeControlFace(input({}), baseDeps(factory));
+    const outcome = await dispatchStewardWakeControlFace(input({ controlFace: 'pty' }), baseDeps(factory));
 
     expect(outcome).toEqual({ face: 'pty' });
     expect(factory).not.toHaveBeenCalled();
     expect(await createStewardWakeStore(dir).get('wake-cf')).toBeNull();
+  });
+
+  it('absent config (issue #146 S6 default): invokes the factory once and dispatches machine', async () => {
+    const factory = vi.fn(() => makeMockDriver().driver);
+    const outcome = await dispatchStewardWakeControlFace(input({}), baseDeps(factory));
+
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(outcome.face).toBe('machine');
   });
 
   it('machine config: invokes the factory once, dispatches, returns the injected wake', async () => {
@@ -724,11 +751,11 @@ describe('buildMachineDriver (issue #146 MINOR-1)', () => {
 });
 
 describe('resolveStewardControlFace (issue #146 MINOR-1 + MINOR-3)', () => {
-  it('never consults getAdapter when controlFace is absent/pty', () => {
+  it("never consults getAdapter when controlFace is explicitly 'pty' (escape hatch short-circuits before adapter resolution)", () => {
     const getAdapter = vi.fn(() => codexAdapter);
 
     const result = resolveStewardControlFace({
-      config: {},
+      config: { controlFace: 'pty' },
       requestedAgent: undefined,
       workspaceAgents: ['codex'],
       getAdapter,
@@ -822,10 +849,10 @@ describe('machine driver factory wiring end-to-end (issue #146 MINOR-1)', () => 
     return buildMachineDriver({ ws, adapter: controlFace.adapter, cwd: ws.dir, env: {}, logger: NOOP_LOGGER, factory });
   }
 
-  it('factory is NOT invoked when controlFace is absent/pty', () => {
+  it("factory is NOT invoked when controlFace is explicitly 'pty' (escape hatch)", () => {
     const factory = vi.fn(() => makeMockDriver().driver);
     const controlFace = resolveStewardControlFace({
-      config: {},
+      config: { controlFace: 'pty' },
       requestedAgent: undefined,
       workspaceAgents: ws.agents,
       getAdapter,

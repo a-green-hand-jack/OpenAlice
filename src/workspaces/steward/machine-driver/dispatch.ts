@@ -70,12 +70,22 @@ export interface StewardControlFaceDecision {
 }
 
 /**
- * Decide the control face for a steward wake. Machine is opt-in
- * (`config.controlFace === 'machine'`) and supported for `codex` and `claude`
- * (issue #146 S5): any other agent, or a workspace that doesn't enable the
- * resolved agent, declines to PTY with a reason (S3 never fails a wake over
- * this). A missing / 'pty' flag is a plain PTY decision with no reason —
- * byte-identical to pre-#146 behavior.
+ * Decide the control face for a steward wake. Machine is the DEFAULT for an
+ * unattended wake as of issue #146 S6: an ABSENT `controlFace` now attempts the
+ * machine face (subject to the agent-support + workspace-enabled gates below), so
+ * a `codex`/`claude` steward wakes through the native machine protocol with no
+ * config at all. The two escape hatches:
+ *   - An EXPLICIT `controlFace: 'pty'` FORCES the historical PTY inject face — a
+ *     first-class escape hatch and the rollback lever if the machine face
+ *     misbehaves in the field. It never attempts machine and carries no decline
+ *     reason (it is a deliberate choice, not a fallback).
+ *   - Any agent that isn't `codex` or `claude` (issue #146 S5), or a workspace
+ *     that doesn't enable the resolved agent, declines to PTY WITH a reason (S3
+ *     never fails a wake over this) — the existing decline logic that keeps every
+ *     other agent on PTY automatically, absent config included.
+ * `controlFace: 'machine'` is unchanged (explicit opt-in). Pre-S6 behavior was
+ * absent → PTY; the flip is the single interpretation change of an ABSENT key —
+ * it lives in ONE place (this function), no persisted data is transformed.
  */
 export function decideStewardControlFace(input: {
   readonly config: Record<string, unknown>;
@@ -85,7 +95,7 @@ export function decideStewardControlFace(input: {
   const configuredAgent =
     typeof input.config['agent'] === 'string' ? (input.config['agent'] as string) : undefined;
   const agent = input.requestedAgent ?? configuredAgent ?? 'codex';
-  if (input.config['controlFace'] !== 'machine') return { useMachine: false, agent };
+  if (input.config['controlFace'] === 'pty') return { useMachine: false, agent };
   if (!MACHINE_FACE_AGENTS.includes(agent)) {
     return {
       useMachine: false,
