@@ -116,6 +116,11 @@ export const stewardLedgerIntegrityKindSchema = z.enum([
   'entry_missing',
   'entry_mutated',
   'entry_missing_no_receipt',
+  // Issue #139: an ACTIVE (not-yet-terminal) wake has a ledger entry filed under
+  // a different top-level wakeId whose evidence self-references this wake. Unlike
+  // the others this is pre-terminal and non-fatal — it's surfaced so the same
+  // wake can be corrected instead of silently timing out.
+  'active_identity_mismatch',
 ]);
 export type StewardLedgerIntegrityKind = z.infer<typeof stewardLedgerIntegrityKindSchema>;
 
@@ -129,6 +134,9 @@ export const stewardLedgerIntegritySchema = z.object({
   kind: stewardLedgerIntegrityKindSchema,
   expectedFingerprint: z.string().min(1).optional(),
   actualFingerprint: z.string().min(1).optional(),
+  // Issue #139: for an `active_identity_mismatch`, the WRONG top-level wakeId the
+  // completion was filed under (the dedup key for that event).
+  misfiledUnderWakeId: z.string().min(1).optional(),
   firstDetectedAt: z.string().min(1),
 }).passthrough();
 export type StewardLedgerIntegrity = z.infer<typeof stewardLedgerIntegritySchema>;
@@ -359,6 +367,30 @@ export const stewardDecisionLedgerEntryV2Schema = z.object({
       code: 'custom',
       path: ['pendingHash'],
       message: 'pendingHash must be null once an action has outcome "executed" (commit provenance belongs in actions[].commitHash)',
+    });
+  }
+  // Issue #139: the entry must self-identify honestly. Its `wake:` evidence
+  // self-reference must name exactly its own top-level wakeId. A steward has
+  // been observed copying a PRIOR wake's UUID suffix into the top-level wakeId
+  // while its evidence still correctly references the active wake — an
+  // internally contradictory entry that then finalized a phantom id. Require
+  // the self-ref to be present and forbid a `wake:` ref that names any other id.
+  const wakeRefs = entry.completion.evidenceRefs
+    .filter((ref) => typeof ref === 'string' && ref.startsWith('wake:'))
+    .map((ref) => ref.slice('wake:'.length));
+  if (!wakeRefs.includes(entry.wakeId)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['completion', 'evidenceRefs'],
+      message: `completion.evidenceRefs must include the self-reference "wake:${entry.wakeId}" matching the entry's top-level wakeId`,
+    });
+  }
+  const contradictory = [...new Set(wakeRefs.filter((id) => id !== entry.wakeId))];
+  if (contradictory.length > 0) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['completion', 'evidenceRefs'],
+      message: `completion.evidenceRefs references a different wake (${contradictory.join(', ')}) than the entry's top-level wakeId (${entry.wakeId}); a copied or contradictory wake id is invalid`,
     });
   }
 });

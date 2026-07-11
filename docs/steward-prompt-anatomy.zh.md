@@ -41,6 +41,14 @@
 > wake 不会完成。属完成协议澄清（不改记账字段语义），代码半边（marker + 屏障）见
 > `docs/steward-persistent-loop-implementation.zh.md` §7 的 #136 段。
 
+> **v8 完成协议 #139 增补（2026-07-11，wakeId 身份诚实）**：`files/instruction.md`
+> ledger 写入步骤新增——顶层 `wakeId` 必须逐字复制**本次** wake 的 id，**禁止**复用/手抄
+> 前一个 wake 的 id（canary 里 steward 把前一 wake 的 UUID 尾段抄进了顶层 wakeId）；
+> `completion.evidenceRefs` 的 `wake:<id>` 自引用必须与顶层 wakeId 完全一致，否则验证失败；
+> 并用该精确 id 运行 validator。属完成协议澄清（防止 entry 冒充另一个 wake），代码半边
+> （schema 自洽 + validator 外部绑定 active wake + supervisor actionable mismatch 事件）见
+> `docs/steward-persistent-loop-implementation.zh.md` §7 的 #139 段。
+
 > **真源约定**：实验提示词按不变量 I6 存于 orchestrator 侧（scratchpad，不入 `src/`）。
 > 为可复现/可审计，其**受版本管理的真源是本文件**（§5 全文）；scratchpad 的 `.mjs`
 > 是**可运行副本，须与本文件登记的文本逐字一致**。两者不一致时以本文件为准。

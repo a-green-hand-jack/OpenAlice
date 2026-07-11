@@ -71,6 +71,23 @@ try {
   fail('cannot read ' + path + ': ' + err.message)
 }
 
+// Issue #139: bind finalization to the EXTERNALLY-known active wake, not the id
+// the ledger entry asserts about itself. The wake record file under wakes/ is
+// written by the server when the wake is posted; require one for <wakeId> that
+// is still non-terminal. This refuses to "finalize" a phantom/typo id (no wake
+// record) or re-finalize an already-completed wake (replay) -- exactly how a
+// copied-suffix wakeId slipped through: it had no active wake behind it. Run
+// this with the EXACT wakeId from the wake message; never invent or copy one.
+const terminalStatuses = ['done', 'blocked', 'error', 'timeout', 'stuck']
+let wakeRecord
+try {
+  wakeRecord = JSON.parse(await fs.readFile('.alice/steward/wakes/' + encodeURIComponent(wakeId) + '.json', 'utf8'))
+} catch (err) {
+  if (err && err.code === 'ENOENT') fail('no active posted wake "' + wakeId + '" (no wake record under .alice/steward/wakes/) -- validate with the exact wakeId from the wake message; do not invent or copy a prior wake id')
+  fail('cannot read wake record for "' + wakeId + '": ' + err.message)
+}
+if (wakeRecord && terminalStatuses.includes(wakeRecord.status)) fail('wake "' + wakeId + '" is already ' + wakeRecord.status + '; a completed wake cannot be re-finalized -- finalize only the active posted wake')
+
 const requiredTopLevel = [
   'version',
   'wakeId',
@@ -128,6 +145,15 @@ if (!['done', 'blocked', 'error'].includes(entry.status)) fail('line ' + found.l
 if (!entry.completion || typeof entry.completion !== 'object' || Array.isArray(entry.completion)) fail('line ' + found.line + ' completion must be an object')
 if (typeof entry.completion.reason !== 'string' || !entry.completion.reason.trim()) fail('line ' + found.line + ' completion.reason is required')
 if (!Array.isArray(entry.completion.evidenceRefs) || entry.completion.evidenceRefs.length === 0) fail('line ' + found.line + ' completion.evidenceRefs must be a non-empty array')
+// Issue #139: the wake: evidence self-reference must name exactly this entry's
+// own top-level wakeId. A steward was seen copying a prior wake's UUID suffix
+// into the top-level wakeId while its evidence still referenced the real active
+// wake -- an internally contradictory entry that finalized a phantom id.
+const evWakeRefs = entry.completion.evidenceRefs.filter((r) => typeof r === 'string' && r.indexOf('wake:') === 0).map((r) => r.slice(5))
+if (evWakeRefs.indexOf(entry.wakeId) === -1) fail('line ' + found.line + ' completion.evidenceRefs must include the self-reference "wake:' + entry.wakeId + '" matching the top-level wakeId')
+for (let r = 0; r < evWakeRefs.length; r++) {
+  if (evWakeRefs[r] !== entry.wakeId) fail('line ' + found.line + ' completion.evidenceRefs references a different wake (' + evWakeRefs[r] + ') than the top-level wakeId (' + entry.wakeId + '); a copied or contradictory wake id is invalid -- fix the top-level wakeId to match the posted wake')
+}
 if (!entry.checklist || typeof entry.checklist !== 'object' || Array.isArray(entry.checklist)) fail('line ' + found.line + ' checklist must be a TOP-LEVEL object, not nested inside completion')
 const missingChecklist = requiredChecklist.filter((key) => typeof entry.checklist[key] !== 'string' || !entry.checklist[key])
 if (missingChecklist.length) fail('line ' + found.line + ' checklist is missing field(s): ' + missingChecklist.join(', '))

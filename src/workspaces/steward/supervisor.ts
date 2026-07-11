@@ -138,6 +138,10 @@ export class StewardSupervisor {
           completedAt: ledgerEntry.at,
           error: nextStatus === 'error' ? ledgerEntry.completion.reason : null,
           ledgerReceipt: receipt,
+          // Issue #139: clear any pre-terminal active-identity-mismatch marker —
+          // the wake is now correctly filed and terminal; #134 reconciliation
+          // takes over from the receipt.
+          ...(wake.ledgerIntegrity?.kind === 'active_identity_mismatch' ? { ledgerIntegrity: null } : {}),
         });
         await lockStore.release(updated.envelope.accountId, updated.wakeId);
         transitions.push({
@@ -157,6 +161,13 @@ export class StewardSupervisor {
         });
         continue;
       }
+
+      // Issue #139: the wake did not finalize this tick. If a ledger entry is
+      // filed under a WRONG top-level wakeId but its evidence self-references
+      // THIS active wake, surface it as an actionable event now instead of
+      // silently waiting out the deadline.
+      const identityWarning = await this.reconcileActiveIdentity(wake, wakeStore, ledgerIndex, now);
+      if (identityWarning) finalizeWarnings.push(identityWarning);
 
       if (Date.parse(wake.deadline) <= Date.parse(now)) {
         // Issue #132: attribute the timeout. If the session's rollout shows
@@ -369,6 +380,67 @@ export class StewardSupervisor {
       };
     }
     return { transition: true, warning: null };
+  }
+
+  /**
+   * Surface an active wake whose completion was filed under the WRONG top-level
+   * wakeId (issue #139). If some ledger entry's `wake:` evidence self-references
+   * this active wake but its top-level wakeId differs, the steward typo'd the
+   * top-level id — the real wake would otherwise wait out the full deadline. We
+   * emit an actionable `ledger_identity_mismatch` event (deduped once per
+   * (wake, wrong-id) via the wake's `ledgerIntegrity` marker) and a per-tick
+   * warning telling the steward to correct the top-level wakeId and re-validate.
+   * On resolution the marker is cleared with a `ledger_identity_recovered` event.
+   * This never terminalizes anything — an in-progress write is never mistaken
+   * for a completion.
+   */
+  private async reconcileActiveIdentity(
+    wake: StewardWakeRecord,
+    wakeStore: ReturnType<typeof createStewardWakeStore>,
+    ledgerIndex: LedgerIndex,
+    now: string,
+  ): Promise<string | null> {
+    const mismatch = ledgerIndex.identityMismatches.find((m) => m.referencedWakeId === wake.wakeId) ?? null;
+    const prior = wake.ledgerIntegrity;
+    const priorIsActive = prior?.kind === 'active_identity_mismatch';
+
+    if (!mismatch) {
+      if (priorIsActive) {
+        await wakeStore.updateStatus(wake.wakeId, wake.status, { now, ledgerIntegrity: null });
+        await appendSupervisorEvent(this.workspaceDir, {
+          at: now,
+          type: 'ledger_identity_recovered',
+          wakeId: wake.wakeId,
+          previouslyFiledUnderWakeId: prior?.misfiledUnderWakeId ?? null,
+        });
+      }
+      return null;
+    }
+
+    const warning = `ledger identity mismatch for active wake ${wake.wakeId}: a ledger entry filed under ` +
+      `wakeId ${mismatch.entryWakeId} (line ${mismatch.line}) references this wake in its evidence; its ` +
+      `top-level wakeId is wrong. Correct the entry's top-level wakeId to ${wake.wakeId} and re-run validate-ledger.`;
+    if (priorIsActive && prior?.misfiledUnderWakeId === mismatch.entryWakeId) {
+      return warning; // already recorded this exact mismatch; re-warn only
+    }
+    await appendSupervisorEvent(this.workspaceDir, {
+      at: now,
+      type: 'ledger_identity_mismatch',
+      wakeId: wake.wakeId,
+      filedUnderWakeId: mismatch.entryWakeId,
+      line: mismatch.line,
+      detail: warning,
+    });
+    await wakeStore.updateStatus(wake.wakeId, wake.status, {
+      now,
+      ledgerIntegrity: {
+        version: STEWARD_LEDGER_INTEGRITY_SCHEMA_VERSION,
+        kind: 'active_identity_mismatch',
+        misfiledUnderWakeId: mismatch.entryWakeId,
+        firstDetectedAt: now,
+      },
+    });
+    return warning;
   }
 
   /**

@@ -250,7 +250,14 @@ When a steward wake arrives:
    you write, not on a command line.
    Keep `checklist`, `thesis`, `actions`, `pendingHash`, `invalidation`, and
    `cost` as TOP-LEVEL fields of the ledger object; do not nest them inside
-   `completion`. Append EXACTLY ONE entry per wake: the first entry for a
+   `completion`. The top-level `wakeId` MUST be the EXACT id of the wake you are
+   handling — copy it verbatim from the wake message / wake file for THIS wake;
+   never reuse or hand-retype a previous wake's id (copying a prior wake's UUID
+   suffix is a real, observed failure). The required `wake:<id>` entry in
+   `completion.evidenceRefs` must be that same id — the top-level `wakeId` and its
+   `wake:` self-reference must match exactly, or validation fails. Validate with
+   that exact id: `node .alice/steward/validate-ledger.mjs <wakeId>`.
+   Append EXACTLY ONE entry per wake: the first entry for a
    wakeId is the authoritative decision and can never be revised by a second —
    if you need to correct it, edit that same line in place, never append a new
    one (a duplicate wakeId is a validation error, and the reader takes the

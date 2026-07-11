@@ -28,14 +28,33 @@ export interface LedgerFirstWins {
 }
 
 /**
+ * A ledger line whose top-level `wakeId` disagrees with a `wake:` evidence
+ * self-reference inside it (issue #139). This is the signature of a misfiled
+ * entry: the steward wrote the entry under the wrong top-level wakeId (e.g. it
+ * copied a prior wake's UUID suffix) while its evidence still referenced the
+ * real active wake. Surfacing it lets the supervisor tell the correct active
+ * wake, promptly, that its completion was filed under the wrong id — instead of
+ * silently waiting out the whole deadline.
+ */
+export interface LedgerIdentityMismatch {
+  /** 1-based line number. */
+  readonly line: number;
+  /** The (wrong) top-level wakeId the entry was filed under. */
+  readonly entryWakeId: string;
+  /** The wakeId the entry's `wake:` evidence self-reference actually names. */
+  readonly referencedWakeId: string;
+}
+
+/**
  * The whole ledger parsed ONCE (issue #134, no O(n²) re-reads): the ordered
  * list of schema-valid entries (for cost/state), the invalid lines, the
- * duplicate wakeIds, and the first-wins index used for reconciliation and
- * integrity. Supervisor ticks build this a single time and reuse it for every
- * wake.
+ * duplicate wakeIds, the first-wins index used for reconciliation and
+ * integrity, and the identity mismatches (issue #139). Supervisor ticks build
+ * this a single time and reuse it for every wake.
  */
 export interface LedgerIndex extends ReadLedgerDiagnostics {
   readonly firstWins: ReadonlyMap<string, LedgerFirstWins>;
+  readonly identityMismatches: LedgerIdentityMismatch[];
 }
 
 export interface ReadLedgerOptions {
@@ -125,7 +144,7 @@ export class StewardLedgerStore {
     try {
       raw = await readFile(this.path(), 'utf8');
     } catch (err) {
-      if (isENOENT(err)) return { entries: [], invalid: [], duplicates: [], firstWins: new Map() };
+      if (isENOENT(err)) return { entries: [], invalid: [], duplicates: [], firstWins: new Map(), identityMismatches: [] };
       throw err;
     }
     return parseLedgerIndex(raw);
@@ -171,6 +190,7 @@ function parseLedgerIndex(raw: string): LedgerIndex {
   const invalid: InvalidLedgerLine[] = [];
   const duplicates: DuplicateWakeEntry[] = [];
   const firstWins = new Map<string, LedgerFirstWins>();
+  const identityMismatches: LedgerIdentityMismatch[] = [];
   const firstLineForWake = new Map<string, number>();
 
   lines.forEach((line, index) => {
@@ -182,6 +202,12 @@ function parseLedgerIndex(raw: string): LedgerIndex {
       invalid.push({ line: lineNo, error: (err as Error).message });
       return;
     }
+
+    // Issue #139: detect a top-level wakeId that disagrees with a `wake:`
+    // evidence self-reference. Computed from the RAW parsed object (independent
+    // of schema validity) so a misfiled entry that the #139 self-consistency
+    // check rejects is still surfaced to the supervisor for actionable feedback.
+    collectIdentityMismatch(obj, lineNo, identityMismatches);
 
     let entry: StewardDecisionLedgerEntry | null = null;
     let lenientError: string | null = null;
@@ -219,7 +245,34 @@ function parseLedgerIndex(raw: string): LedgerIndex {
     }
   });
 
-  return { entries, invalid, duplicates, firstWins };
+  return { entries, invalid, duplicates, firstWins, identityMismatches };
+}
+
+/** Push a {@link LedgerIdentityMismatch} for every `wake:` evidence reference on
+ *  a raw parsed ledger object that names an id other than its own top-level
+ *  wakeId (issue #139). No-op on non-objects or entries without a string
+ *  wakeId. */
+function collectIdentityMismatch(
+  obj: unknown,
+  lineNo: number,
+  out: LedgerIdentityMismatch[],
+): void {
+  if (!obj || typeof obj !== 'object') return;
+  const entryWakeId = (obj as { wakeId?: unknown }).wakeId;
+  if (typeof entryWakeId !== 'string') return;
+  const completion = (obj as { completion?: unknown }).completion;
+  const refs = completion && typeof completion === 'object'
+    ? (completion as { evidenceRefs?: unknown }).evidenceRefs
+    : undefined;
+  if (!Array.isArray(refs)) return;
+  const seen = new Set<string>();
+  for (const ref of refs) {
+    if (typeof ref !== 'string' || !ref.startsWith('wake:')) continue;
+    const referencedWakeId = ref.slice('wake:'.length);
+    if (!referencedWakeId || referencedWakeId === entryWakeId || seen.has(referencedWakeId)) continue;
+    seen.add(referencedWakeId);
+    out.push({ line: lineNo, entryWakeId, referencedWakeId });
+  }
 }
 
 function isENOENT(err: unknown): boolean {

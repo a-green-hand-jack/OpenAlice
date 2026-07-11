@@ -46,9 +46,12 @@ const envelope: StewardWakeEnvelope = {
 };
 
 function ledgerEntry(over: Partial<StewardDecisionLedgerEntryV2> = {}): StewardDecisionLedgerEntryV2 {
+  // Issue #139: the entry's `wake:` evidence self-reference must match its own
+  // top-level wakeId, so derive it from the (possibly overridden) wakeId.
+  const wakeId = over.wakeId ?? '2026-07-08T14:00:00Z:aapl-risk-check';
   return {
     version: DECISION_LEDGER_SCHEMA_VERSION,
-    wakeId: '2026-07-08T14:00:00Z:aapl-risk-check',
+    wakeId,
     at: '2026-07-08T14:01:23.000Z',
     accountId: 'mock-simulator-1',
     decision: 'no_trade',
@@ -59,7 +62,7 @@ function ledgerEntry(over: Partial<StewardDecisionLedgerEntryV2> = {}): StewardD
     },
     completion: {
       reason: 'checklist complete; no entry signal',
-      evidenceRefs: ['wake:2026-07-08T14:00:00Z:aapl-risk-check', 'tool:risk'],
+      evidenceRefs: [`wake:${wakeId}`, 'tool:risk'],
     },
     checklist: {
       account: 'ok',
@@ -426,6 +429,43 @@ describe('StewardLedgerStore', () => {
     // The lenient parser also accepts it directly; the strict v2 parser does not.
     expect(parseStewardDecisionLedgerEntryLenient(legacy).wakeId).toBe('wake-legacy-v1');
     expect(() => parseStewardDecisionLedgerEntry(legacy)).toThrow();
+  });
+
+  // --- Issue #139: evidence self-reference must match top-level wakeId -----
+
+  it('rejects an entry whose wake: evidence self-reference names a DIFFERENT wake (copied id)', async () => {
+    const store = createStewardLedgerStore(dir);
+    await expect(store.append(ledgerEntry({
+      wakeId: 'wake-real',
+      completion: { reason: 'done', evidenceRefs: ['wake:wake-copied-from-prior', 'tool:risk'] },
+    }))).rejects.toThrow(/different wake|self-reference/);
+  });
+
+  it('rejects an entry with no wake: self-reference at all', async () => {
+    const store = createStewardLedgerStore(dir);
+    await expect(store.append(ledgerEntry({
+      wakeId: 'wake-noself',
+      completion: { reason: 'done', evidenceRefs: ['tool:risk'] },
+    }))).rejects.toThrow(/self-reference/);
+  });
+
+  it('surfaces a misfiled entry (evidence names another wake) as an identity mismatch in the index', async () => {
+    const store = createStewardLedgerStore(dir);
+    // Written raw (the server schema would reject it) to model what a steward
+    // actually wrote to disk: top-level wakeId is the typo, evidence is correct.
+    const misfiled = {
+      ...ledgerEntry({ wakeId: 'wake-typo-suffix' }),
+      completion: { reason: 'done', evidenceRefs: ['wake:wake-actually-active', 'tool:risk'] },
+    };
+    await mkdir(dirname(store.path()), { recursive: true });
+    await writeFile(store.path(), `${JSON.stringify(misfiled)}\n`, 'utf8');
+
+    const index = await store.readIndex();
+    expect(index.identityMismatches).toEqual([
+      { line: 1, entryWakeId: 'wake-typo-suffix', referencedWakeId: 'wake-actually-active' },
+    ]);
+    // And it never counts as a valid entry for the typo id.
+    expect(index.firstWins.get('wake-typo-suffix')?.valid).toBe(false);
   });
 
   it('takes the first entry on a duplicate wakeId and reports the duplicate (D3)', async () => {
@@ -1237,6 +1277,74 @@ describe('StewardSupervisor finalize barrier (issue #136)', () => {
     // No marker — but a legacy wake terminalizes from raw presence.
     const result = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
     expect(result.transitions[0]).toMatchObject({ wakeId: 'wake-legacy-inflight', to: 'done' });
+  });
+});
+
+describe('StewardSupervisor active identity mismatch (issue #139)', () => {
+  async function seedInjectedWake(wakeId: string): Promise<void> {
+    const wakeStore = createStewardWakeStore(dir);
+    const lockStore = createStewardLockStore(dir);
+    await wakeStore.create({ wakeId, deadline: '2026-07-08T14:03:00.000Z', envelope, now: '2026-07-08T14:00:00.000Z' });
+    await wakeStore.updateStatus(wakeId, 'injected', {
+      now: '2026-07-08T14:00:05.000Z', injectedAt: '2026-07-08T14:00:05.000Z', sessionId: 'sess-139',
+    });
+    await lockStore.acquire({
+      accountId: envelope.accountId, wakeId,
+      now: '2026-07-08T14:00:00.000Z', expiresAt: '2026-07-08T14:03:00.000Z',
+    });
+  }
+
+  /** Write a raw misfiled entry: top-level wakeId is the typo, evidence
+   *  correctly self-references the active wake. */
+  async function writeMisfiledLedger(topLevelWakeId: string, referencedWakeId: string): Promise<void> {
+    const ledgerStore = createStewardLedgerStore(dir);
+    const misfiled = {
+      ...ledgerEntry({ wakeId: topLevelWakeId }),
+      completion: { reason: 'checklist complete', evidenceRefs: [`wake:${referencedWakeId}`, 'tool:risk'] },
+    };
+    await mkdir(dirname(ledgerStore.path()), { recursive: true });
+    await writeFile(ledgerStore.path(), `${JSON.stringify(misfiled)}\n`, 'utf8');
+  }
+
+  it('emits an actionable ledger_identity_mismatch for the active wake, deduped across ticks, and does NOT terminalize (regression: copied suffix)', async () => {
+    await seedInjectedWake('wake-active-real');
+    // A steward copied a prior wake's suffix into the top-level id; evidence
+    // still self-references the real active wake.
+    await writeMisfiledLedger('wake-prior-suffix-typo', 'wake-active-real');
+
+    const t1 = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:00.000Z', isSessionRunning: () => true });
+    // The real wake did NOT terminalize (its entry is filed under the wrong id).
+    expect(t1.transitions).toEqual([]);
+    expect((await createStewardWakeStore(dir).get('wake-active-real'))?.status).toBe('injected');
+    expect(t1.warnings.some((w) => w.includes('ledger identity mismatch for active wake wake-active-real'))).toBe(true);
+
+    const t2 = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
+    // Warning re-surfaces every tick (actionable), but the structured event is
+    // written only ONCE (bounded supervisor.jsonl).
+    expect(t2.warnings.some((w) => w.includes('ledger identity mismatch for active wake wake-active-real'))).toBe(true);
+    const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
+    const events = log.split('\n').filter((l) => l.includes('"type":"ledger_identity_mismatch"') && l.includes('wake-active-real'));
+    expect(events).toHaveLength(1);
+    expect((await createStewardWakeStore(dir).get('wake-active-real'))?.ledgerIntegrity?.kind).toBe('active_identity_mismatch');
+  });
+
+  it('clears the mismatch and terminalizes once the entry is re-filed under the correct wakeId and re-validated (recovery)', async () => {
+    await seedInjectedWake('wake-fixme');
+    await writeMisfiledLedger('wake-wrong-id', 'wake-fixme');
+    await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:00.000Z', isSessionRunning: () => true });
+    expect((await createStewardWakeStore(dir).get('wake-fixme'))?.ledgerIntegrity?.kind).toBe('active_identity_mismatch');
+
+    // The steward corrects the top-level wakeId and re-validates (marker).
+    const ledgerStore = createStewardLedgerStore(dir);
+    const corrected = ledgerEntry({ wakeId: 'wake-fixme' });
+    await writeFile(ledgerStore.path(), `${JSON.stringify(corrected)}\n`, 'utf8');
+    await publishMarker('wake-fixme', corrected);
+
+    const result = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
+    expect(result.transitions[0]).toMatchObject({ wakeId: 'wake-fixme', to: 'done' });
+    const wake = await createStewardWakeStore(dir).get('wake-fixme');
+    expect(wake?.status).toBe('done');
+    expect(wake?.ledgerIntegrity).toBeUndefined(); // mismatch marker cleared on terminalization
   });
 });
 
