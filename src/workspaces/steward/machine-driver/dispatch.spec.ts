@@ -33,6 +33,7 @@ import {
   createStewardLockStore,
   createStewardSupervisor,
   createStewardWakeStore,
+  StewardLockConflictError,
   stewardSupervisorLogPath,
   type StewardWakeEnvelope,
 } from '../index.js';
@@ -804,6 +805,49 @@ describe('dispatchStewardWakeControlFace — shared gate + factory seam (issue #
         accountId: envelope.accountId, wakeId: 'wake-next', now: NOW, expiresAt: FUTURE_DEADLINE,
       }),
     ).resolves.toBeTruthy();
+  });
+
+  it('two fresh wakes fired near-simultaneously for the same account (issue #154): exactly one dispatches, the loser lands in the EXISTING StewardLockConflictError decline path with no wake record ever created for it', async () => {
+    const factory = vi.fn(() => makeMockDriver().driver);
+    const deps = baseDeps(factory);
+    const makeCfInput = (wakeId: string): StewardWakeControlFaceInput => ({
+      config: { controlFace: 'machine' },
+      requestedAgent: undefined,
+      wakeId,
+      deadline: FUTURE_DEADLINE,
+      now: NOW,
+      envelope,
+    });
+
+    // Mirrors the reported interleaving: a cron fire and a manual HTTP fire
+    // for the SAME account, different wakeIds, landing at effectively the
+    // same instant.
+    const results = await Promise.allSettled([
+      dispatchStewardWakeControlFace(makeCfInput('wake-cron'), deps),
+      dispatchStewardWakeControlFace(makeCfInput('wake-http'), deps),
+    ]);
+
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+
+    // Winner: dispatched machine-face, wake record landed `injected` — the
+    // ordinary single-wake outcome, unaffected by the race.
+    const winner = fulfilled[0]!.status === 'fulfilled' ? fulfilled[0]!.value : undefined;
+    expect(winner?.face).toBe('machine');
+    const winnerWakeId = winner && winner.face === 'machine' ? winner.wake.wakeId : undefined;
+    expect(winner && winner.face === 'machine' ? winner.wake.status : undefined).toBe('injected');
+
+    // Loser: the EXISTING decline path (StewardLockConflictError, thrown
+    // before any wake-record creation — see the machine preflight in
+    // `dispatchStewardWakeControlFace`) — not a new terminal state.
+    const rejection = rejected[0]!.status === 'rejected' ? rejected[0]!.reason : undefined;
+    expect(rejection).toBeInstanceOf(StewardLockConflictError);
+    expect((rejection as StewardLockConflictError).lock.wakeId).toBe(winnerWakeId);
+
+    const loserWakeId = winnerWakeId === 'wake-cron' ? 'wake-http' : 'wake-cron';
+    expect(await createStewardWakeStore(dir).get(loserWakeId)).toBeNull();
   });
 });
 
