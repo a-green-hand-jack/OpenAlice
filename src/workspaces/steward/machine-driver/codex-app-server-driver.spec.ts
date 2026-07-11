@@ -344,6 +344,68 @@ describe('CodexAppServerDriver', () => {
     await driver.dispose();
   });
 
+  it('isHealthy tracks the transport: true after connect, false after dispose (issue #146 S5)', async () => {
+    const server = new FakeCodexServer();
+    respondHandshake(server);
+    const driver = makeDriver(server);
+
+    await driver.ensureThread({ cwd: '/tmp/scratch' }); // forces connect
+    expect(driver.isHealthy()).toBe(true);
+
+    await driver.dispose();
+    expect(driver.isHealthy()).toBe(false);
+  });
+
+  it('isHealthy reports false after the app-server exits so the registry can evict it (issue #146 S5)', async () => {
+    const server = new FakeCodexServer();
+    respondHandshake(server);
+    const driver = makeDriver(server);
+
+    await driver.ensureThread({ cwd: '/tmp/scratch' });
+    expect(driver.isHealthy()).toBe(true);
+
+    server.exit(); // app-server crash → onClose sets closed
+    expect(driver.isHealthy()).toBe(false);
+
+    await driver.dispose();
+  });
+
+  it('interruptInFlight interrupts the running turn and settles it interrupted (issue #146 S5)', async () => {
+    const server = new FakeCodexServer();
+    let interruptReceived = false;
+    respondHandshake(server, {
+      // Turn never completes on its own — only an explicit interrupt settles it.
+      onTurnStart: (_msg, srv) => sendTurnStarted(srv),
+      onTurnInterrupt: (_msg, srv) => {
+        interruptReceived = true;
+        sendTurnCompleted(srv, 'interrupted');
+      },
+    });
+    const driver = makeDriver(server);
+
+    const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch' });
+    const pending = driver.runTurn(threadId, 'slow');
+    await flush(); // let turn/start resolve and turn/started arrive
+
+    await driver.interruptInFlight(threadId);
+    const outcome = await pending;
+
+    expect(interruptReceived).toBe(true);
+    expect(outcome.interrupted).toBe(true);
+    expect(outcome.status).toBe('interrupted');
+
+    await driver.dispose();
+  });
+
+  it('interruptInFlight is a no-op when no turn is in flight (issue #146 S5)', async () => {
+    const server = new FakeCodexServer();
+    respondHandshake(server);
+    const driver = makeDriver(server);
+    const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch' });
+    await expect(driver.interruptInFlight(threadId)).resolves.toBeUndefined();
+    await driver.dispose();
+  });
+
   it('rejects a concurrent runTurn on the same thread', async () => {
     const server = new FakeCodexServer();
     respondHandshake(server, {}); // first turn is left in flight

@@ -204,6 +204,26 @@ export class CodexAppServerDriver implements StewardMachineDriver {
     await client.request('turn/interrupt', { threadId, turnId });
   }
 
+  /**
+   * Issue #146 S5 (item 3): interrupt the in-flight turn on `threadId` and settle
+   * it `interrupted`, reusing the SAME `turn/interrupt` + grace-timer path as a
+   * deadline overrun. No-op when nothing is in flight or the waiter already
+   * settled. The dispatch gate-timeout path calls this so an orphan turn (started
+   * but never confirmed) is actively stopped instead of burning tokens unowned.
+   */
+  async interruptInFlight(threadId: string): Promise<void> {
+    const waiter = this.inflight.get(threadId);
+    if (!waiter || waiter.settled) return;
+    this.beginInterrupt(waiter);
+  }
+
+  isHealthy(): boolean {
+    // Issue #146 S5 (item 2): "transport alive && not disposed/closed". `closed`
+    // flips on the app-server exit (`onClose`) or dispose; a not-yet-connected
+    // driver (transport still null, never used) is healthy — it connects lazily.
+    return !this.disposed && !this.closed;
+  }
+
   isThreadLive(threadId: string): boolean {
     if (this.disposed || this.closed) return false;
     if (this.inflight.has(threadId)) return true;
@@ -433,12 +453,24 @@ export class CodexAppServerDriver implements StewardMachineDriver {
 
   private onDeadline(waiter: TurnWaiter, deadlineMs: number): void {
     if (waiter.settled) return;
-    waiter.interrupted = true;
     this.logger.warn('turn deadline exceeded; interrupting', {
       threadId: waiter.threadId,
       turnId: waiter.turnId,
       deadlineMs,
     });
+    this.beginInterrupt(waiter);
+  }
+
+  /**
+   * Send `turn/interrupt` for the waiter's turn and arm the grace timer that
+   * settles it `interrupted` even if the app-server never emits `turn/completed`.
+   * Shared by the deadline path ({@link onDeadline}) and the explicit
+   * {@link interruptInFlight} (issue #146 S5). Idempotent: a second call once
+   * `interrupted` is set is a no-op, so no second interrupt or grace timer arms.
+   */
+  private beginInterrupt(waiter: TurnWaiter): void {
+    if (waiter.settled || waiter.interrupted) return;
+    waiter.interrupted = true;
     this.client
       ?.request('turn/interrupt', { threadId: waiter.threadId, turnId: waiter.turnId })
       .catch((err: unknown) => this.logger.warn('turn/interrupt request failed', { err }));

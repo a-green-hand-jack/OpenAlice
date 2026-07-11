@@ -26,15 +26,26 @@ import {
 import { appendSupervisorEvent } from '../supervisor.js';
 import type { StewardWakeEnvelope, StewardWakeRecord } from '../types.js';
 import type { StewardWakeStore } from '../wake-store.js';
+import { ClaudeAgentSdkDriver } from './claude-agent-sdk-driver.js';
 import { CodexAppServerDriver } from './codex-app-server-driver.js';
 import type { MachineThreadStore } from './thread-store.js';
 import type {
   DriverEvent,
   EnsureThreadOptions,
+  MachineThreadProvider,
   MachineThreadState,
   StewardMachineDriver,
   ThreadTelemetry,
 } from './types.js';
+
+/** The steward agents that support the machine control face (issue #146 S5 adds
+ *  `claude` alongside `codex`). */
+export const MACHINE_FACE_AGENTS: readonly string[] = ['codex', 'claude'];
+
+/** Map a resolved agent id to the persisted machine-thread provider. */
+function agentProvider(agent: string): MachineThreadProvider {
+  return agent === 'claude' ? 'claude' : 'codex';
+}
 
 /**
  * Bounded wait for the `turn/started` signal (issue #146 S4, item 3). A server
@@ -60,10 +71,11 @@ export interface StewardControlFaceDecision {
 
 /**
  * Decide the control face for a steward wake. Machine is opt-in
- * (`config.controlFace === 'machine'`) and codex-only: a non-codex agent, or a
- * workspace that doesn't enable codex, declines to PTY with a reason (S3 never
- * fails a wake over this). A missing / 'pty' flag is a plain PTY decision with no
- * reason — byte-identical to pre-#146 behavior.
+ * (`config.controlFace === 'machine'`) and supported for `codex` and `claude`
+ * (issue #146 S5): any other agent, or a workspace that doesn't enable the
+ * resolved agent, declines to PTY with a reason (S3 never fails a wake over
+ * this). A missing / 'pty' flag is a plain PTY decision with no reason —
+ * byte-identical to pre-#146 behavior.
  */
 export function decideStewardControlFace(input: {
   readonly config: Record<string, unknown>;
@@ -74,14 +86,18 @@ export function decideStewardControlFace(input: {
     typeof input.config['agent'] === 'string' ? (input.config['agent'] as string) : undefined;
   const agent = input.requestedAgent ?? configuredAgent ?? 'codex';
   if (input.config['controlFace'] !== 'machine') return { useMachine: false, agent };
-  if (agent !== 'codex') {
-    return { useMachine: false, agent, declineReason: `control face 'machine' is codex-only (agent: ${agent})` };
-  }
-  if (!input.workspaceAgents.includes('codex')) {
+  if (!MACHINE_FACE_AGENTS.includes(agent)) {
     return {
       useMachine: false,
       agent,
-      declineReason: "control face 'machine' requires the workspace to enable codex",
+      declineReason: `control face 'machine' supports codex or claude (agent: ${agent})`,
+    };
+  }
+  if (!input.workspaceAgents.includes(agent)) {
+    return {
+      useMachine: false,
+      agent,
+      declineReason: `control face 'machine' requires the workspace to enable ${agent}`,
     };
   }
   return { useMachine: true, agent };
@@ -146,11 +162,20 @@ export function buildMachineDriver(input: {
   readonly factory?: (input: { ws: WorkspaceMeta; adapter: CliAdapter }) => StewardMachineDriver;
 }): StewardMachineDriver {
   if (input.factory) return input.factory({ ws: input.ws, adapter: input.adapter });
+  const logger = input.logger.child({ scope: 'machine-driver', wsId: input.ws.id, agent: input.adapter.id });
+  // Per-agent driver (issue #146 S5): claude workspaces drive the SDK `query()`
+  // face; everything else the codex app-server face. The SDK spawns its bundled
+  // Claude Code CLI with the SAME `{cwd, env}` a PTY spawn uses, so credential /
+  // toolbox parity holds without threading the adapter binary (which is a name,
+  // not a path the SDK's `pathToClaudeCodeExecutable` could use).
+  if (input.adapter.id === 'claude') {
+    return new ClaudeAgentSdkDriver({ cwd: input.cwd, env: input.env, logger });
+  }
   return new CodexAppServerDriver({
     cwd: input.cwd,
     env: input.env,
     ...(input.adapter.binary ? { codexBin: input.adapter.binary } : {}),
-    logger: input.logger.child({ scope: 'machine-driver', wsId: input.ws.id, agent: input.adapter.id }),
+    logger,
   });
 }
 
@@ -160,6 +185,14 @@ export interface DispatchMachineWakeInput {
   /** cwd the codex thread runs in — normally the workspace dir. */
   readonly cwd: string;
   readonly driver: StewardMachineDriver;
+  /**
+   * The native provider this wake runs on (issue #146 S5). Governs (a) which
+   * stored thread is resumable — a stored thread from the OTHER provider is
+   * treated as absent + evented, never resumed — and (b) whether the codex
+   * core-model override file applies (codex only). Defaults to `codex` so pre-S5
+   * callers and tests are byte-identical.
+   */
+  readonly provider?: MachineThreadProvider;
   readonly wakeStore: StewardWakeStore;
   readonly threadStore: MachineThreadStore;
   readonly wake: {
@@ -212,13 +245,14 @@ export interface DispatchMachineWakeResult {
 export async function dispatchMachineWake(input: DispatchMachineWakeInput): Promise<DispatchMachineWakeResult> {
   const { threadStore, wakeStore, now } = input;
   const { wakeId, deadline, envelope } = input.wake;
+  const provider = input.provider ?? 'codex';
 
   // (a) Machine-thread rotation on context overflow (issue #146 S4, item 5). The
   // machine equivalent of the PTY `evaluateStewardRotation` path: if the stored
   // thread's last driver telemetry is over the SAME rotation threshold, dispose
   // the poisoned driver, swap in a fresh one, and force a fresh thread below.
   // Reuses `resolveRotationThreshold` / `decideStewardRotation` — no new numbers.
-  const stored = await threadStore.read();
+  const stored = await resolveStoredForProvider(input, provider);
   const rotation = await maybeRotateMachineThread(input, stored);
   const driver = rotation.driver;
 
@@ -227,6 +261,7 @@ export async function dispatchMachineWake(input: DispatchMachineWakeInput): Prom
   // rotation forces the fresh branch (the poisoned id is deliberately dropped).
   const resolved = await resolveMachineThread(input, driver, rotation.rotated ? null : stored);
   await threadStore.write({
+    provider,
     threadId: resolved.threadId,
     createdAt: resolved.createdAt,
     lastTurnAt: now,
@@ -288,6 +323,38 @@ export async function dispatchMachineWake(input: DispatchMachineWakeInput): Prom
   });
 
   return { threadId: resolved.threadId, resumed: resolved.resumed, threadReset: resolved.reset, injectedAt };
+}
+
+/**
+ * Read the stored thread, but treat a record belonging to the OTHER provider as
+ * ABSENT (issue #146 S5): a codex thread id is meaningless to the claude face and
+ * vice versa, so resuming it would fail or cross wires. On a mismatch the stored
+ * record is dropped (⇒ a fresh thread is started + the store overwritten with the
+ * current provider) and a structured `machine_thread_provider_mismatch` event is
+ * emitted. A matching or absent record passes through unchanged.
+ */
+async function resolveStoredForProvider(
+  input: DispatchMachineWakeInput,
+  provider: MachineThreadProvider,
+): Promise<MachineThreadState | null> {
+  const stored = await input.threadStore.read();
+  if (!stored || stored.provider === provider) return stored;
+  input.logger.warn('schedule.steward_machine_thread_provider_mismatch', {
+    wsId: input.wsId,
+    wakeId: input.wake.wakeId,
+    priorThreadId: stored.threadId,
+    storedProvider: stored.provider,
+    provider,
+  });
+  await appendSupervisorEvent(input.workspaceDir, {
+    at: input.now,
+    type: 'machine_thread_provider_mismatch',
+    wakeId: input.wake.wakeId,
+    priorThreadId: stored.threadId,
+    storedProvider: stored.provider,
+    provider,
+  }).catch(() => undefined);
+  return null;
 }
 
 interface MachineRotationOutcome {
@@ -386,8 +453,11 @@ async function resolveMachineThread(
   // Issue #146 MAJOR-2: apply the steward core-model override
   // (`.alice/steward/core-agent-model.txt`) the PTY path applies via `-m`
   // (`adapters/codex.ts` `codexModelHead`) — reused here, not reparsed, so both
-  // control faces honor the SAME override file identically.
-  const model = readCodexModelOverride(cwd) ?? undefined;
+  // codex control faces honor the SAME override file identically. It is CODEX-
+  // ONLY (issue #146 S5): the file holds a codex model id, meaningless to claude,
+  // whose model comes from the workspace `.claude/settings.local.json` the SDK
+  // loads via its default `settingSources` (parity with a PTY claude spawn).
+  const model = (input.provider ?? 'codex') === 'codex' ? (readCodexModelOverride(cwd) ?? undefined) : undefined;
   const ensureOpts = (threadId?: string): EnsureThreadOptions => ({
     cwd,
     // Issue #146 MAJOR-1: every steward machine thread requests network-enabled
@@ -487,6 +557,19 @@ async function startDetachedTurn(input: {
       threadId,
       timeoutMs: startedTimeoutMs,
     }).catch(() => undefined);
+    // Item 3 (issue #146 S5): the turn was started (`turn/start` accepted) but its
+    // start signal never arrived — it is now an ORPHAN, deadline-bounded but
+    // unowned. Abort it so it settles `interrupted` instead of burning tokens
+    // until the deadline; the detached `turn.then` below consumes that outcome, so
+    // no unhandled rejection escapes.
+    void driver.interruptInFlight(threadId).catch((err: unknown) =>
+      input.logger.warn('schedule.steward_machine_turn_interrupt_failed', {
+        wsId: input.wsId,
+        wakeId: input.wakeId,
+        threadId,
+        err: errText(err),
+      }),
+    );
     markFailed(new Error(`turn/started not observed within ${startedTimeoutMs}ms`));
   }, startedTimeoutMs);
 
@@ -665,6 +748,7 @@ export async function dispatchStewardWakeControlFace(
       wsId: deps.wsId,
       cwd: deps.cwd,
       driver,
+      provider: agentProvider(adapter.id),
       wakeStore: deps.wakeStore,
       threadStore: deps.threadStore,
       wake: { wakeId: input.wakeId, deadline: input.deadline, envelope: input.envelope },

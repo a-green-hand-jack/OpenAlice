@@ -78,7 +78,16 @@ const PRETRUSTED_FILE_TOOLS = ['Write', 'Edit'];
  * but keep the auto-trust setting at spawn so third-party/satellite workspaces
  * that do ship MCP config do not stall on first launch.
  */
-const AUTOTRUST_SETTINGS = JSON.stringify({
+/**
+ * The auto-trust settings as a plain object — the single source of truth for
+ * both control faces. The PTY path stringifies it into the `--settings` flag
+ * ({@link AUTOTRUST_SETTINGS}); the machine/claude-agent-sdk face passes THIS
+ * object straight into the SDK's `Options.settings` (flag-tier settings), so the
+ * unattended trust surface is byte-identical across faces (issue #146 S5). Shape
+ * is structurally a claude-agent-sdk `Settings`, but kept SDK-import-free here so
+ * the PTY adapter carries no SDK dependency.
+ */
+export const AUTOTRUST_SETTINGS_OBJECT = {
   enableAllProjectMcpServers: true,
   permissions: {
     allow: [
@@ -86,7 +95,9 @@ const AUTOTRUST_SETTINGS = JSON.stringify({
       ...PRETRUSTED_FILE_TOOLS,
     ],
   },
-});
+};
+
+const AUTOTRUST_SETTINGS = JSON.stringify(AUTOTRUST_SETTINGS_OBJECT);
 
 /** dashed-cwd convention used by Claude Code's project store. */
 function projectKey(workspaceDir: string): string {

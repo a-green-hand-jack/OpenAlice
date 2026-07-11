@@ -5,11 +5,19 @@ import { stewardMachineThreadPath } from '../paths.js';
 import {
   MACHINE_THREAD_SCHEMA_VERSION,
   parseMachineThreadState,
+  type MachineThreadProvider,
   type MachineThreadState,
 } from './types.js';
 
 export interface MachineThreadWriteInput {
   readonly threadId: string;
+  /**
+   * The native provider that owns this thread id (issue #146 S5). A resume only
+   * happens when a later wake's provider matches this — a `codex` thread cannot
+   * be resumed by the claude face, and vice versa. Defaults to `codex` for
+   * backward compatibility with pre-S5 callers and records.
+   */
+  readonly provider?: MachineThreadProvider;
   readonly model?: string;
   readonly createdAt: string;
   /** ISO of the last turn; omit/null when the thread has not taken a turn yet. */
@@ -61,7 +69,7 @@ export class MachineThreadStore {
   async write(input: MachineThreadWriteInput): Promise<MachineThreadState> {
     const state = parseMachineThreadState({
       version: MACHINE_THREAD_SCHEMA_VERSION,
-      provider: 'codex',
+      provider: input.provider ?? 'codex',
       threadId: input.threadId,
       ...(input.model !== undefined ? { model: input.model } : {}),
       createdAt: input.createdAt,

@@ -78,6 +78,7 @@ import { resolveLaunchCommand } from './win-command.js';
 import { WorkspaceCreator } from './workspace-creator.js';
 import { WorkspaceRegistry, type WorkspaceMeta } from './workspace-registry.js';
 import {
+  appendSupervisorEvent,
   createStewardLockStore,
   createStewardWakeStore,
   evaluateStewardRotation,
@@ -743,7 +744,22 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       lockStore: createStewardLockStore(ws.dir),
       threadStore: createMachineThreadStore(ws.dir),
       logger: launcherLogger,
-      acquireDriver: (adapter) => machineDriverRegistry.getOrCreate(ws.id, () => makeMachineDriver(ws, adapter)),
+      acquireDriver: (adapter) =>
+        // Issue #146 S5 (item 2): evict a memoized-but-DEAD driver (e.g. an
+        // app-server that crashed) before reuse, so a wake never dispatches onto
+        // a broken client. The healthy path returns the cached instance untouched.
+        machineDriverRegistry.getOrCreateHealthy(
+          ws.id,
+          () => makeMachineDriver(ws, adapter),
+          () => {
+            launcherLogger.warn('schedule.steward_machine_driver_evicted', { wsId: ws.id, agent: adapter.id });
+            void appendSupervisorEvent(ws.dir, {
+              at: new Date().toISOString(),
+              type: 'machine_driver_evicted',
+              agent: adapter.id,
+            }).catch(() => undefined);
+          },
+        ),
       rotateDriver: async (adapter) => {
         await machineDriverRegistry.dispose(ws.id);
         return machineDriverRegistry.getOrCreate(ws.id, () => makeMachineDriver(ws, adapter));
