@@ -1,17 +1,19 @@
 /**
- * End-to-end test of the GENERATED workspace validator, not the server-side
- * zod schema. We run the real `bootstrap.mjs` in a temp dir (plain Node, same
- * as the launcher does via ELECTRON_RUN_AS_NODE), then exercise the
- * `.alice/steward/validate-ledger.mjs` it writes against good/bad ledger
- * fixtures — the surface the steward agent actually runs at the end of a wake.
+ * End-to-end test of the GENERATED workspace validator, not the server-side zod
+ * schema. We run the real `bootstrap.mjs` in a temp dir (plain Node, same as the
+ * launcher does via ELECTRON_RUN_AS_NODE), then exercise the
+ * `.alice/steward/validate-ledger.mjs` it writes.
  *
- * Issue #125: the validator must enforce v2 (version literal 2, typed
- * discriminated actions, strict-pending pendingHash) and reject duplicate
- * wakeIds.
+ * Issue #140: the validator is now the ONLY supported writer of
+ * decisions.jsonl. The agent writes a per-wake DRAFT (drafts/<wakeId>.json); the
+ * validator reads the draft + the server-owned wake record, strictly validates
+ * (#125 schema, #139 self-reference + active-wake binding), cross-checks prior
+ * terminal receipts (#134), then atomically appends-or-replaces the wake's line
+ * and publishes the #136 finalize marker. Any failure writes neither.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,9 +31,7 @@ let wsDir: string;
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'steward-bootstrap-'));
   wsDir = join(root, 'ws');
-  const res = spawnSync(process.execPath, [bootstrapPath, 'test-tag', wsDir], {
-    encoding: 'utf8',
-  });
+  const res = spawnSync(process.execPath, [bootstrapPath, 'test-tag', wsDir], { encoding: 'utf8' });
   expect(res.status, res.stderr).toBe(0);
 });
 
@@ -39,29 +39,14 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-const goodChecklist = {
-  account: 'ok',
-  positions: 'ok',
-  orders: 'ok',
-  risk: 'NORMAL',
-  market: 'open',
-  history: 'checked',
-};
-
+const goodChecklist = { account: 'ok', positions: 'ok', orders: 'ok', risk: 'NORMAL', market: 'open', history: 'checked' };
 const goodCost = {
-  model: 'codex',
-  inputTokens: null,
-  outputTokens: null,
-  modelCostUsd: null,
-  allocatedServerCostUsd: null,
-  tradingFeesUsd: null,
-  estimatedSlippageUsd: null,
-  totalEstimatedCostUsd: null,
+  model: 'codex', inputTokens: null, outputTokens: null, modelCostUsd: null,
+  allocatedServerCostUsd: null, tradingFeesUsd: null, estimatedSlippageUsd: null, totalEstimatedCostUsd: null,
 };
 
+/** A well-formed v2 decision object (self-consistent evidence), for use as a draft. */
 function entry(over: Record<string, unknown> = {}): Record<string, unknown> {
-  // Issue #139: derive the `wake:` evidence self-reference from the (possibly
-  // overridden) wakeId so entries are self-consistent by default.
   const wakeId = (over.wakeId as string | undefined) ?? 'wake-1';
   return {
     version: 2,
@@ -81,222 +66,218 @@ function entry(over: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
-/** Seed the active (non-terminal) wake record the #139 validator requires as its
- *  external binding. Pass `null` to leave it absent (impersonation test), or a
- *  terminal status to simulate a replay. */
-async function seedWakeRecord(wakeId: string, status: string): Promise<void> {
-  const file = join(wsDir, '.alice', 'steward', 'wakes', `${encodeURIComponent(wakeId)}.json`);
-  await writeFile(file, JSON.stringify({ version: 1, wakeId, status }, null, 2), 'utf8');
-}
+const draftPathFor = (wakeId: string) => join(wsDir, '.alice', 'steward', 'drafts', `${encodeURIComponent(wakeId)}.json`);
+const markerPathFor = (wakeId: string) => join(wsDir, '.alice', 'steward', 'finalize', `${encodeURIComponent(wakeId)}.json`);
+const wakePathFor = (wakeId: string) => join(wsDir, '.alice', 'steward', 'wakes', `${encodeURIComponent(wakeId)}.json`);
+const ledgerFile = () => join(wsDir, '.alice', 'steward', 'ledger', 'decisions.jsonl');
 
-async function runValidator(
-  entries: Record<string, unknown>[],
+async function writeDraft(wakeId: string, over: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  const e = entry({ wakeId, ...over });
+  await writeFile(draftPathFor(wakeId), JSON.stringify(e, null, 2), 'utf8');
+  return e;
+}
+async function writeRawDraft(wakeId: string, obj: unknown): Promise<void> {
+  await writeFile(draftPathFor(wakeId), JSON.stringify(obj), 'utf8');
+}
+/** Seed the server-owned wake record (external binding). status default active. */
+async function seedWakeRecord(
   wakeId: string,
-  opts: { seedWakeStatus?: string | null } = {},
-): Promise<{ code: number; stdout: string; stderr: string }> {
-  const ledgerPath = join(wsDir, '.alice', 'steward', 'ledger', 'decisions.jsonl');
-  await writeFile(ledgerPath, entries.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf8');
-  // Default: the validated wake is the active posted wake (external binding).
-  const seedStatus = opts.seedWakeStatus === undefined ? 'injected' : opts.seedWakeStatus;
-  if (seedStatus !== null) await seedWakeRecord(wakeId, seedStatus);
-  const res = spawnSync(
-    process.execPath,
-    ['.alice/steward/validate-ledger.mjs', wakeId],
-    { cwd: wsDir, encoding: 'utf8' },
-  );
+  status = 'injected',
+  extra: Record<string, unknown> = {},
+): Promise<void> {
+  await writeFile(wakePathFor(wakeId), JSON.stringify({ version: 1, wakeId, status, ...extra }, null, 2), 'utf8');
+}
+async function seedLedger(entries: Record<string, unknown>[]): Promise<void> {
+  await writeFile(ledgerFile(), entries.length ? `${entries.map((e) => JSON.stringify(e)).join('\n')}\n` : '', 'utf8');
+}
+function runValidate(wakeId: string): { code: number; stdout: string; stderr: string } {
+  const res = spawnSync(process.execPath, ['.alice/steward/validate-ledger.mjs', wakeId], { cwd: wsDir, encoding: 'utf8' });
   return { code: res.status ?? -1, stdout: res.stdout, stderr: res.stderr };
 }
+async function ledgerLines(): Promise<string[]> {
+  return (await readFile(ledgerFile(), 'utf8')).split('\n').filter(Boolean);
+}
+/** A prior terminal wake record + its committed ledger line + receipt fingerprint. */
+async function terminalWakeWithReceipt(wakeId: string): Promise<Record<string, unknown>> {
+  const e = entry({ wakeId });
+  await seedWakeRecord(wakeId, 'done', {
+    injectedAt: '2026-07-10T14:00:05.000Z',
+    ledgerReceipt: { version: 1, wakeId, status: 'done', decision: 'no_trade', at: e.at, accountId: e.accountId, fingerprint: canonicalDecisionFingerprint(e), recordedAt: '2026-07-10T14:02:00.000Z' },
+  });
+  return e;
+}
 
-describe('generated steward validate-ledger.mjs (issue #125 v2)', () => {
-  it('accepts a well-formed v2 no_trade entry with empty actions', async () => {
-    const res = await runValidator([entry()], 'wake-1');
+describe('generated validate-ledger.mjs — draft → ledger commit (issue #140)', () => {
+  it('commits a valid draft: writes the entry, publishes a marker, removes the draft', async () => {
+    const e = await writeDraft('wake-1');
+    await seedWakeRecord('wake-1');
+    const res = runValidate('wake-1');
     expect(res.stderr).toBe('');
     expect(res.code).toBe(0);
-    expect(res.stdout).toContain('validates at line 1');
+    expect(await ledgerLines()).toEqual([JSON.stringify(e)]);
+    const marker = JSON.parse(await readFile(markerPathFor('wake-1'), 'utf8'));
+    expect(marker.fingerprint).toBe(canonicalDecisionFingerprint(e));
+    expect(existsSync(draftPathFor('wake-1'))).toBe(false); // cleaned on success
   });
 
-  it('accepts an executed typed action with pendingHash null', async () => {
-    const res = await runValidator([
-      entry({
-        decision: 'propose_trade',
-        pendingHash: null,
-        actions: [
-          {
-            kind: 'order_place',
-            aliceId: 'mock-simulator-1/ASSET-A',
-            params: { action: 'BUY', orderType: 'MKT', totalQuantity: '50' },
-            commitHash: 'deadbeef',
-            outcome: 'executed',
-          },
-        ],
-      }),
-    ], 'wake-1');
-    expect(res.stderr).toBe('');
-    expect(res.code).toBe(0);
+  it('appends a new wake and preserves the prior line byte-for-byte', async () => {
+    const prior = entry({ wakeId: 'wake-prior', thesis: 'unusual   spacing kept' });
+    const priorRaw = JSON.stringify(prior);
+    await writeFile(ledgerFile(), `${priorRaw}\n`, 'utf8');
+    await writeDraft('wake-2');
+    await seedWakeRecord('wake-2');
+    expect(runValidate('wake-2').code).toBe(0);
+    const lines = await ledgerLines();
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toBe(priorRaw); // untouched, exact bytes
+    expect(JSON.parse(lines[1]).wakeId).toBe('wake-2');
   });
 
-  it('rejects a commit hash parked in pendingHash after an executed outcome (D1)', async () => {
-    const res = await runValidator([
-      entry({
-        decision: 'propose_trade',
-        pendingHash: 'deadbeef',
-        actions: [
-          {
-            kind: 'order_place',
-            aliceId: 'mock-simulator-1/ASSET-A',
-            params: { action: 'BUY' },
-            commitHash: 'deadbeef',
-            outcome: 'executed',
-          },
-        ],
-      }),
-    ], 'wake-1');
+  it('replaces the SAME wake line in place for a pre-terminal correction (no duplicate, same position)', async () => {
+    await seedLedger([entry({ wakeId: 'wake-a' }), entry({ wakeId: 'wake-b' })]);
+    await seedWakeRecord('wake-a');
+    // correct wake-a in place
+    await writeDraft('wake-a', { thesis: 'corrected', decision: 'propose_trade' });
+    expect(runValidate('wake-a').code).toBe(0);
+    const lines = await ledgerLines();
+    expect(lines).toHaveLength(2); // no duplicate
+    expect(JSON.parse(lines[0]).wakeId).toBe('wake-a'); // same position (line 1)
+    expect(JSON.parse(lines[0]).decision).toBe('propose_trade');
+    expect(JSON.parse(lines[1]).wakeId).toBe('wake-b'); // untouched
+  });
+
+  it('fails and writes NOTHING when there is no draft', async () => {
+    await seedWakeRecord('wake-nodraft');
+    const res = runValidate('wake-nodraft');
     expect(res.code).toBe(1);
-    expect(res.stderr).toMatch(/pendingHash must be null/);
+    expect(res.stderr).toMatch(/no draft/);
+    expect(existsSync(markerPathFor('wake-nodraft'))).toBe(false);
+    expect(await ledgerLines()).toEqual([]);
   });
 
-  it('rejects a version-1 entry at v2', async () => {
-    const res = await runValidator([entry({ version: 1 })], 'wake-1');
-    expect(res.code).toBe(1);
-    expect(res.stderr).toMatch(/version must be 2/);
-  });
-
-  it('rejects a free-text action string', async () => {
-    const res = await runValidator([
-      entry({ actions: ['placed a market buy for 50 shares'] }),
-    ], 'wake-1');
-    expect(res.code).toBe(1);
-    expect(res.stderr).toMatch(/free-text action strings are rejected/);
-  });
-
-  it('rejects a policy_denied action with no violations', async () => {
-    const res = await runValidator([
-      entry({
-        decision: 'no_trade',
-        actions: [
-          {
-            kind: 'order_place',
-            aliceId: 'mock-simulator-1/ASSET-A',
-            params: { action: 'BUY' },
-            outcome: 'policy_denied',
-          },
-        ],
-      }),
-    ], 'wake-1');
-    expect(res.code).toBe(1);
-    expect(res.stderr).toMatch(/policy_denied/);
-  });
-
-  it('rejects a duplicate wakeId (D3, first-wins)', async () => {
-    const res = await runValidator([
-      entry({ wakeId: 'wake-dup', thesis: 'first' }),
-      entry({ wakeId: 'wake-dup', at: '2026-07-10T14:05:00.000Z', decision: 'propose_trade', thesis: 'second' }),
-    ], 'wake-dup');
-    expect(res.code).toBe(1);
-    expect(res.stderr).toMatch(/exactly one is allowed/);
+  it('is path-safe for an arbitrary wakeId (slashes/colons percent-encoded)', async () => {
+    const wakeId = '2026-07-11T14:00:00Z:aapl/risk-check';
+    const e = await writeDraft(wakeId);
+    await seedWakeRecord(wakeId);
+    expect(runValidate(wakeId).code).toBe(0);
+    expect(draftPathFor(wakeId).endsWith(`${encodeURIComponent(wakeId)}.json`)).toBe(true);
+    const marker = JSON.parse(await readFile(markerPathFor(wakeId), 'utf8'));
+    expect(marker.wakeId).toBe(wakeId);
+    expect((await ledgerLines()).map((l) => JSON.parse(l).wakeId)).toEqual([wakeId]);
+    void e;
   });
 });
 
-describe('generated steward validate-ledger.mjs integrity cross-check (issue #134)', () => {
-  async function writeWakeRecord(rec: Record<string, unknown>): Promise<void> {
-    const file = join(wsDir, '.alice', 'steward', 'wakes', `${encodeURIComponent(rec.wakeId as string)}.json`);
-    await writeFile(file, `${JSON.stringify(rec, null, 2)}\n`, 'utf8');
-  }
-
-  function terminalWakeRecord(wakeId: string, over: Record<string, unknown> = {}): Record<string, unknown> {
-    return {
-      version: 1,
-      wakeId,
-      status: 'done',
-      createdAt: '2026-07-10T14:00:00.000Z',
-      injectedAt: '2026-07-10T14:00:05.000Z',
-      completedAt: '2026-07-10T14:01:23.000Z',
-      deadline: '2026-07-10T14:10:00.000Z',
-      sessionId: 'sess-1',
-      envelope: {
-        reason: 'scheduled_observe',
-        accountId: 'mock-simulator-1',
-        authzLevel: 'paper',
-        expectedDecision: 'no_trade',
-      },
-      ...over,
-    };
-  }
-
-  it('passes the current wake when a prior terminal wake still matches its receipt (TS/JS fingerprint agreement)', async () => {
-    const prior = entry({ wakeId: 'wake-prior', thesis: 'prior decision' });
-    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
-    await writeWakeRecord(terminalWakeRecord('wake-prior', {
-      ledgerReceipt: {
-        version: 1,
-        wakeId: 'wake-prior',
-        status: 'done',
-        decision: 'no_trade',
-        at: prior.at,
-        accountId: prior.accountId,
-        fingerprint: canonicalDecisionFingerprint(prior),
-        recordedAt: '2026-07-10T14:02:00.000Z',
-      },
-    }));
-    const res = await runValidator([prior, current], 'wake-cur');
-    expect(res.stderr).toBe('');
-    expect(res.code).toBe(0);
-  });
-
-  it('fails the current wake when a prior terminal wake\'s ledger entry disappeared (regression 4)', async () => {
-    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
-    // A prior done wake exists, but its ledger line is gone — only the current
-    // wake's entry remains.
-    await writeWakeRecord(terminalWakeRecord('wake-prior'));
-    const res = await runValidator([current], 'wake-cur');
+describe('generated validate-ledger.mjs — strict schema on the draft (issue #125/#139)', () => {
+  async function expectRejected(over: Record<string, unknown>, re: RegExp, wakeId = 'wake-1'): Promise<void> {
+    await writeRawDraft(wakeId, entry({ wakeId, ...over }));
+    await seedWakeRecord(wakeId);
+    const res = runValidate(wakeId);
     expect(res.code).toBe(1);
-    expect(res.stderr).toMatch(/terminal wake wake-prior .*has no ledger entry/);
+    expect(res.stderr).toMatch(re);
+    expect(existsSync(markerPathFor(wakeId))).toBe(false);
+    expect(await ledgerLines()).toEqual([]); // ledger untouched
+    expect(existsSync(draftPathFor(wakeId))).toBe(true); // draft kept for correction
+  }
+
+  it('accepts an executed typed action with pendingHash null', async () => {
+    await writeDraft('wake-1', {
+      decision: 'propose_trade',
+      pendingHash: null,
+      actions: [{ kind: 'order_place', aliceId: 'mock-simulator-1/ASSET-A', params: { action: 'BUY' }, commitHash: 'deadbeef', outcome: 'executed' }],
+    });
+    await seedWakeRecord('wake-1');
+    expect(runValidate('wake-1').code).toBe(0);
   });
 
-  it('fails the current wake when a prior terminal wake\'s ledger entry was mutated in place', async () => {
-    const original = entry({ wakeId: 'wake-prior', thesis: 'original prior decision' });
-    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
-    await writeWakeRecord(terminalWakeRecord('wake-prior', {
-      ledgerReceipt: {
-        version: 1,
-        wakeId: 'wake-prior',
-        status: 'done',
-        decision: 'no_trade',
-        at: original.at,
-        accountId: original.accountId,
-        fingerprint: canonicalDecisionFingerprint(original),
-        recordedAt: '2026-07-10T14:02:00.000Z',
-      },
-    }));
-    // Ledger now carries a REWRITTEN prior entry (different thesis + decision).
-    const mutated = entry({ wakeId: 'wake-prior', thesis: 'rewritten', decision: 'propose_trade' });
-    const res = await runValidator([mutated, current], 'wake-cur');
+  it('rejects a commit hash parked in pendingHash after an executed outcome (D1)', async () => {
+    await expectRejected({
+      decision: 'propose_trade',
+      pendingHash: 'deadbeef',
+      actions: [{ kind: 'order_place', aliceId: 'mock-simulator-1/ASSET-A', params: { action: 'BUY' }, commitHash: 'deadbeef', outcome: 'executed' }],
+    }, /pendingHash must be null/);
+  });
+
+  it('rejects version 1, free-text action, and policy_denied with no violations', async () => {
+    await expectRejected({ version: 1 }, /version must be 2/);
+    await expectRejected({ actions: ['placed a market buy'] }, /free-text action strings are rejected/);
+    await expectRejected({
+      decision: 'no_trade',
+      actions: [{ kind: 'order_place', aliceId: 'mock-simulator-1/ASSET-A', params: { action: 'BUY' }, outcome: 'policy_denied' }],
+    }, /policy_denied/);
+  });
+
+  it('rejects a missing / contradictory wake self-reference (#139)', async () => {
+    await expectRejected({ completion: { reason: 'done', evidenceRefs: ['tool:risk'] } }, /must include the self-reference/);
+    // self-ref present, but ALSO names another wake → contradictory.
+    await expectRejected({ completion: { reason: 'done', evidenceRefs: ['wake:wake-1', 'wake:wake-other', 'tool:risk'] } }, /references a different wake/);
+  });
+
+  it('rejects a draft whose top-level wakeId is not the wake being finalized', async () => {
+    await writeRawDraft('wake-1', entry({ wakeId: 'wake-somethingelse' }));
+    await seedWakeRecord('wake-1');
+    const res = runValidate('wake-1');
+    expect(res.code).toBe(1);
+    expect(res.stderr).toMatch(/must equal the wake you are finalizing/);
+  });
+});
+
+describe('generated validate-ledger.mjs — external wake binding (issue #139)', () => {
+  it('rejects finalizing a wake with no active wake record (impersonation), writing nothing', async () => {
+    await writeDraft('ghost-wake');
+    const res = runValidate('ghost-wake'); // no wake record seeded
+    expect(res.code).toBe(1);
+    expect(res.stderr).toMatch(/no active posted wake/);
+    expect(existsSync(markerPathFor('ghost-wake'))).toBe(false);
+    expect(await ledgerLines()).toEqual([]);
+  });
+
+  it('rejects re-finalizing an already-terminal wake (replay)', async () => {
+    await writeDraft('wake-done');
+    await seedWakeRecord('wake-done', 'done');
+    const res = runValidate('wake-done');
+    expect(res.code).toBe(1);
+    expect(res.stderr).toMatch(/already done|cannot be re-finalized/);
+    expect(existsSync(markerPathFor('wake-done'))).toBe(false);
+  });
+});
+
+describe('generated validate-ledger.mjs — prior terminal integrity cross-check (issue #134)', () => {
+  it('blocks the commit and writes no marker when a prior terminal wake\'s entry disappeared', async () => {
+    await terminalWakeWithReceipt('wake-prior'); // record + receipt, but NO ledger line
+    await seedLedger([]);
+    await writeDraft('wake-cur');
+    await seedWakeRecord('wake-cur');
+    const res = runValidate('wake-cur');
+    expect(res.code).toBe(1);
+    expect(res.stderr).toMatch(/has no ledger entry/);
+    expect(existsSync(markerPathFor('wake-cur'))).toBe(false);
+    expect(await ledgerLines()).toEqual([]); // current entry NOT committed
+  });
+
+  it('blocks the commit when a prior terminal wake\'s entry was mutated (fingerprint mismatch)', async () => {
+    const prior = await terminalWakeWithReceipt('wake-prior');
+    // ledger carries a MUTATED prior entry (semantic change)
+    await seedLedger([{ ...prior, thesis: 'rewritten', decision: 'propose_trade', completion: { reason: 'r', evidenceRefs: ['wake:wake-prior', 'tool:risk'] } }]);
+    await writeDraft('wake-cur');
+    await seedWakeRecord('wake-cur');
+    const res = runValidate('wake-cur');
     expect(res.code).toBe(1);
     expect(res.stderr).toMatch(/fingerprint mismatch/);
+    expect(existsSync(markerPathFor('wake-cur'))).toBe(false);
   });
 
-  it('ignores timeout/stuck wakes in the cross-check (they carry no ledger entry)', async () => {
-    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
-    await writeWakeRecord(terminalWakeRecord('wake-to', { status: 'timeout' }));
-    const res = await runValidator([current], 'wake-cur');
-    expect(res.stderr).toBe('');
-    expect(res.code).toBe(0);
+  it('commits normally when the prior terminal wake is intact', async () => {
+    const prior = await terminalWakeWithReceipt('wake-prior');
+    await seedLedger([prior]); // intact
+    await writeDraft('wake-cur');
+    await seedWakeRecord('wake-cur');
+    expect(runValidate('wake-cur').code).toBe(0);
+    expect((await ledgerLines()).map((l) => JSON.parse(l).wakeId)).toEqual(['wake-prior', 'wake-cur']);
   });
+});
 
-  it('ignores a never-dispatched terminal error (no injectedAt, no receipt) — PR #135 regression 1', async () => {
-    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
-    // A POST-time failure marked the wake `error` but it never dispatched.
-    await writeWakeRecord(terminalWakeRecord('wake-nodispatch', { status: 'error', injectedAt: null }));
-    const res = await runValidator([current], 'wake-cur');
-    expect(res.stderr).toBe('');
-    expect(res.code).toBe(0);
-  });
-
-  // The generated validator computes the SAME canonical fingerprint as
-  // src/workspaces/steward/ledger-receipt.ts. This pins the identical golden
-  // constant asserted (in TS) by ledger-receipt.spec.ts — if the two diverge,
-  // the validator's recomputed fingerprint won't equal this receipt and the
-  // run fails. (Keep GOLDEN_FINGERPRINT in sync across both specs.)
+describe('generated validate-ledger.mjs — golden fingerprint parity (TS ↔ JS)', () => {
   const GOLDEN_ENTRY = {
     version: 2,
     wakeId: 'golden-wake',
@@ -305,159 +286,45 @@ describe('generated steward validate-ledger.mjs integrity cross-check (issue #13
     decision: 'no_trade',
     status: 'done',
     completion: { reason: 'checklist complete; no entry signal', evidenceRefs: ['wake:golden-wake', 'tool:risk'] },
-    checklist: { account: 'ok', positions: 'ok', orders: 'ok', risk: 'NORMAL', market: 'open', history: 'checked' },
+    checklist: goodChecklist,
     thesis: 'No trade: no thesis or entry signal.',
     actions: [],
     pendingHash: null,
     invalidation: 'A new explicit thesis or entry signal would reopen the decision.',
-    cost: {
-      model: 'codex', inputTokens: null, outputTokens: null, modelCostUsd: null,
-      allocatedServerCostUsd: null, tradingFeesUsd: null, estimatedSlippageUsd: null, totalEstimatedCostUsd: null,
-    },
+    cost: goodCost,
   } as const;
+  // Pinned in ledger-receipt.spec.ts too — keep in sync.
   const GOLDEN_FINGERPRINT = 'a00e0bc4ff92f38b3e7bfab09e797e73d5f9248664cee740ac1efedf4849ef9f';
 
-  it('agrees with the TS golden fingerprint vector (JS/TS parity anchor)', async () => {
-    // The TS helper agrees with the pinned constant here...
+  it('the validator writes a marker whose fingerprint matches the pinned TS golden vector', async () => {
     expect(canonicalDecisionFingerprint(GOLDEN_ENTRY)).toBe(GOLDEN_FINGERPRINT);
-    // ...and so must the generated JS validator: a receipt carrying the pinned
-    // constant validates iff the validator recomputes the same hex.
-    await writeWakeRecord(terminalWakeRecord('golden-wake', {
-      ledgerReceipt: {
-        version: 1, wakeId: 'golden-wake', status: 'done', decision: 'no_trade',
-        at: GOLDEN_ENTRY.at, accountId: GOLDEN_ENTRY.accountId,
-        fingerprint: GOLDEN_FINGERPRINT, recordedAt: '2026-07-11T00:02:00.000Z',
-      },
-    }));
-    const res = await runValidator([
-      GOLDEN_ENTRY as unknown as Record<string, unknown>,
-      entry({ wakeId: 'wake-cur', at: '2026-07-11T01:00:00.000Z' }),
-    ], 'wake-cur');
-    expect(res.stderr).toBe('');
-    expect(res.code).toBe(0);
+    await writeRawDraft('golden-wake', GOLDEN_ENTRY);
+    await seedWakeRecord('golden-wake');
+    expect(runValidate('golden-wake').code).toBe(0);
+    const marker = JSON.parse(await readFile(markerPathFor('golden-wake'), 'utf8'));
+    expect(marker.fingerprint).toBe(GOLDEN_FINGERPRINT);
   });
+});
 
-  it('selects the same first-wins line as TS when a schema-invalid line precedes a valid one (parity)', async () => {
-    const invalidFirst = { ...entry({ wakeId: 'wake-prior', thesis: 'first, schema-invalid' }) } as Record<string, unknown>;
-    delete invalidFirst.decision; // JSON-valid, schema-invalid
-    const validSecond = entry({ wakeId: 'wake-prior', thesis: 'second, valid' });
-    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
-
-    // Receipt fingerprint = fingerprint of the FIRST (schema-invalid) line: the
-    // validator must select that same line, so this matches and the run passes.
-    await writeWakeRecord(terminalWakeRecord('wake-prior', {
-      ledgerReceipt: {
-        version: 1, wakeId: 'wake-prior', status: 'done', decision: 'no_trade',
-        at: (invalidFirst as { at: string }).at, accountId: (invalidFirst as { accountId: string }).accountId,
-        fingerprint: canonicalDecisionFingerprint(invalidFirst), recordedAt: '2026-07-10T14:02:00.000Z',
-      },
-    }));
-    const res = await runValidator([invalidFirst, validSecond, current], 'wake-cur');
-    expect(res.stderr).toBe('');
-    expect(res.code).toBe(0);
-  });
-
-  // ── issue #136 finalize marker ────────────────────────────────────────
-  function markerPathFor(wakeId: string): string {
-    return join(wsDir, '.alice', 'steward', 'finalize', `${encodeURIComponent(wakeId)}.json`);
+describe('generated validate-ledger.mjs — concurrent atomic writes (issue #140)', () => {
+  function validateAsync(wakeId: string): Promise<number> {
+    return new Promise((resolve) => {
+      const child = spawn(process.execPath, ['.alice/steward/validate-ledger.mjs', wakeId], { cwd: wsDir });
+      child.on('close', (code) => resolve(code ?? -1));
+    });
   }
 
-  it('publishes a finalization marker with the entry fingerprint on success', async () => {
-    const e = entry({ wakeId: 'wake-1' });
-    const res = await runValidator([e], 'wake-1');
-    expect(res.code).toBe(0);
-    expect(res.stdout).toContain('finalization marker published');
-    const marker = JSON.parse(await readFile(markerPathFor('wake-1'), 'utf8'));
-    expect(marker).toMatchObject({ version: 1, wakeId: 'wake-1', schemaVersion: 2 });
-    expect(marker.fingerprint).toBe(canonicalDecisionFingerprint(e));
-    expect(typeof marker.validatedAt).toBe('string');
-  });
-
-  it('writes NO marker when validation fails (regression 5)', async () => {
-    const res = await runValidator([entry({ version: 1 })], 'wake-1');
-    expect(res.code).toBe(1);
-    expect(existsSync(markerPathFor('wake-1'))).toBe(false);
-  });
-
-  it('writes NO marker for the current wake when a prior terminal integrity check fails (regression: prior integrity blocks publish)', async () => {
-    // A prior dispatched terminal wake exists, but its ledger entry is gone.
-    await writeWakeRecord(terminalWakeRecord('wake-prior'));
-    const current = entry({ wakeId: 'wake-cur', at: '2026-07-10T15:00:00.000Z' });
-    const res = await runValidator([current], 'wake-cur'); // prior entry missing
-    expect(res.code).toBe(1);
-    expect(res.stderr).toMatch(/has no ledger entry/);
-    expect(existsSync(markerPathFor('wake-cur'))).toBe(false);
-  });
-
-  it('writes the marker at a path-safe encoded location for an arbitrary wakeId', async () => {
-    const wakeId = '2026-07-11T14:00:00Z:aapl/risk-check';
-    const e = entry({ wakeId });
-    const res = await runValidator([e], wakeId);
-    expect(res.code).toBe(0);
-    // Slashes/colons are percent-encoded — no path traversal, single flat file.
-    const p = markerPathFor(wakeId);
-    expect(p.endsWith(`${encodeURIComponent(wakeId)}.json`)).toBe(true);
-    const marker = JSON.parse(await readFile(p, 'utf8'));
-    expect(marker.wakeId).toBe(wakeId);
-    expect(marker.fingerprint).toBe(canonicalDecisionFingerprint(e));
-  });
-
-  it('atomically REPLACES the marker when re-run on a corrected entry', async () => {
-    const draft = entry({ wakeId: 'wake-1', thesis: 'draft' });
-    await runValidator([draft], 'wake-1');
-    const first = JSON.parse(await readFile(markerPathFor('wake-1'), 'utf8'));
-    expect(first.fingerprint).toBe(canonicalDecisionFingerprint(draft));
-
-    const corrected = entry({ wakeId: 'wake-1', thesis: 'corrected', decision: 'propose_trade' });
-    const res = await runValidator([corrected], 'wake-1');
-    expect(res.code).toBe(0);
-    const second = JSON.parse(await readFile(markerPathFor('wake-1'), 'utf8'));
-    expect(second.fingerprint).toBe(canonicalDecisionFingerprint(corrected));
-    expect(second.fingerprint).not.toBe(first.fingerprint);
-  });
-
-  // ── issue #139 identity binding ───────────────────────────────────────
-  it('rejects an entry whose wake: evidence self-reference contradicts the top-level wakeId, and writes no marker (regression: copied suffix)', async () => {
-    const res = await runValidator([
-      entry({ wakeId: 'wake-1', completion: { reason: 'done', evidenceRefs: ['wake:wake-prior-copied', 'tool:risk'] } }),
-    ], 'wake-1');
-    expect(res.code).toBe(1);
-    expect(res.stderr).toMatch(/self-reference|references a different wake/);
-    expect(existsSync(markerPathFor('wake-1'))).toBe(false);
-  });
-
-  it('rejects an entry missing the wake: self-reference', async () => {
-    const res = await runValidator([
-      entry({ wakeId: 'wake-1', completion: { reason: 'done', evidenceRefs: ['tool:risk'] } }),
-    ], 'wake-1');
-    expect(res.code).toBe(1);
-    expect(res.stderr).toMatch(/must include the self-reference/);
-  });
-
-  it('rejects finalizing a wake with no active wake record (impersonation / phantom id) and writes no marker', async () => {
-    const res = await runValidator([entry({ wakeId: 'ghost-wake' })], 'ghost-wake', { seedWakeStatus: null });
-    expect(res.code).toBe(1);
-    expect(res.stderr).toMatch(/no active posted wake/);
-    expect(existsSync(markerPathFor('ghost-wake'))).toBe(false);
-  });
-
-  it('rejects re-finalizing an already-terminal wake (replay) and writes no marker', async () => {
-    const res = await runValidator([entry({ wakeId: 'wake-replay' })], 'wake-replay', { seedWakeStatus: 'done' });
-    expect(res.code).toBe(1);
-    expect(res.stderr).toMatch(/already done|cannot be re-finalized/);
-    expect(existsSync(markerPathFor('wake-replay'))).toBe(false);
-  });
-
-  it('accepts and publishes a marker once the top-level wakeId is corrected to match the active wake + evidence', async () => {
-    // First attempt: contradictory (fails, no marker).
-    const bad = await runValidator([
-      entry({ wakeId: 'wake-fix', completion: { reason: 'done', evidenceRefs: ['wake:wake-other', 'tool:risk'] } }),
-    ], 'wake-fix');
-    expect(bad.code).toBe(1);
-    expect(existsSync(markerPathFor('wake-fix'))).toBe(false);
-    // Corrected: self-consistent entry for the active wake → validates + marker.
-    const good = await runValidator([entry({ wakeId: 'wake-fix' })], 'wake-fix');
-    expect(good.code).toBe(0);
-    expect(existsSync(markerPathFor('wake-fix'))).toBe(true);
+  it('many different wakes committing concurrently all land (no lost update, no lock leak)', async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `wake-c${i}`);
+    for (const id of ids) {
+      await writeDraft(id);
+      await seedWakeRecord(id);
+    }
+    // Genuinely parallel cross-process writers contending on the shared lock.
+    const codes = await Promise.all(ids.map(validateAsync));
+    expect(codes.every((c) => c === 0)).toBe(true);
+    const committed = (await ledgerLines()).map((l) => JSON.parse(l).wakeId).sort();
+    expect(committed).toEqual([...ids].sort());
+    expect(existsSync(join(wsDir, '.alice', 'steward', 'ledger', 'decisions.jsonl.lock'))).toBe(false);
   });
 });

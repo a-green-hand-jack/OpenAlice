@@ -10,6 +10,10 @@ export const STEWARD_LOCKS_REL = `${STEWARD_ROOT_REL}/locks`;
  *  operational — like locks/state. Written atomically by the generated
  *  validate-ledger.mjs once a wake's ledger entry passes all checks. */
 export const STEWARD_FINALIZE_REL = `${STEWARD_ROOT_REL}/finalize`;
+/** Per-wake decision DRAFTS (issue #140). The agent writes its decision here with
+ *  its native Write/Edit tool; the generated validate-ledger.mjs is the ONLY
+ *  supported writer of decisions.jsonl. Gitignored scratch. */
+export const STEWARD_DRAFTS_REL = `${STEWARD_ROOT_REL}/drafts`;
 
 export function stewardRootPath(workspaceDir: string): string {
   return join(workspaceDir, '.alice', 'steward');
@@ -63,4 +67,25 @@ export function stewardFinalizeFilename(wakeId: string): string {
 
 export function stewardFinalizePath(workspaceDir: string, wakeId: string): string {
   return join(stewardFinalizeDir(workspaceDir), stewardFinalizeFilename(wakeId));
+}
+
+export function stewardDraftsDir(workspaceDir: string): string {
+  return join(stewardRootPath(workspaceDir), 'drafts');
+}
+
+/** Per-wake draft filename (issue #140). Same URL-encoding as wake/lock/finalize
+ *  filenames so an arbitrary wakeId is path-safe. */
+export function stewardDraftFilename(wakeId: string): string {
+  return `${encodeURIComponent(wakeId)}.json`;
+}
+
+export function stewardDraftPath(workspaceDir: string, wakeId: string): string {
+  return join(stewardDraftsDir(workspaceDir), stewardDraftFilename(wakeId));
+}
+
+/** The cross-process advisory lock guarding writes to decisions.jsonl (issue
+ *  #140). Same protocol in the TS StewardLedgerStore and the generated
+ *  validate-ledger.mjs, so a future concurrent writer never loses an update. */
+export function stewardLedgerLockPath(workspaceDir: string): string {
+  return `${stewardLedgerPath(workspaceDir)}.lock`;
 }

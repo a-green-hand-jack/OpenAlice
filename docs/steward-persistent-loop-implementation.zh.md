@@ -531,6 +531,38 @@ wake 身份**，只信 entry 自报的 id。修复三层绑定：
 - **legacy 边界**：evidence 自洽仅约束 v2 strict 写路径；v1 历史的 lenient 读不受影响。
   外部绑定对遗留在飞行 wake 同样适用（它们也有 wake record）。
 
+**issue #140 新增（validator 是 decisions.jsonl 唯一 writer / 原子写）**：Claude
+debugger 用真实 `StewardSupervisor` 确定性复现——agent 的 native Write/Edit 对
+`decisions.jsonl` 做 **truncate+rewrite**，其空/半写窗口被 supervisor 的 `readFile`
+采样，产生**假** `entry_missing`（随后 recovered，但 campaign 对历史 violation 永久不信任，
+故 run 变 untrustworthy）。严格证据规则不能削弱（不能 recovery-aware、不能忽略/延迟真实
+corruption），所以采**结构性方案 A**：
+
+- **draft 写、validator 提交**：新 workspace 建 `.alice/steward/drafts/`。agent 每 wake 只用
+  native Write/Edit 写一个独立 draft `drafts/<encodeURIComponent(wakeId)>.json`，**绝不**
+  直接编辑 decisions.jsonl。生成的 `validate-ledger.mjs <wakeId>` 读 server-owned active
+  wake record + 对应 draft，严格执行 #125 schema / #139 自引用 / active-terminal 绑定，读现有
+  ledger 校验 prior terminal receipts/duplicates（#134 cross-check），然后对当前 wake 按
+  wakeId **append 或原位 replace**（同 wake 的 pre-terminal 更正），**保持其他行的原字节内容
+  与 first-wins 顺序**。
+- **原子持久化**：把完整新 ledger 写到 **same-dir 唯一 temp → file fsync → atomic rename →
+  best-effort dir fsync**；成功后再基于刚提交 entry 的指纹原子写 #136 finalize marker。任何
+  检查/写失败都**不发布 marker**、不改 ledger；成功清理 draft，失败保留 draft 供纠正。因此
+  supervisor 的 `readFile` 只会看到 **old-complete 或 new-complete**，绝不 empty/partial ——
+  假 `entry_missing` 从根上消失。
+- **跨进程锁**：ledger 写路径有 workspace-scoped 跨进程 advisory lock
+  （`decisions.jsonl.lock`，`wx` 独占创建 + `{pid,token,at}` + TTL 过期 rename-aside 回收，
+  无 TOCTOU；Windows/macOS rename EPERM/EACCES/EEXIST 有限 retry/backoff，**绝不**降级为
+  truncate-in-place）。TS `StewardLedgerStore.append` 与生成的 JS validator **共享同一协议**
+  （`src/workspaces/steward/ledger-writer.ts` 的 `withLedgerWrite`/`acquireLedgerLock`/
+  `atomicWriteFile`，validator 里逐条镜像），杜绝未来并发 writer 丢更新；`append` API 不变。
+- **未削弱检测**：supervisor 的即时 corruption 检测（#134 entry_missing/mutated）与 campaign
+  对历史 violation 的永久不信任**都不改**。方案 A 只是把**受支持的** writer 收敛到 validator +
+  原子写；**直接手改 decisions.jsonl 仍会被判为 corruption**（回归里有一条真·truncate 仍触发
+  #134 的用例，证明证据未被弱化）。
+- **legacy 边界**：读旧 ledger 仍读宽（结构性 v2 / v1）；新模板的 supported write path 走
+  draft+validator。draft/lock/temp 全部 gitignored，路径编码安全。
+
 ## 8. Lock 策略
 
 交易 wake 必须有 per-account lock，避免两个 wake 同时处理同一账户。
