@@ -4,6 +4,7 @@
  * (no real spawn). Modeled on trading-config.spec's harness.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,10 +20,25 @@ import {
 } from '../../core/workspace-tool-center.js';
 import type { ProducerHandle } from '../../core/producer.js';
 import {
+  createStewardFinalizeStore,
   createStewardLedgerStore,
   DECISION_LEDGER_SCHEMA_VERSION,
   STEWARD_WAKE_SUBMIT_DELAY_MS,
 } from '../../workspaces/steward/index.js';
+
+/** Issue #136: publish the finalization marker the generated validator would
+ *  write for `wakeId`, using the ledger's own first-wins fingerprint, so the
+ *  supervisor terminalizes the (marker-protocol) wake on the next tick. */
+async function publishFinalizeMarker(dir: string, wakeId: string): Promise<void> {
+  const idx = await createStewardLedgerStore(dir).readIndex();
+  const fw = idx.firstWins.get(wakeId);
+  if (!fw) throw new Error(`no ledger entry for ${wakeId} to finalize`);
+  await createStewardFinalizeStore(dir).write({
+    wakeId,
+    fingerprint: fw.fingerprint,
+    validatedAt: '2026-07-08T14:01:25.000Z',
+  });
+}
 import { createMemoryInboxStore, type IInboxStore } from '../../core/inbox-store.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -233,11 +249,13 @@ function buildSteward(opts: { dir: string; inboxStore?: IInboxStore }) {
     pool,
     adapters: { get: (id: string) => (id === 'codex' ? adapter : undefined) },
     resolveAdapter: () => adapter,
+    refreshStewardRuntime: vi.fn(async () => ({ ok: true })),
     config: { launcherRepoRoot: '/repo' },
     publicMeta: vi.fn(async (m: any) => m),
   } as unknown as WorkspaceService;
   return {
     app: createWorkspaceRoutes(svc, { inboxStore: opts.inboxStore }),
+    svc,
     pool,
     sessionRegistry,
     writtenInputs,
@@ -464,6 +482,81 @@ describe('steward wake API', () => {
     }
   });
 
+  it('refreshes the steward runtime before creating a wake, and refuses the wake when refresh fails (issue #140)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
+    try {
+      const { app, svc } = buildSteward({ dir });
+      // Failure path: refresh reports an actionable error → no wake is created.
+      (svc.refreshStewardRuntime as any).mockResolvedValueOnce({ ok: false, message: 'validator write failed' });
+      const failed = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-refresh-fail',
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+      expect(failed.status).toBe(500);
+      expect(failed.body.error).toBe('runtime_refresh_failed');
+      expect(failed.body.message).toContain('validator write failed');
+      // No wake record was written.
+      expect(existsSync(join(dir, '.alice/steward/wakes/wake-refresh-fail.json'))).toBe(false);
+
+      // Success path: refresh is invoked with this workspace's meta before dispatch.
+      // Fresh spawn seeds via the initial prompt (no submit-gap timer), so plain post.
+      const ok = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-refresh-ok',
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+      expect(ok.status).toBe(202);
+      expect(svc.refreshStewardRuntime).toHaveBeenCalledWith(expect.objectContaining({ id: 'ws-1', template: 'steward' }));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('marks the wake stuck (not error) when injection fails because the session is not live (issue #134 / PR #135)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
+    try {
+      await mkdir(join(dir, '.alice', 'steward'), { recursive: true });
+      await writeFile(
+        join(dir, '.alice/steward/config.json'),
+        JSON.stringify({ version: 1, agent: 'codex', sessionId: 'configured-session' }, null, 2) + '\n',
+        'utf8',
+      );
+      const { app, pool, live } = buildSteward({ dir });
+      live.set('configured-session', { recordId: 'configured-session' });
+      // Force the wake injection to fail (target session not writable) — the
+      // wake never actually ran, so it must be `stuck`, not `error`, and must
+      // never trip ledger-integrity reconciliation.
+      pool.writeToSession = vi.fn(() => false);
+
+      // Plain `post` (not `postWake`): injection fails immediately, so the
+      // 3s submit-gap timer `postWake` waits for is never scheduled.
+      const r = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-inject-fail',
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+
+      expect(r.status).toBe(500);
+      expect(r.body.error).toBe('inject_failed');
+      expect(r.body.wake.status).toBe('stuck');
+
+      const stored = JSON.parse(
+        await readFile(join(dir, '.alice/steward/wakes/wake-inject-fail.json'), 'utf8'),
+      ) as { status: string; injectedAt: string | null };
+      expect(stored.status).toBe('stuck');
+      expect(stored.injectedAt).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('resumes a configured paused steward session before injecting the wake', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
     try {
@@ -628,6 +721,7 @@ describe('steward wake API', () => {
         },
       });
 
+      await publishFinalizeMarker(dir, 'wake-active');
       const tick = await post(app, '/ws-1/steward/supervisor/tick', {
         now: '2026-07-08T14:01:30.000Z',
       });
@@ -702,6 +796,8 @@ describe('steward wake API', () => {
           totalEstimatedCostUsd: null,
         },
       });
+
+      await publishFinalizeMarker(dir, 'wake-done');
 
       // Wake #2 gets injected into a session that then "disappears" (removed
       // from the live pool) — the liveness check should mark it stuck.

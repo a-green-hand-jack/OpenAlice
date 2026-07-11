@@ -158,6 +158,13 @@ persistent steward 不是没有 system prompt / skills。相反，它的 context
 **单次 wake 的完成边界**是 decision ledger marker：本轮完成、阻塞、报错或 no-trade，
 都必须写成结构化 ledger。
 
+> **写路径（issue #140）**：steward **不直接**写 `decisions.jsonl`。它只把本次决策对象
+> 写到 `.alice/steward/drafts/<wakeId>.json`（native Write/Edit），再运行
+> `validate-ledger.mjs <wakeId>`——validator 是 ledger 的唯一受支持 writer，负责严格校验并
+> **原子**提交（append 或同 wake 原位 replace）+ 发布 finalize marker。原因：agent 直接
+> truncate+rewrite decisions.jsonl 的半写窗口会被 supervisor 采样成假 corruption。直接手改
+> ledger 仍按 corruption 论处（#134 检测不削弱）。
+
 **整体运行边界**按场景区分：
 
 - 回测 / campaign：跑完预设回测区间、decision points 和最终报告后自然结束。

@@ -1,12 +1,62 @@
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+import { canonicalDecisionFingerprint } from './ledger-receipt.js';
+import { withLedgerWrite } from './ledger-writer.js';
 import {
   parseStewardDecisionLedgerEntry,
   parseStewardDecisionLedgerEntryLenient,
   type StewardDecisionLedgerEntry,
 } from './types.js';
 import { stewardLedgerPath } from './paths.js';
+
+/**
+ * The first-wins line for a wakeId (issue #134). "First-wins" here is the FIRST
+ * JSON-parseable object line with that wakeId, regardless of whether it also
+ * passes the (lenient) schema — chosen so the TypeScript supervisor and the
+ * generated JS validator select the SAME line even when a JSON-valid but
+ * schema-invalid line precedes a valid one. `fingerprint` is the canonical
+ * semantic fingerprint of that line; `valid` says whether it schema-parsed
+ * (only a valid first-wins line drives a status transition); `entry` is the
+ * parsed entry when valid, else null.
+ */
+export interface LedgerFirstWins {
+  /** 1-based line number of the first-wins line. */
+  readonly line: number;
+  readonly fingerprint: string;
+  readonly valid: boolean;
+  readonly entry: StewardDecisionLedgerEntry | null;
+}
+
+/**
+ * A ledger line whose top-level `wakeId` disagrees with a `wake:` evidence
+ * self-reference inside it (issue #139). This is the signature of a misfiled
+ * entry: the steward wrote the entry under the wrong top-level wakeId (e.g. it
+ * copied a prior wake's UUID suffix) while its evidence still referenced the
+ * real active wake. Surfacing it lets the supervisor tell the correct active
+ * wake, promptly, that its completion was filed under the wrong id — instead of
+ * silently waiting out the whole deadline.
+ */
+export interface LedgerIdentityMismatch {
+  /** 1-based line number. */
+  readonly line: number;
+  /** The (wrong) top-level wakeId the entry was filed under. */
+  readonly entryWakeId: string;
+  /** The wakeId the entry's `wake:` evidence self-reference actually names. */
+  readonly referencedWakeId: string;
+}
+
+/**
+ * The whole ledger parsed ONCE (issue #134, no O(n²) re-reads): the ordered
+ * list of schema-valid entries (for cost/state), the invalid lines, the
+ * duplicate wakeIds, the first-wins index used for reconciliation and
+ * integrity, and the identity mismatches (issue #139). Supervisor ticks build
+ * this a single time and reuse it for every wake.
+ */
+export interface LedgerIndex extends ReadLedgerDiagnostics {
+  readonly firstWins: ReadonlyMap<string, LedgerFirstWins>;
+  readonly identityMismatches: LedgerIdentityMismatch[];
+}
 
 export interface ReadLedgerOptions {
   readonly wakeId?: string;
@@ -24,7 +74,7 @@ export interface InvalidLedgerLine {
 
 /** A wakeId that appears on more than one parsed ledger line. Issue #125 D3
  *  makes exactly one terminal entry per wakeId the rule: the FIRST entry wins
- *  (tamper-evident — a later append can never alter the recorded decision) and
+ *  (corruption-evident — a later append can never alter the recorded decision) and
  *  every later duplicate is surfaced here as a violation. Reported, never
  *  thrown, so the supervisor/reports can see it; the validator errors on it. */
 export interface DuplicateWakeEntry {
@@ -52,9 +102,14 @@ export class StewardLedgerStore {
 
   async append(entry: StewardDecisionLedgerEntry): Promise<StewardDecisionLedgerEntry> {
     const parsed = parseStewardDecisionLedgerEntry(entry);
-    const path = this.path();
-    await mkdir(dirname(path), { recursive: true });
-    await appendFile(path, `${JSON.stringify(parsed)}\n`, 'utf8');
+    await mkdir(dirname(this.path()), { recursive: true });
+    // Issue #140: append through the SAME cross-process lock + atomic
+    // (temp+fsync+rename) write the generated validator uses, so a concurrent
+    // reader never sees a partial file and a concurrent writer can't be lost.
+    await withLedgerWrite(this.workspaceDir, (raw) => {
+      const prefix = raw.length === 0 || raw.endsWith('\n') ? raw : `${raw}\n`;
+      return `${prefix}${JSON.stringify(parsed)}\n`;
+    });
     return parsed;
   }
 
@@ -77,19 +132,28 @@ export class StewardLedgerStore {
    *  (`invalid`), unfiltered by `opts.wakeId`/`opts.limit` — those filters
    *  only make sense against successfully parsed entries. */
   async readDiagnostics(opts: ReadLedgerOptions = {}): Promise<ReadLedgerDiagnostics> {
-    let raw: string;
-    try {
-      raw = await readFile(this.path(), 'utf8');
-    } catch (err) {
-      if (isENOENT(err)) return { entries: [], invalid: [], duplicates: [] };
-      throw err;
-    }
-
-    const { entries: allEntries, invalid, duplicates } = parseLedgerLines(raw);
+    const { entries: allEntries, invalid, duplicates } = await this.readIndex();
     let entries = allEntries;
     if (opts.wakeId) entries = entries.filter((entry) => entry.wakeId === opts.wakeId);
     if (opts.limit !== undefined && opts.limit > 0) entries = entries.slice(-opts.limit);
     return { entries, invalid, duplicates };
+  }
+
+  /**
+   * Parse the ledger ONCE and return everything a supervisor tick needs (issue
+   * #134): valid `entries` (file order), `invalid` lines, `duplicates`, and the
+   * `firstWins` index (wakeId → first-wins line + fingerprint). A single read
+   * replaces the previous per-wake `findByWakeId` scans (no O(n²)).
+   */
+  async readIndex(): Promise<LedgerIndex> {
+    let raw: string;
+    try {
+      raw = await readFile(this.path(), 'utf8');
+    } catch (err) {
+      if (isENOENT(err)) return { entries: [], invalid: [], duplicates: [], firstWins: new Map(), identityMismatches: [] };
+      throw err;
+    }
+    return parseLedgerIndex(raw);
   }
 
   /**
@@ -112,13 +176,17 @@ export function createStewardLedgerStore(workspaceDir: string): StewardLedgerSto
   return new StewardLedgerStore(workspaceDir);
 }
 
-/** Pure line-by-line parse of a raw ledger file's contents: every line that
- *  parses lands in `entries` (in file order); every line that doesn't lands
- *  in `invalid` with its 1-based line number and the parse error, and is
- *  skipped rather than aborting the rest of the file. Reads are LENIENT (issue
- *  #125): a strict-v2 entry OR a legacy-v1 entry both parse. Every wakeId seen
- *  more than once is recorded in `duplicates` (D3, first-wins). */
-function parseLedgerLines(raw: string): ReadLedgerDiagnostics {
+/** Single-pass parse of a raw ledger file's contents (issue #134): builds
+ *  the schema-valid `entries` (file order), the `invalid` lines, the `duplicates`
+ *  (D3, first-wins over valid entries), AND the `firstWins` index in one sweep.
+ *
+ *  Reads are LENIENT (issue #125): a strict-v2 OR a legacy-v1 entry both parse.
+ *  Line numbers are 1-based over NON-BLANK lines (kept identical to the previous
+ *  parser and to the generated validator). `firstWins` keys on the FIRST
+ *  JSON-parseable object line per wakeId even if it is schema-invalid, so the
+ *  supervisor and the generated JS validator select the same first-wins line;
+ *  its `valid`/`entry` say whether that line can also drive a status transition. */
+function parseLedgerIndex(raw: string): LedgerIndex {
   const lines = raw
     .split('\n')
     .map((line) => line.trim())
@@ -127,11 +195,50 @@ function parseLedgerLines(raw: string): ReadLedgerDiagnostics {
   const entries: StewardDecisionLedgerEntry[] = [];
   const invalid: InvalidLedgerLine[] = [];
   const duplicates: DuplicateWakeEntry[] = [];
+  const firstWins = new Map<string, LedgerFirstWins>();
+  const identityMismatches: LedgerIdentityMismatch[] = [];
   const firstLineForWake = new Map<string, number>();
+
   lines.forEach((line, index) => {
+    const lineNo = index + 1;
+    let obj: unknown;
     try {
-      const entry = parseStewardDecisionLedgerEntryLenient(JSON.parse(line));
-      const lineNo = index + 1;
+      obj = JSON.parse(line);
+    } catch (err) {
+      invalid.push({ line: lineNo, error: (err as Error).message });
+      return;
+    }
+
+    // Issue #139: detect a top-level wakeId that disagrees with a `wake:`
+    // evidence self-reference. Computed from the RAW parsed object (independent
+    // of schema validity) so a misfiled entry that the #139 self-consistency
+    // check rejects is still surfaced to the supervisor for actionable feedback.
+    collectIdentityMismatch(obj, lineNo, identityMismatches);
+
+    let entry: StewardDecisionLedgerEntry | null = null;
+    let lenientError: string | null = null;
+    try {
+      entry = parseStewardDecisionLedgerEntryLenient(obj);
+    } catch (err) {
+      lenientError = (err as Error).message;
+    }
+
+    // First-wins index keys on the raw JSON object's wakeId (schema-independent
+    // selection), so the TS supervisor and the JS validator agree on the line.
+    const rawWakeId =
+      obj && typeof obj === 'object' && typeof (obj as { wakeId?: unknown }).wakeId === 'string'
+        ? (obj as { wakeId: string }).wakeId
+        : undefined;
+    if (rawWakeId !== undefined && !firstWins.has(rawWakeId)) {
+      firstWins.set(rawWakeId, {
+        line: lineNo,
+        fingerprint: canonicalDecisionFingerprint(obj),
+        valid: entry !== null,
+        entry,
+      });
+    }
+
+    if (entry) {
       const firstLine = firstLineForWake.get(entry.wakeId);
       if (firstLine === undefined) {
         firstLineForWake.set(entry.wakeId, lineNo);
@@ -139,11 +246,39 @@ function parseLedgerLines(raw: string): ReadLedgerDiagnostics {
         duplicates.push({ wakeId: entry.wakeId, firstLine, duplicateLine: lineNo });
       }
       entries.push(entry);
-    } catch (err) {
-      invalid.push({ line: index + 1, error: (err as Error).message });
+    } else {
+      invalid.push({ line: lineNo, error: lenientError ?? 'invalid ledger entry' });
     }
   });
-  return { entries, invalid, duplicates };
+
+  return { entries, invalid, duplicates, firstWins, identityMismatches };
+}
+
+/** Push a {@link LedgerIdentityMismatch} for every `wake:` evidence reference on
+ *  a raw parsed ledger object that names an id other than its own top-level
+ *  wakeId (issue #139). No-op on non-objects or entries without a string
+ *  wakeId. */
+function collectIdentityMismatch(
+  obj: unknown,
+  lineNo: number,
+  out: LedgerIdentityMismatch[],
+): void {
+  if (!obj || typeof obj !== 'object') return;
+  const entryWakeId = (obj as { wakeId?: unknown }).wakeId;
+  if (typeof entryWakeId !== 'string') return;
+  const completion = (obj as { completion?: unknown }).completion;
+  const refs = completion && typeof completion === 'object'
+    ? (completion as { evidenceRefs?: unknown }).evidenceRefs
+    : undefined;
+  if (!Array.isArray(refs)) return;
+  const seen = new Set<string>();
+  for (const ref of refs) {
+    if (typeof ref !== 'string' || !ref.startsWith('wake:')) continue;
+    const referencedWakeId = ref.slice('wake:'.length);
+    if (!referencedWakeId || referencedWakeId === entryWakeId || seen.has(referencedWakeId)) continue;
+    seen.add(referencedWakeId);
+    out.push({ line: lineNo, entryWakeId, referencedWakeId });
+  }
 }
 
 function isENOENT(err: unknown): boolean {

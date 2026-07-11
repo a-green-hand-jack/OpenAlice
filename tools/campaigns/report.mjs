@@ -40,6 +40,13 @@ const knownModelCost = (r) => {
 };
 const knownNetPnl = (r) => (knownModelCost(r) === null ? null : r.net?.netPnL ?? null);
 const weeksLabel = (n) => `${n} ${n === 1 ? 'week' : 'weeks'}`;
+// Issue #134: an audit-invalid (`trustworthy === false`) run must NEVER render
+// as a bare PASS/FAIL. Surface the ledger-audit failure prominently instead so
+// no reader mistakes it for a normal result. Older results (no `trustworthy`
+// field) render normally.
+const verdictCell = (r) => (r.trustworthy === false
+  ? `⚠ AUDIT-INVALID (${r.verdict.pass ? 'reported PASS' : 'reported FAIL'})`
+  : (r.verdict.pass ? 'PASS' : 'FAIL'));
 
 function loadResult(runDir) {
   const p = join(resolve(runDir), 'result.json');
@@ -68,7 +75,7 @@ function render(results) {
     const maxGuarded = m.maxGuardedLongReturn == null
       ? 'n/a'
       : `${pct(m.maxGuardedLongReturn)}${m.maxGuardedLongEntryWeek ? ` (wk${m.maxGuardedLongEntryWeek})` : ''}`;
-    L.push(`| ${r.runId} | ${r.cell.regime} | ${pct(m.totalReturn)} | ${pct(m.buyHoldReturn)} | ${maxGuarded} | ${pct(m.agentMaxDD)} | ${pct(m.buyHoldMaxDD)} | ${pct(m.h1CaptureVsBuyHold)} | ${pct(m.h2DrawdownVsBuyHold)} | ${usd(knownModelCost(r))} | ${money(knownNetPnl(r))} | ${r.verdict.pass ? 'PASS' : 'FAIL'} |`);
+    L.push(`| ${r.runId} | ${r.cell.regime} | ${pct(m.totalReturn)} | ${pct(m.buyHoldReturn)} | ${maxGuarded} | ${pct(m.agentMaxDD)} | ${pct(m.buyHoldMaxDD)} | ${pct(m.h1CaptureVsBuyHold)} | ${pct(m.h2DrawdownVsBuyHold)} | ${usd(knownModelCost(r))} | ${money(knownNetPnl(r))} | ${verdictCell(r)} |`);
   }
   L.push('');
   L.push('Verdict rules (§4.6, regime-aware): ' + [...new Set(results.map((r) => `${r.cell.regime} → ${r.verdict.rule}`))].join('; ') + '.');
@@ -100,7 +107,7 @@ function render(results) {
     const m = r.metrics;
     L.push(`### ${r.runId} — ${r.cell.regime} (${r.cell.codename})`);
     L.push('');
-    L.push(`- **Outcome**: gross PnL ${money(m.grossPnL)} (${pct(m.totalReturn)}), agent maxDD ${pct(m.agentMaxDD)}; buy-hold ${pct(m.buyHoldReturn)} / maxDD ${pct(m.buyHoldMaxDD)}. Verdict **${r.verdict.pass ? 'PASS' : 'FAIL'}** (${r.verdict.rule}).`);
+    L.push(`- **Outcome**: gross PnL ${money(m.grossPnL)} (${pct(m.totalReturn)}), agent maxDD ${pct(m.agentMaxDD)}; buy-hold ${pct(m.buyHoldReturn)} / maxDD ${pct(m.buyHoldMaxDD)}. Verdict **${verdictCell(r)}** (${r.verdict.rule}).`);
     if (m.maxGuardedLongReturn != null) {
       L.push(`- **Feasibility**: max guarded weekly long ${pct(m.maxGuardedLongReturn)} from wk${m.maxGuardedLongEntryWeek ?? '?'} at ${m.maxGuardedLongShares ?? '?'} shares under max-position guard ${r.account?.guards?.maxPositionPct ?? '?'}%.`);
     }

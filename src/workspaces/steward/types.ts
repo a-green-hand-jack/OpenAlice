@@ -11,6 +11,22 @@ export const DECISION_LEDGER_SCHEMA_VERSION = 2;
 export const DECISION_LEDGER_SCHEMA_VERSION_V1 = 1;
 export const STEWARD_LOCK_SCHEMA_VERSION = 1;
 export const STEWARD_STATE_SCHEMA_VERSION = 1;
+/** Current ledger-receipt version (issue #134). A receipt is a corruption-evident
+ *  marker, captured the FIRST time the supervisor drove a ledger-backed wake to
+ *  a terminal state, that lets every later tick detect if that wake's
+ *  first-wins ledger entry later disappears or is mutated. It is not
+ *  tamper-proof: receipt, wake record, and ledger share one agent-writable
+ *  trust domain, so it detects accidental integrity drift, not a coordinated
+ *  rewrite. */
+export const STEWARD_LEDGER_RECEIPT_SCHEMA_VERSION = 1;
+/** Current ledger-integrity marker version (issue #134). Persisted on the wake
+ *  the first time a violation is detected so the supervisor appends a given
+ *  (kind, fingerprints) violation event exactly once instead of every tick. */
+export const STEWARD_LEDGER_INTEGRITY_SCHEMA_VERSION = 1;
+/** Current finalization-marker version (issue #136). The generated validator
+ *  writes one per wake AFTER all checks pass; it is the commit point the
+ *  supervisor waits for before terminalizing a marker-protocol wake. */
+export const STEWARD_FINALIZE_MARKER_SCHEMA_VERSION = 1;
 
 export const stewardWakeReasonSchema = z.enum([
   'scheduled_observe',
@@ -70,6 +86,83 @@ export const stewardWakeAttributionSchema = z.object({
 }).passthrough();
 export type StewardWakeAttribution = z.infer<typeof stewardWakeAttributionSchema>;
 
+// Ledger-integrity receipt (issue #134). Captured the FIRST time the supervisor
+// reconciles a wake to a ledger-backed terminal state (done|blocked|error), and
+// then treated as append-once. `fingerprint` is the canonical SEMANTIC SHA-256
+// of the first-wins ledger entry (see ledger-receipt.ts) — format/whitespace-
+// and unknown-key-invariant, so a benign reformat never trips a false alarm, but
+// a semantic edit or a vanished line does. Later ticks and the generated
+// validator compare the current first-wins entry against this receipt to detect
+// history that was corrupted (deleted/rewritten). `bootstrapped` marks a receipt
+// back-filled from a pre-#134 terminal wake's current entry — an honest
+// limitation: detection starts there, the current entry is trusted once.
+//
+// Scope: corruption-evident, NOT tamper-proof — receipt/wake/ledger share one
+// agent-writable trust domain.
+export const stewardLedgerReceiptSchema = z.object({
+  version: z.literal(STEWARD_LEDGER_RECEIPT_SCHEMA_VERSION),
+  wakeId: z.string().min(1),
+  status: stewardLedgerStatusSchema,
+  decision: stewardDecisionSchema,
+  at: z.string().min(1),
+  accountId: z.string().min(1),
+  fingerprint: z.string().min(1),
+  recordedAt: z.string().min(1),
+  bootstrapped: z.boolean().optional(),
+}).passthrough();
+export type StewardLedgerReceipt = z.infer<typeof stewardLedgerReceiptSchema>;
+
+export const stewardLedgerIntegrityKindSchema = z.enum([
+  'entry_missing',
+  'entry_mutated',
+  'entry_missing_no_receipt',
+  // Issue #139: an ACTIVE (not-yet-terminal) wake has a ledger entry filed under
+  // a different top-level wakeId whose evidence self-references this wake. Unlike
+  // the others this is pre-terminal and non-fatal — it's surfaced so the same
+  // wake can be corrected instead of silently timing out.
+  'active_identity_mismatch',
+]);
+export type StewardLedgerIntegrityKind = z.infer<typeof stewardLedgerIntegrityKindSchema>;
+
+// Persisted integrity-violation marker (issue #134). Written on the wake the
+// first time a violation of a given (kind, expected/actual fingerprint) is seen,
+// so the supervisor emits that structured event ONCE rather than re-appending it
+// every tick (bounding supervisor.jsonl growth). Cleared — with a
+// `ledger_integrity_recovered` event — if a later tick finds the entry restored.
+export const stewardLedgerIntegritySchema = z.object({
+  version: z.literal(STEWARD_LEDGER_INTEGRITY_SCHEMA_VERSION),
+  kind: stewardLedgerIntegrityKindSchema,
+  expectedFingerprint: z.string().min(1).optional(),
+  actualFingerprint: z.string().min(1).optional(),
+  // Issue #139: for an `active_identity_mismatch`, the WRONG top-level wakeId the
+  // completion was filed under (the dedup key for that event).
+  misfiledUnderWakeId: z.string().min(1).optional(),
+  firstDetectedAt: z.string().min(1),
+}).passthrough();
+export type StewardLedgerIntegrity = z.infer<typeof stewardLedgerIntegritySchema>;
+
+// Finalization marker (issue #136 finalize barrier). Written atomically by the
+// generated validate-ledger.mjs ONLY after the current wake's entry passes the
+// full schema + duplicate + prior-terminal-completeness checks. `fingerprint`
+// is the canonical semantic fingerprint (see ledger-receipt.ts) of the entry
+// that was validated. The supervisor terminalizes a marker-protocol wake only
+// when a matching parseable first-wins entry AND a marker with this exact
+// fingerprint both exist — so an allowed same-wake correction made AFTER a
+// draft validated does not terminalize until the corrected line is re-validated
+// (which atomically replaces this marker). Read lenient (unknown keys allowed).
+export const stewardFinalizeMarkerSchema = z.object({
+  version: z.literal(STEWARD_FINALIZE_MARKER_SCHEMA_VERSION),
+  wakeId: z.string().min(1),
+  fingerprint: z.string().min(1),
+  validatedAt: z.string().min(1),
+  schemaVersion: z.coerce.number().int().optional(),
+}).passthrough();
+export type StewardFinalizeMarker = z.infer<typeof stewardFinalizeMarkerSchema>;
+
+export function parseStewardFinalizeMarker(value: unknown): StewardFinalizeMarker {
+  return stewardFinalizeMarkerSchema.parse(value);
+}
+
 export const stewardWakeRecordSchema = z.object({
   version: z.literal(WAKE_SCHEMA_VERSION),
   wakeId: z.string().min(1),
@@ -83,6 +176,15 @@ export const stewardWakeRecordSchema = z.object({
   envelope: stewardWakeEnvelopeSchema,
   error: z.string().min(1).optional(),
   attribution: stewardWakeAttributionSchema.optional(),
+  ledgerReceipt: stewardLedgerReceiptSchema.optional(),
+  ledgerIntegrity: stewardLedgerIntegritySchema.optional(),
+  // Finalize barrier (issue #136). New wakes are created with 'marker', so the
+  // supervisor terminalizes them only after the generated validator publishes a
+  // matching finalization marker (validation is the commit point). Absent on
+  // wakes created before this shipped — a BOUNDED compatibility rule: those
+  // legacy in-flight wakes still terminalize from raw ledger presence, but every
+  // NEW wake requires the marker (see supervisor.ts requiresFinalizeMarker).
+  finalizeProtocol: z.literal('marker').optional(),
 }).passthrough();
 export type StewardWakeRecord = z.infer<typeof stewardWakeRecordSchema>;
 
@@ -253,8 +355,16 @@ const decisionLedgerCommonShape = {
   cost: stewardCostSchema,
 };
 
-/** STRICT v2 entry — the only shape ever written. */
-export const stewardDecisionLedgerEntryV2Schema = z.object({
+/**
+ * STRUCTURAL v2 entry (issue #125 D1/D2): typed discriminated `actions` +
+ * strict-pending `pendingHash`. This is the LENIENT-READ shape — it does NOT
+ * enforce the issue #139 evidence self-reference, so a pre-#139 v2 history line
+ * (written before that rule existed, with no `wake:<self>` ref) still READS as a
+ * valid entry. Read-lenient / write-strict (issue #125): reconciliation, cost
+ * aggregation, and history all go through this; the strict schema below is the
+ * only shape ever WRITTEN.
+ */
+export const stewardDecisionLedgerEntryV2StructuralSchema = z.object({
   version: z.literal(DECISION_LEDGER_SCHEMA_VERSION),
   ...decisionLedgerCommonShape,
   actions: z.array(stewardLedgerActionSchema),
@@ -268,6 +378,40 @@ export const stewardDecisionLedgerEntryV2Schema = z.object({
     });
   }
 });
+
+/**
+ * STRICT v2 entry — the ONLY shape ever WRITTEN (`ledgerStore.append`) and the
+ * commit/terminal contract the generated validator mirrors. Adds the issue #139
+ * self-consistency rule on top of the structural schema: the entry must carry
+ * exactly the `wake:<its own wakeId>` evidence self-reference and no `wake:`
+ * reference to any OTHER id. The `wake:` namespace is reserved for this single
+ * self-reference — cite a prior wake via `ledger:previous`, never `wake:<other>`.
+ * A steward was observed copying a PRIOR wake's UUID suffix into the top-level
+ * wakeId while its evidence still referenced the active wake — a contradictory
+ * entry that finalized a phantom id (issue #139). This rule is write-strict
+ * only; the lenient structural schema above still reads pre-#139 history.
+ */
+export const stewardDecisionLedgerEntryV2Schema = stewardDecisionLedgerEntryV2StructuralSchema
+  .superRefine((entry, ctx) => {
+    const wakeRefs = entry.completion.evidenceRefs
+      .filter((ref) => typeof ref === 'string' && ref.startsWith('wake:'))
+      .map((ref) => ref.slice('wake:'.length));
+    if (!wakeRefs.includes(entry.wakeId)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['completion', 'evidenceRefs'],
+        message: `completion.evidenceRefs must include the self-reference "wake:${entry.wakeId}" matching the entry's top-level wakeId`,
+      });
+    }
+    const contradictory = [...new Set(wakeRefs.filter((id) => id !== entry.wakeId))];
+    if (contradictory.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['completion', 'evidenceRefs'],
+        message: `completion.evidenceRefs references a different wake (${contradictory.join(', ')}) than the entry's top-level wakeId (${entry.wakeId}); a copied or contradictory wake id is invalid`,
+      });
+    }
+  });
 export type StewardDecisionLedgerEntryV2 = z.infer<typeof stewardDecisionLedgerEntryV2Schema>;
 
 /** LEGACY v1 entry — read-only, for pre-#125 history. `actions` stay
@@ -279,10 +423,14 @@ export const stewardDecisionLedgerEntryV1Schema = z.object({
 }).passthrough();
 export type StewardDecisionLedgerEntryV1 = z.infer<typeof stewardDecisionLedgerEntryV1Schema>;
 
-/** Lenient read schema: strict v2, or legacy v1 history. Version literals are
- *  mutually exclusive, so the union is unambiguous. */
+/** LENIENT read schema (issue #125): STRUCTURAL v2 (no #139 self-ref
+ *  requirement), or legacy v1 history. Version literals are mutually exclusive,
+ *  so the union is unambiguous. The strict #139 self-reference rule is enforced
+ *  on the WRITE path (`parseStewardDecisionLedgerEntry`) and by the generated
+ *  validator + the active-wake finalize gate — a lenient-readable pre-#139 v2
+ *  line still cannot finalize an active wake without a strict-validated marker. */
 export const stewardDecisionLedgerEntrySchema = z.union([
-  stewardDecisionLedgerEntryV2Schema,
+  stewardDecisionLedgerEntryV2StructuralSchema,
   stewardDecisionLedgerEntryV1Schema,
 ]);
 export type StewardDecisionLedgerEntry = z.infer<typeof stewardDecisionLedgerEntrySchema>;

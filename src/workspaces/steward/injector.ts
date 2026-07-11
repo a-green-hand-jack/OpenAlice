@@ -1,6 +1,6 @@
 import type { SessionPool } from '../session-pool.js';
 import type { StewardWakeRecord } from './types.js';
-import { STEWARD_LEDGER_REL, STEWARD_WAKES_REL, stewardWakeFilename } from './paths.js';
+import { STEWARD_DRAFTS_REL, STEWARD_LEDGER_REL, STEWARD_WAKES_REL, stewardWakeFilename } from './paths.js';
 
 export function formatStewardWakeMessage(record: StewardWakeRecord): string {
   const wakePath = `${STEWARD_WAKES_REL}/${stewardWakeFilename(record.wakeId)}`;
@@ -8,8 +8,8 @@ export function formatStewardWakeMessage(record: StewardWakeRecord): string {
     `<STEWARD_WAKE id="${escapeAttr(record.wakeId)}" deadline="${escapeAttr(record.deadline)}">`,
     `Read ${wakePath}.`,
     'Run the fixed UTA checklist: account, positions, orders, risk, market, and history.',
-    `Append exactly one JSON object to ${STEWARD_LEDGER_REL}.`,
-    'The ledger entry must include decision, completion.reason, evidenceRefs, checklist, and cost fields.',
+    `Write one decision JSON object to ${STEWARD_DRAFTS_REL}/${stewardWakeFilename(record.wakeId)} with your Write/Edit tool (NEVER edit ${STEWARD_LEDGER_REL}), then run: node .alice/steward/validate-ledger.mjs ${record.wakeId}`,
+    'The decision must include top-level wakeId (this wake), decision, completion.reason, completion.evidenceRefs (with a wake:<this wakeId> self-reference), checklist, and cost. Validation commits it and is the only supported ledger writer.',
     'Do not inspect OpenAlice source. Do not call push.',
     '</STEWARD_WAKE>',
     '',

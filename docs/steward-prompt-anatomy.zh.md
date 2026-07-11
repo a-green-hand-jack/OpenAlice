@@ -32,6 +32,33 @@
 
 > **v3 落地状态（2026-07-08）**：`docs/steward-p3-campaign.zh.md` §4.7 记录的压测发现——v2 修好了 H1，但带来一个有界的 over-participation 代价（`sp-bear-smci` 深熊误读为可参与，两批皆 FAIL）——maintainer 拍板「硬 guards（#97）+ prompt v3 两者都上」。本次改动落地的是 prompt v3 半边：把 v2 substance + 反过度参与方向一并写入真正的仓库内模板。**尚未用新一轮 campaign 复测**（确认 smci 类场景被兜住、且 bull H1 不回落）——回归验证是下一步，不在本次改动范围内。
 
+> **v8 完成协议 #136 增补（2026-07-11，finalize barrier）**：`files/instruction.md`
+> Wake Loop 完成步骤新增一句——「**运行 validator 才是提交点**」。此前 prompt 只说
+> 「写完 ledger 跑 validate-ledger，失败就改」，隐含允许「写→立即被 supervisor 终态化→
+> 再原地更正」，与 #134 的终态后 mutation 检测相撞（见 issue #136 canary）。#136 起：
+> supervisor 只在 validator 发布的 finalization marker 指纹与当前行一致时才终态化；因此
+> prompt 明确要求**对 ledger 行的任何后续编辑都必须重跑 validator**，否则 marker 与行不符、
+> wake 不会完成。属完成协议澄清（不改记账字段语义），代码半边（marker + 屏障）见
+> `docs/steward-persistent-loop-implementation.zh.md` §7 的 #136 段。
+
+> **v8 完成协议 #139 增补（2026-07-11，wakeId 身份诚实）**：`files/instruction.md`
+> ledger 写入步骤新增——顶层 `wakeId` 必须逐字复制**本次** wake 的 id，**禁止**复用/手抄
+> 前一个 wake 的 id（canary 里 steward 把前一 wake 的 UUID 尾段抄进了顶层 wakeId）；
+> `completion.evidenceRefs` 的 `wake:<id>` 自引用必须与顶层 wakeId 完全一致，否则验证失败；
+> 并用该精确 id 运行 validator。属完成协议澄清（防止 entry 冒充另一个 wake），代码半边
+> （schema 自洽 + validator 外部绑定 active wake + supervisor actionable mismatch 事件）见
+> `docs/steward-persistent-loop-implementation.zh.md` §7 的 #139 段。
+
+> **v8 完成协议 #140 增补（2026-07-11，draft 写、validator 提交）**：`files/instruction.md`
+> 完成步骤从「用 Write/Edit 直接把一行 JSON 追加进 `decisions.jsonl`」改为「把决策对象写到
+> `drafts/<wakeId>.json`，再运行 validator 提交」。因为 agent 的 native Write/Edit 对
+> decisions.jsonl 做 truncate+rewrite，其半写窗口被 supervisor 采样成假 `entry_missing`
+> （issue #140 的 v8matrix6 canary）。#140 起 validator 是 decisions.jsonl 的唯一受支持
+> writer（原子 append/原位 replace + finalize marker）；**agent 绝不直接编辑 ledger，手改
+> 仍按 corruption 论处**。属完成协议的写路径变更（Wake Loop step 6→7），代码半边（drafts +
+> 原子锁写 + 生成 validator 重写）见 `docs/steward-persistent-loop-implementation.zh.md` §7
+> 的 #140 段。
+
 > **真源约定**：实验提示词按不变量 I6 存于 orchestrator 侧（scratchpad，不入 `src/`）。
 > 为可复现/可审计，其**受版本管理的真源是本文件**（§5 全文）；scratchpad 的 `.mjs`
 > 是**可运行副本，须与本文件登记的文本逐字一致**。两者不一致时以本文件为准。
