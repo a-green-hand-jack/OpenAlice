@@ -52,10 +52,18 @@ function probeCodexVersion(bin: string): Promise<string | null> {
   const probe = new Promise<string | null>((resolve) => {
     try {
       const child = spawn(bin, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'] });
+      // A hung binary must not pin the event loop or leave the cached promise
+      // pending forever — kill after a bound and settle null (warn-only path).
+      const timer = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch { /* already gone */ }
+        resolve(null);
+      }, 5000);
+      timer.unref();
+      child.unref();
       let out = '';
       child.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString('utf8'); });
-      child.on('error', () => resolve(null));
-      child.on('close', () => resolve(parseCodexVersionOutput(out)));
+      child.on('error', () => { clearTimeout(timer); resolve(null); });
+      child.on('close', () => { clearTimeout(timer); resolve(parseCodexVersionOutput(out)); });
     } catch {
       resolve(null);
     }

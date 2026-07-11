@@ -74,7 +74,11 @@ export type StewardControlFace = z.infer<typeof stewardControlFaceSchema>;
 export const stewardConfigSchema = z.object({
   version: z.number().optional(),
   agent: z.string().optional(),
-  sessionId: z.string().optional(),
+  // Bootstrap writes `sessionId: null` and the machine face never rewrites it
+  // (machine thread ids live in the thread-store, not config.json) — null must
+  // parse as valid or this warning fires on every default machine-face
+  // workspace, every wake and every supervisor tick.
+  sessionId: z.string().nullable().optional(),
   controlFace: stewardControlFaceSchema.optional(),
   sessionRotation: z.object({
     threshold: z.number().optional(),

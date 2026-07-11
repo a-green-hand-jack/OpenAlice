@@ -50,6 +50,28 @@ describe('readStewardConfig load-time validation (issue #153)', () => {
     expect(warnings).toEqual([]);
   });
 
+  it('the EXACT bootstrap-written config (sessionId/accountId null) never warns — regression for the review MAJOR', async () => {
+    // Mirror of the `config` object in templates/steward/bootstrap.mjs. If the
+    // schema ever drifts from what bootstrap actually persists, it must fail
+    // here — not as a per-tick warning flood in production.
+    await writeConfig(JSON.stringify({
+      version: 1,
+      agent: 'codex',
+      sessionId: null,
+      accountId: null,
+      monthlyBudget: { modelUsd: 200, serverUsd: 50 },
+      costPolicy: { warnAtPct: 80, blockAtPct: 100 },
+    }));
+    const warnings: { message: string; detail: Record<string, unknown> }[] = [];
+    const config = await readStewardConfig(
+      { dir },
+      { onWarn: (message, detail) => warnings.push({ message, detail }) },
+    );
+
+    expect(config['sessionId']).toBeNull();
+    expect(warnings).toEqual([]);
+  });
+
   it('a bad controlFace value fires ONE warning naming the key and value, and the raw value is still returned unchanged for the S6 fail-safe', async () => {
     await writeConfig(JSON.stringify({ controlFace: 'PTY' }));
     const warnings: { message: string; detail: Record<string, unknown> }[] = [];
