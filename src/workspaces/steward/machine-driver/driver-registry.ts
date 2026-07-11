@@ -34,10 +34,14 @@ export class MachineDriverRegistry {
     await driver.dispose();
   }
 
-  /** Dispose every driver and clear the registry (process shutdown). */
+  /**
+   * Dispose every driver and clear the registry (process shutdown).
+   * allSettled, not all: one rejecting driver must not strand the teardown
+   * that runs after this call (pool, transcript watcher, process lock).
+   */
   async disposeAll(): Promise<void> {
     const drivers = [...this.drivers.values()];
     this.drivers.clear();
-    await Promise.all(drivers.map((driver) => driver.dispose()));
+    await Promise.allSettled(drivers.map((driver) => driver.dispose()));
   }
 }

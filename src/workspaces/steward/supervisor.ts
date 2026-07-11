@@ -667,10 +667,9 @@ function controlFaceVanished(
   opts: StewardSupervisorTickOptions,
 ): boolean {
   if (!wake.sessionId) return false;
-  if (wake.controlFace === 'machine') {
-    return opts.isMachineThreadLive !== undefined && !opts.isMachineThreadLive(wake.sessionId);
-  }
-  return opts.isSessionRunning !== undefined && !opts.isSessionRunning(wake.sessionId);
+  const probe = wake.controlFace === 'machine' ? opts.isMachineThreadLive : opts.isSessionRunning;
+  if (!probe) return false;
+  return !probe(wake.sessionId);
 }
 
 /**

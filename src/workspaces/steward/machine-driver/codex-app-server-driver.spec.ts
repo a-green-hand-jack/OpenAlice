@@ -392,10 +392,21 @@ describe('CodexAppServerDriver', () => {
     const driver = makeDriver(server);
     const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch' });
 
-    const pending = driver.runTurn(threadId, 'x');
-    await flush(); // turn/start sent, response never arrives
-    await driver.dispose();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const pending = driver.runTurn(threadId, 'x');
+      await flush(); // turn/start sent, response never arrives
+      await driver.dispose();
 
-    await expect(pending).rejects.toBeInstanceOf(MachineDriverProtocolError);
+      await expect(pending).rejects.toBeInstanceOf(MachineDriverProtocolError);
+      await flush(); // give an orphaned rejection a tick to surface
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 });
