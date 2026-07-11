@@ -72,6 +72,17 @@
 > 原子锁写 + 生成 validator 重写）见 `docs/steward-persistent-loop-implementation.zh.md` §7
 > 的 #140 段。
 
+> **D1 决策契约批准（2026-07-11，registry 预告——非 prompt 变更，不占版本号）**：
+> steward-plan v2.3 批准了 [steward-decision-contracts.zh.md](steward-decision-contracts.zh.md)
+> （issue #156，PR #157）：ledger 契约将升 **v3**——decision 枚举
+> `propose_trade → propose_change` 并新增 `reduce_risk`、新增结构化 `intent` 块（方向/目标
+> 暴露区间/信心/最大可接受损失/结构化 invalidation/期限/snapshotId）与顶层
+> `thesisDispositions`（open-thesis 表态）。落地时 `files/instruction.md` 的 Decision Ledger
+> Shape 与 Wake Loop 契约段需要 v8-RUNTIME 之后的下一个 ledger-contract 版本条目，**按本文
+> 纪律先登记后改动**；在 D2 runtime 获授权前，本预告不激活任何 prompt 变更。同日落地的
+> #146 控制面迁移（PR #147–#151）与四项加固（PR #158/#159）均为 runtime/harness 半边，
+> 零 prompt 组件变更（与 #132 harness 半边同一处理惯例）。
+>
 > **真源约定**：实验提示词按不变量 I6 存于 orchestrator 侧（scratchpad，不入 `src/`）。
 > 为可复现/可审计，其**受版本管理的真源是本文件**（§5 全文）；scratchpad 的 `.mjs`
 > 是**可运行副本，须与本文件登记的文本逐字一致**。两者不一致时以本文件为准。
