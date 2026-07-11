@@ -23,6 +23,7 @@
  */
 
 import type { ContextTelemetry } from '../cli-adapter.js';
+import type { ThreadTelemetry } from './machine-driver/types.js';
 import type { IInboxStore } from '../../core/inbox-store.js';
 import type { Logger } from '../logger.js';
 import type { WorkspaceMeta, WorkspaceRegistry } from '../workspace-registry.js';
@@ -52,6 +53,12 @@ export interface StewardSupervisorTickDeps {
    *  #132). Forwarded straight to `StewardSupervisor.tick`; optional so callers
    *  without an adapter wired just skip attribution. */
   readonly readContextTelemetry?: (sessionId: string) => Promise<ContextTelemetry | null>;
+  /** Machine control-face liveness probe (issue #146) — forwarded straight to
+   *  `StewardSupervisor.tick`. Optional; absent for PTY-only callers. */
+  readonly isMachineThreadLive?: (threadId: string) => boolean;
+  /** Machine control-face telemetry reader (issue #146) — forwarded straight to
+   *  `StewardSupervisor.tick` for timeout attribution. Optional. */
+  readonly readMachineTelemetry?: (threadId: string) => ThreadTelemetry | null;
   /** Push surface for the "wake went stuck" proactive notification. Optional
    *  so callers without an Inbox wired (tests, satellite embedders) just skip
    *  the push. */
@@ -78,6 +85,8 @@ export async function runStewardSupervisorTick(
     ...(deps.now !== undefined ? { now: deps.now } : {}),
     isSessionRunning: deps.isSessionRunning,
     ...(deps.readContextTelemetry ? { readContextTelemetry: deps.readContextTelemetry } : {}),
+    ...(deps.isMachineThreadLive ? { isMachineThreadLive: deps.isMachineThreadLive } : {}),
+    ...(deps.readMachineTelemetry ? { readMachineTelemetry: deps.readMachineTelemetry } : {}),
     config: {
       monthlyBudget: asRecord(deps.config['monthlyBudget']),
       costPolicy: asRecord(deps.config['costPolicy']),
@@ -133,6 +142,12 @@ export interface StewardSupervisorScannerDeps {
     ws: WorkspaceMeta,
     sessionId: string,
   ) => Promise<ContextTelemetry | null>;
+  /** Resolve the machine-thread liveness probe for a workspace (issue #146) —
+   *  the composition root binds this to the workspace's `MachineDriverRegistry`
+   *  entry. Optional so PTY-only embedders skip it. */
+  readonly isMachineThreadLive?: (ws: WorkspaceMeta, threadId: string) => boolean;
+  /** Resolve the machine-thread telemetry reader for a workspace (issue #146). */
+  readonly readMachineTelemetry?: (ws: WorkspaceMeta, threadId: string) => ThreadTelemetry | null;
   readonly logger: Logger;
   /** Injectable clock for tests - epoch ms, same convention as
    *  `ScheduleScanner`. */
@@ -209,12 +224,20 @@ export class StewardSupervisorScanner {
     try {
       const config = await readStewardConfig(ws);
       const readContextTelemetry = this.deps.readContextTelemetry;
+      const isMachineThreadLive = this.deps.isMachineThreadLive;
+      const readMachineTelemetry = this.deps.readMachineTelemetry;
       await runStewardSupervisorTick(ws, {
         config,
         now: new Date(this.now()).toISOString(),
         isSessionRunning: (sessionId) => this.deps.pool.get(sessionId) !== undefined,
         ...(readContextTelemetry
           ? { readContextTelemetry: (sessionId: string) => readContextTelemetry(ws, sessionId) }
+          : {}),
+        ...(isMachineThreadLive
+          ? { isMachineThreadLive: (threadId: string) => isMachineThreadLive(ws, threadId) }
+          : {}),
+        ...(readMachineTelemetry
+          ? { readMachineTelemetry: (threadId: string) => readMachineTelemetry(ws, threadId) }
           : {}),
         ...(this.deps.inboxStore ? { inboxStore: this.deps.inboxStore } : {}),
         logger: this.deps.logger,

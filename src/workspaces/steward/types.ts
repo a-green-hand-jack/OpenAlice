@@ -51,6 +51,15 @@ export const stewardWakeStatusSchema = z.enum([
 ]);
 export type StewardWakeStatus = z.infer<typeof stewardWakeStatusSchema>;
 
+// Which surface drives a wake (issue #146). 'pty' is the historical control
+// face — a PTY pool session whose petname lands in `sessionId`. 'machine' is a
+// machine-protocol thread (codex app-server) whose native thread UUID lands in
+// `sessionId` instead. Absent on every pre-#146 record; those read as 'pty'
+// via the wake-record schema default, so legacy data and existing PTY wakes are
+// unchanged.
+export const stewardControlFaceSchema = z.enum(['pty', 'machine']);
+export type StewardControlFace = z.infer<typeof stewardControlFaceSchema>;
+
 export const stewardDecisionSchema = z.enum(['no_trade', 'propose_trade', 'blocked']);
 export type StewardDecision = z.infer<typeof stewardDecisionSchema>;
 
@@ -173,6 +182,11 @@ export const stewardWakeRecordSchema = z.object({
   completedAt: z.string().min(1).nullable().optional(),
   deadline: z.string().min(1),
   sessionId: z.string().min(1).nullable(),
+  // Control face (issue #146). For a 'machine' wake, `sessionId` above carries
+  // the native thread UUID (not a PTY petname). `.default('pty')` back-fills
+  // every pre-#146 record on read, so absence always means the historical PTY
+  // face — legacy data and existing wakes are bit-identical.
+  controlFace: stewardControlFaceSchema.default('pty'),
   envelope: stewardWakeEnvelopeSchema,
   error: z.string().min(1).optional(),
   attribution: stewardWakeAttributionSchema.optional(),

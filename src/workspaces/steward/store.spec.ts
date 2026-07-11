@@ -190,6 +190,58 @@ describe('StewardWakeStore', () => {
 
     expect((await store.list()).map((r) => r.wakeId)).toEqual(['wake-a', 'wake-b']);
   });
+
+  it('defaults controlFace to pty and round-trips an explicit machine face (issue #146)', async () => {
+    const store = createStewardWakeStore(dir);
+
+    // Default: an ordinary create is a PTY wake.
+    const pty = await store.create({
+      wakeId: 'wake-pty',
+      deadline: '2026-07-08T14:03:00.000Z',
+      envelope,
+      now: '2026-07-08T14:00:00.000Z',
+    });
+    expect(pty.controlFace).toBe('pty');
+
+    // Explicit machine face persists and survives a status update.
+    const machine = await store.create({
+      wakeId: 'wake-machine',
+      deadline: '2026-07-08T14:03:00.000Z',
+      envelope,
+      now: '2026-07-08T14:00:00.000Z',
+      controlFace: 'machine',
+      sessionId: 'thread-uuid-1',
+    });
+    expect(machine.controlFace).toBe('machine');
+    expect((await store.get('wake-machine'))?.controlFace).toBe('machine');
+
+    const injected = await store.updateStatus('wake-machine', 'injected', {
+      now: '2026-07-08T14:00:05.000Z',
+      injectedAt: '2026-07-08T14:00:05.000Z',
+      sessionId: 'thread-uuid-1',
+    });
+    expect(injected.controlFace).toBe('machine');
+  });
+
+  it('reads a legacy record with no controlFace field as pty (issue #146)', async () => {
+    const store = createStewardWakeStore(dir);
+    await store.create({
+      wakeId: 'wake-legacy',
+      deadline: '2026-07-08T14:03:00.000Z',
+      envelope,
+      now: '2026-07-08T14:00:00.000Z',
+    });
+
+    // Simulate a pre-#146 on-disk record: strip the field the older writer
+    // never emitted, then confirm the reader defaults it to 'pty'.
+    const path = store.pathFor('wake-legacy');
+    const raw = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+    delete raw.controlFace;
+    await writeFile(path, `${JSON.stringify(raw, null, 2)}\n`, 'utf8');
+    expect('controlFace' in raw).toBe(false);
+
+    expect((await store.get('wake-legacy'))?.controlFace).toBe('pty');
+  });
 });
 
 describe('StewardLedgerStore', () => {
@@ -1587,5 +1639,151 @@ describe('StewardSupervisor timeout attribution (issue #132)', () => {
     const wake = await createStewardWakeStore(dir).get('wake-timeout');
     expect(wake?.status).toBe('timeout');
     expect(wake?.attribution).toBeUndefined();
+  });
+});
+
+describe('StewardSupervisor machine control face (issue #146)', () => {
+  const THREAD_ID = 'thread-0199-aabb';
+
+  /** Seed an injected MACHINE wake whose `sessionId` carries the thread UUID. */
+  async function seedInjectedMachineWake(deadline: string): Promise<void> {
+    const wakeStore = createStewardWakeStore(dir);
+    const lockStore = createStewardLockStore(dir);
+    await wakeStore.create({
+      wakeId: 'wake-m',
+      deadline,
+      envelope,
+      now: '2026-07-08T14:00:00.000Z',
+      controlFace: 'machine',
+      sessionId: THREAD_ID,
+    });
+    await wakeStore.updateStatus('wake-m', 'injected', {
+      now: '2026-07-08T14:00:05.000Z',
+      injectedAt: '2026-07-08T14:00:05.000Z',
+      sessionId: THREAD_ID,
+    });
+    await lockStore.acquire({
+      accountId: envelope.accountId,
+      wakeId: 'wake-m',
+      now: '2026-07-08T14:00:00.000Z',
+      expiresAt: deadline,
+    });
+  }
+
+  it('(a) does NOT mark a machine wake stuck while its thread is live', async () => {
+    await seedInjectedMachineWake('2026-07-08T14:03:00.000Z');
+    const isMachineThreadLive = vi.fn(() => true);
+    // Provide a PTY probe that would report the session gone — it must never be
+    // consulted for a machine wake.
+    const isSessionRunning = vi.fn(() => false);
+
+    const result = await createStewardSupervisor(dir).tick({
+      now: '2026-07-08T14:01:00.000Z', // before deadline
+      isSessionRunning,
+      isMachineThreadLive,
+    });
+
+    expect(result.transitions).toHaveLength(0);
+    expect((await createStewardWakeStore(dir).get('wake-m'))?.status).toBe('injected');
+    expect(isMachineThreadLive).toHaveBeenCalledWith(THREAD_ID);
+    expect(isSessionRunning).not.toHaveBeenCalled();
+  });
+
+  it('(b) marks a machine wake stuck when the thread is gone, with PTY-parity event', async () => {
+    await seedInjectedMachineWake('2026-07-08T14:03:00.000Z');
+    const lockStore = createStewardLockStore(dir);
+
+    const result = await createStewardSupervisor(dir).tick({
+      now: '2026-07-08T14:01:00.000Z', // before deadline
+      isSessionRunning: () => true, // PTY probe would say "alive" — ignored
+      isMachineThreadLive: () => false,
+    });
+
+    // Identical transition shape to the PTY stuck test above (line ~800).
+    expect(result.transitions[0]).toMatchObject({
+      wakeId: 'wake-m',
+      from: 'injected',
+      to: 'stuck',
+      reason: 'session_not_running',
+    });
+    expect((await createStewardWakeStore(dir).get('wake-m'))?.status).toBe('stuck');
+    expect(await lockStore.get(envelope.accountId)).toBeNull();
+    // Same wake_stuck event the PTY path emits, carrying the thread UUID as its
+    // sessionId — event emission parity.
+    const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
+    expect(log).toContain('"type":"wake_stuck"');
+    expect(log).toContain(`"sessionId":"${THREAD_ID}"`);
+  });
+
+  it('(c) attributes a machine wake timeout from driver telemetry, not the PTY rollout', async () => {
+    await seedInjectedMachineWake('2026-07-08T14:03:00.000Z');
+    // A PTY rollout reader that would throw if consulted — proves the machine
+    // wake never touches it.
+    const readContextTelemetry = vi.fn(async () => {
+      throw new Error('PTY rollout must not be read for a machine wake');
+    });
+
+    const result = await createStewardSupervisor(dir).tick({
+      now: '2026-07-08T14:05:00.000Z', // past the 14:03 deadline
+      isSessionRunning: () => true,
+      isMachineThreadLive: () => true,
+      readContextTelemetry,
+      readMachineTelemetry: () => ({
+        totalTokens: 130000,
+        inputTokens: 125765,
+        cachedInputTokens: 4000,
+        outputTokens: 4235,
+        contextWindow: 121600,
+        updatedAt: '2026-07-08T14:04:30.000Z',
+      }),
+    });
+
+    expect(result.transitions[0]).toMatchObject({ wakeId: 'wake-m', to: 'timeout' });
+    const wake = await createStewardWakeStore(dir).get('wake-m');
+    expect(wake?.status).toBe('timeout');
+    expect(wake?.attribution).toEqual({
+      kind: 'context_overflow',
+      inputTokens: 125765,
+      modelContextWindow: 121600,
+    });
+    expect(readContextTelemetry).not.toHaveBeenCalled();
+    const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
+    expect(log).toContain('"attribution":"context_overflow"');
+  });
+
+  it('(d) a PTY wake never consults the machine liveness probe', async () => {
+    const wakeStore = createStewardWakeStore(dir);
+    const lockStore = createStewardLockStore(dir);
+    await wakeStore.create({
+      wakeId: 'wake-pty',
+      deadline: '2026-07-08T14:03:00.000Z',
+      envelope,
+      now: '2026-07-08T14:00:00.000Z',
+    });
+    await wakeStore.updateStatus('wake-pty', 'injected', {
+      now: '2026-07-08T14:00:05.000Z',
+      injectedAt: '2026-07-08T14:00:05.000Z',
+      sessionId: 'pty-session-1',
+    });
+    await lockStore.acquire({
+      accountId: envelope.accountId,
+      wakeId: 'wake-pty',
+      now: '2026-07-08T14:00:00.000Z',
+      expiresAt: '2026-07-08T14:03:00.000Z',
+    });
+    const isMachineThreadLive = vi.fn(() => true);
+
+    const result = await createStewardSupervisor(dir).tick({
+      now: '2026-07-08T14:01:00.000Z', // before deadline
+      isSessionRunning: () => false, // PTY session gone -> stuck via the old path
+      isMachineThreadLive,
+    });
+
+    expect(result.transitions[0]).toMatchObject({
+      wakeId: 'wake-pty',
+      to: 'stuck',
+      reason: 'session_not_running',
+    });
+    expect(isMachineThreadLive).not.toHaveBeenCalled();
   });
 });

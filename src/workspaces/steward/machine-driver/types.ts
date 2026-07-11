@@ -8,6 +8,8 @@
 
 import type { Writable, Readable } from 'node:stream';
 
+import { z } from 'zod';
+
 /** codex app-server sandbox modes (mirrors the `SandboxMode` schema enum). */
 export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 
@@ -111,6 +113,33 @@ export class MachineDriverProtocolError extends Error {
     super(message, options);
     this.name = 'MachineDriverProtocolError';
   }
+}
+
+// --- Persisted control-face thread state (issue #146) -------------------
+//
+// One record per workspace at `.alice/steward/machine-thread.json`
+// (`MachineThreadStore`). It carries just enough to RESUME the same native
+// thread on the next wake — the provider + thread id (S0 proved resume needs
+// only the id), the model the thread was started with, and coarse timestamps.
+// Read lenient: a missing OR corrupt file is always a valid state (absence =
+// "no thread yet"), so nothing here can break a workspace that has never run a
+// machine wake. NOT `data/config/` state, so no migration framework applies.
+export const MACHINE_THREAD_SCHEMA_VERSION = 1;
+
+export const machineThreadStateSchema = z.object({
+  version: z.literal(MACHINE_THREAD_SCHEMA_VERSION),
+  provider: z.literal('codex'),
+  threadId: z.string().min(1),
+  model: z.string().min(1).optional(),
+  createdAt: z.string().min(1),
+  // ISO of the last turn that ran on this thread, or null when the thread was
+  // created but has not yet taken a turn.
+  lastTurnAt: z.string().min(1).nullable(),
+}).passthrough();
+export type MachineThreadState = z.infer<typeof machineThreadStateSchema>;
+
+export function parseMachineThreadState(value: unknown): MachineThreadState {
+  return machineThreadStateSchema.parse(value);
 }
 
 /**

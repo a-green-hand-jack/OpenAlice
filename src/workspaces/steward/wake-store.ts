@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import {
   WAKE_SCHEMA_VERSION,
   parseStewardWakeRecord,
+  type StewardControlFace,
   type StewardLedgerIntegrity,
   type StewardLedgerReceipt,
   type StewardWakeAttribution,
@@ -19,6 +20,9 @@ export interface CreateWakeInput {
   readonly envelope: StewardWakeEnvelope;
   readonly now?: string;
   readonly sessionId?: string | null;
+  /** Which surface drives the wake (issue #146). Defaults to 'pty' — the
+   *  historical control face — so existing callers are unchanged. */
+  readonly controlFace?: StewardControlFace;
 }
 
 export interface WakeStatusPatch {
@@ -63,6 +67,7 @@ export class StewardWakeStore {
       injectedAt: null,
       deadline: input.deadline,
       sessionId: input.sessionId ?? null,
+      controlFace: input.controlFace ?? 'pty',
       envelope: input.envelope,
       // Issue #136: every new wake uses the finalize barrier — the supervisor
       // terminalizes it only after the validator publishes a matching marker.

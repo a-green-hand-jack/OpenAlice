@@ -87,6 +87,7 @@ import {
   StewardLockConflictError,
   StewardSupervisorScanner,
 } from './steward/index.js';
+import { MachineDriverRegistry } from './steward/machine-driver/driver-registry.js';
 
 /**
  * The fully-resolved spawn plan for a (workspace, adapter, resume-intent)
@@ -660,6 +661,13 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     return { taskId: rec.taskId };
   };
 
+  // Machine control-face driver registry (issue #146). In-memory, one driver
+  // per workspace; EMPTY until S3's dispatcher populates it via getOrCreate.
+  // The supervisor scanner reads it for machine-wake liveness + telemetry — an
+  // empty registry resolves not-live / null, which is exactly correct pre-S3.
+  // Torn down in `dispose()` below.
+  const machineDriverRegistry = new MachineDriverRegistry();
+
   const dispatchStewardWakeMethod = async (
     ws: WorkspaceMeta,
     wake: ScheduleStewardWakeInput,
@@ -1041,6 +1049,13 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
         ? adapter.readContextTelemetry(ws.dir, sessionId)
         : Promise.resolve(null);
     },
+    // Issue #146: machine control-face liveness + telemetry, read off the
+    // per-workspace driver in the registry above. No driver ⇒ not-live / null,
+    // so PTY-only operation is unaffected until S3 wires dispatch.
+    isMachineThreadLive: (ws, threadId) =>
+      machineDriverRegistry.get(ws.id)?.isThreadLive(threadId) ?? false,
+    readMachineTelemetry: (ws, threadId) =>
+      machineDriverRegistry.get(ws.id)?.readTelemetry(threadId) ?? null,
     ...(inboxStore ? { inboxStore } : {}),
     logger: launcherLogger.child({ scope: 'steward-supervisor-scanner' }),
   });
@@ -1380,6 +1395,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     launcherLogger.info('workspaces.dispose', { reason, activeSessions: pool.size() });
     scheduleScanner.stop();
     stewardSupervisorScanner.stop();
+    await machineDriverRegistry.disposeAll();
     pool.disposeAll('plugin shutdown');
     transcriptWatcher.disposeAll();
     await processLock.release().catch((err) =>

@@ -30,6 +30,7 @@ const record: StewardWakeRecord = {
   injectedAt: null,
   deadline: '2026-07-08T14:03:00.000Z',
   sessionId: null,
+  controlFace: 'pty',
   envelope: {
     reason: 'scheduled_observe',
     accountId: 'mock-simulator-1',
