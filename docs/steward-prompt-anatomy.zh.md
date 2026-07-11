@@ -28,6 +28,12 @@
 | **v7** | campaign tradable contract binding | **`src/workspaces/templates/steward/files/instruction.md`** + `tools/campaigns/run-cell.mjs` | wake `marketContext.tradeableAliceId` | **已实现；targeted + 10-cell 六周 baseline 已完成（2026-07-10）；尚未冻结 holdout** | v6 targeted 暴露出非 prompt-policy 摩擦：MockBroker 空搜索会返回默认 `AAPL`，agent 在 0700.HK cell 中读 `ASSET-K` tape 却尝试交易默认 `AAPL`。v7 显式传入并强制使用 exact `tradeableAliceId`。后续 60/60 wake 证明 isolated-stack contract binding 已稳定、无 AAPL 污染；但 guard-feasible NVDA 仅 +17.7%，仍低于 +25% bull gate。六路 shared-stack 则被 Codex trust-config 并发写竞争阻断（#124），不是 prompt policy 失败。 |
 | **v8-CANDIDATE** | ① v2 ledger contract（strict pendingHash / typed actions / single-entry wakes，#125）② participation & winner-management policy（first-wake 参与 / 目标敞口带 / 加赢家默认，#126）③ degenerate-turn guard（命令参数尺寸纪律：ledger 只用原生 file-write 工具组装、禁巨型 inline 参数，#132） | **`src/workspaces/templates/steward/files/instruction.md`**（① Wake Loop step 5-6 + Decision Ledger Shape；② Participation Bias `78-109`）+ 生成的 `.alice/steward/validate-ledger.mjs` | 同左（in-repo 模板文件，wake 时逐字读取） | **候选，未冻结（issue #125 + #126 + #132）；dev matrix 复跑 pending；NVDA 验证跑 gate PR；holdout 仍封存** | 两个组件共用同一 v8 候选版本，不各自升版。**①（#125）** 配合 decision-ledger schema v1→v2（`DECISION_LEDGER_SCHEMA_VERSION` bump）落地的 prompt 半边：Decision Ledger Shape 现示 `version: 2` + 一个 typed action 示例（`kind`/`aliceId`/`params`/`commitHash`/`outcome`/`violations`）；Wake Loop step 5 增补「每个 broker 操作记一个 typed action 对象，`outcome` 对应四个 `autoPush` 分支，commit 出处进 `actions[].commitHash`，`pendingHash` 仅表示待批准 stage、executed 后必须为 null」；step 6 增补「每个 wakeId 恰好一条记录、first-wins、要更正就原地改那一行不追加第二行」。**②（#126）** 针对 NVDA bull cell 的 0/3 稳定 under-participation（3 次复跑 +17.7% / +17.4% / +16.4%，全部低于 +25% bull gate，均远低于 buy-hold +57.3% 与 guard-feasible +33.0%）：Participation Bias 三条杠杆——(1) first-wake 参与默认（有趋势证据+风险预算时首个 wake 开首仓为默认，仅在 ledger 写明具体 invalidation/trigger 时才可延后）；(2) winner 目标敞口带 70-85% equity，显式声明确定性 guard 是唯一硬顶、禁止自造更低软顶（直指观测到的自封 "50-55% exposure band"）；(3) 趋势完好且敞口未达带/guard 时，「每 wake 评估加仓」为默认动作，持有不加需在 thesis 写明理由。两者均属**实质性行为变更**，按 §4 规则 4 须 maintainer 批准后才升 v8 正式版；升版前 dev matrix 必须复跑确认 bull 参与度、ledger 完成率、`propose_trade` 记账正确性不回落，且 bear/chop cells 不因参与度上调而回落，holdout 保持封存。**③（#132）** Wake Loop step 6 在既有 heredoc 禁令上增补命令参数尺寸纪律，针对 v8 NVDA run1 week-2 的 271KB 退化 `exec_command` 参数（撑爆自身 deadline 并毒化持久 session）；配套 harness 半边（threshold session rotation + supervisor timeout attribution，纯代码不进本台账）见 issue #132 / PR #133。升版前 v8 NVDA 复跑还须确认 week-2 degeneration 不复现。逐组件解剖见 §15（①）、§16（②）、§17（③）。 |
 
+> **2026-07-11 状态覆盖**：上表 v8 行中的“复跑 pending”是候选起草时状态。Canonical
+> `v8matrix7` 已完成 10/10 audit-clean、60/60 wakes，gateable 仍为 7/8，NVDA +20.7% 仍低于
+> +25%。Maintainer 选择把已评估候选合入 `jieke/dev` 作为重新规划前的 consolidation point；
+> 这不是宣称 participation policy 已修好 NVDA，也不打开 holdout/live。完整证据见
+> [appendix/steward-v8-candidate-20260711.md](appendix/steward-v8-candidate-20260711.md)。
+
 > **v2 验证结果（2026-07-07，paste 模式，3 个真实牛市匿名窗口）**：H1 = NVDA 42% / TSLA 65% / AMD 43%（均 ~50%），maxDD 全 0%。对比 pilot（v1）H1 仅 7-16%——**v2 把牛市参与度提升 3-5×，同时保住 H2 纪律（回撤 0%）**。即「行情好时参与、行情差时仍不冒大险」。12-cell（含 bear/chop）将复核 v2 是否破坏 H2。
 
 > **v3 落地状态（2026-07-08）**：`docs/steward-p3-campaign.zh.md` §4.7 记录的压测发现——v2 修好了 H1，但带来一个有界的 over-participation 代价（`sp-bear-smci` 深熊误读为可参与，两批皆 FAIL）——maintainer 拍板「硬 guards（#97）+ prompt v3 两者都上」。本次改动落地的是 prompt v3 半边：把 v2 substance + 反过度参与方向一并写入真正的仓库内模板。**尚未用新一轮 campaign 复测**（确认 smci 类场景被兜住、且 bull H1 不回落）——回归验证是下一步，不在本次改动范围内。
@@ -470,12 +476,13 @@ shared-stack campaign 的失败归因给 Spark 或 v7 prompt。
 
 ## 16. v8-CANDIDATE 逐组件解剖（participation & winner-management policy，issue #126）
 
-> **状态：未冻结的候选，与 §15 共用同一 v8 候选版本，不各自升版**。这是 v8 候选的第二半
+> **状态：已完成 legacy/dev 验证并获准合入 integration branch，但未证明 NVDA gap 已修复，
+> 不打开 holdout/live**。它与 §15 共用同一 v8 候选版本，不各自升版。这是 v8 候选的第二半
 > （第一半是 §15 的 ledger 契约），只动 `instruction.md` 的 Participation Bias 段，不碰
 > World Boundary / Mandate / Evidence-First / Wake Loop / Decision Ledger Shape / Safety，
 > 也不改任何 TypeScript / UTA 硬 guard / behavior-contract 文档（契约冻结时另行更新）。属
-> **实质性行为变更**，按 §4 规则 4 须 maintainer 批准后才升 v8 正式版；升版前 dev matrix 必须
-> 复跑，且**任何 PR 前先跑 NVDA 验证跑作为 gate**，holdout 保持封存。
+> **实质性行为变更**；canonical matrix 已复跑并由 maintainer 接受为 consolidation evidence，
+> 但 performance 结论仍是“候选兼容、改善有限”，holdout 保持封存。
 
 ### 证据基线（issue #126，2026-07-10）
 
@@ -531,13 +538,25 @@ full 591 股）。三处稳定行为缺口（原始证据：
 - **Mandate / Evidence-First / Wake Loop / Decision Ledger Shape / #125 typed-action 契约与
   four-outcome 记账不动**：与 §15 的 ledger 契约、ledger 示例保持不矛盾。
 
+### 最终验证（v8matrix7，2026-07-11）
+
+在 exact HEAD `e27efdb653e09a19c005d20a867638d146695927` 上，strictly serial、isolated
+legacy/dev 10-cell matrix 首次达到 10/10 audit-clean、60/60 wakes。Raw 7/10；排除两个
+guard-infeasible bull cell 后 7/8，和 v7 相同。所有 bear/chop verdict 保持通过，说明三条
+participation lever 没有明显破坏防守纪律；但 NVDA 只从 v7 +17.7% 提到 +20.7%，四次 v8
+isolated observation 全低于 +25%，所以不能把 merge 描述成“策略问题已解决”。
+
+这轮更强的价值是 load acceptance：#134/#136/#137/#139/#140 在 60 wakes 下没有 integrity
+回归，且真实观察到 `cashQty` fractional fill。详见
+[appendix/steward-v8-candidate-20260711.md](appendix/steward-v8-candidate-20260711.md)。
+
 ## 17. v8-CANDIDATE 第三组件：degenerate-turn guard（issue #132）
 
-> **状态：未冻结的候选**（与 §15 同批，随 v8-CANDIDATE 一起评估）。这是 #132「wake
+> **状态：随 v8-CANDIDATE 完成 legacy/dev load validation；仍作为候选约束合入，不代表
+> 模型退化已不可能发生**。这是 #132「wake
 > context governance」的 prompt 半边——另外两半（threshold session rotation、supervisor
-> timeout attribution）是纯 harness 代码，不进 prompt 台账。属实质性行为约束变更（收紧
-> agent 写 ledger 的工具用法），按 §4 规则 4 须 maintainer 批准后才随 v8 正式版落地；升版前
-> v8 NVDA 复跑须确认 week-2 degeneration 不复现。
+> timeout attribution）是纯 harness 代码，不进 prompt 台账。Canonical 60-wake matrix 没有
+> 复现 week-2 degeneration/context-poisoned timeout，但这是运行证据，不是模型质量保证。
 
 **根因（read-only root-cause pass, 2026-07-10）**：v8 NVDA run1 的 week-2 死于**单个退化模型
 回合**——一个 271,810 字节的 `exec_command` 参数（heredoc 组装塌缩成重复循环：`while true;

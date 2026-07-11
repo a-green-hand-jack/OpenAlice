@@ -299,7 +299,9 @@ writeToSession(recordId: string, input: string, opts: WriteInputOptions): boolea
 <STEWARD_WAKE id="..." deadline="...">
 Read .alice/steward/wakes/<wakeId>.json.
 Run the fixed UTA checklist.
-Append exactly one JSON object to .alice/steward/ledger/decisions.jsonl.
+Write one decision object to .alice/steward/drafts/<wakeId>.json.
+Run node .alice/steward/validate-ledger.mjs <wakeId>.
+The validator is the only supported ledger writer and publishes the finalize marker.
 Do not inspect OpenAlice source. Do not call push.
 </STEWARD_WAKE>
 ```
