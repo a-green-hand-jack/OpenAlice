@@ -1420,6 +1420,46 @@ describe('StewardSupervisor active identity mismatch (issue #139)', () => {
   });
 });
 
+describe('StewardSupervisor + atomic ledger writer (issue #140)', () => {
+  async function seedCommittedDone(wakeId: string): Promise<void> {
+    const wakeStore = createStewardWakeStore(dir);
+    const lockStore = createStewardLockStore(dir);
+    await wakeStore.create({ wakeId, deadline: '2026-07-08T14:03:00.000Z', envelope, now: '2026-07-08T14:00:00.000Z' });
+    await wakeStore.updateStatus(wakeId, 'injected', { now: '2026-07-08T14:00:05.000Z', injectedAt: '2026-07-08T14:00:05.000Z', sessionId: 'sess-140' });
+    await lockStore.acquire({ accountId: envelope.accountId, wakeId, now: '2026-07-08T14:00:00.000Z', expiresAt: '2026-07-08T14:03:00.000Z' });
+    const e = ledgerEntry({ wakeId });
+    await createStewardLedgerStore(dir).append(e);
+    await publishMarker(wakeId, e);
+    await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
+  }
+
+  it('atomic appends interleaved with supervisor ticks never falsely flag a committed wake as entry_missing', async () => {
+    await seedCommittedDone('wake-committed');
+    expect((await createStewardWakeStore(dir).get('wake-committed'))?.status).toBe('done');
+    const store = createStewardLedgerStore(dir);
+    for (let i = 0; i < 8; i++) {
+      // Each append is a full atomic replace of decisions.jsonl — a concurrent
+      // reader (the supervisor) only ever sees old-complete or new-complete, so
+      // the committed wake's line is never momentarily absent.
+      await store.append(ledgerEntry({ wakeId: `wake-noise-${i}`, accountId: `acct-${i}` }));
+      const r = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:05:00.000Z', isSessionRunning: () => true });
+      expect(r.warnings.some((w) => w.includes('ledger integrity violation for wake wake-committed'))).toBe(false);
+    }
+  });
+
+  it('a DIRECT truncate of decisions.jsonl is STILL detected as #134 corruption (Solution A does not weaken detection)', async () => {
+    await seedCommittedDone('wake-trunc');
+    // The old failure mode: a direct write that empties/rewrites the file. This
+    // is now unsupported (the validator is the only writer), but if it happens
+    // it must still be caught — the evidence rules are not softened.
+    await writeFile(createStewardLedgerStore(dir).path(), '', 'utf8');
+    const r = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:06:00.000Z', isSessionRunning: () => true });
+    expect(r.warnings.some((w) => w.includes('ledger integrity violation for wake wake-trunc'))).toBe(true);
+    const log = await readFile(stewardSupervisorLogPath(dir), 'utf8');
+    expect(log).toContain('"kind":"entry_missing"');
+  });
+});
+
 describe('StewardSupervisor timeout attribution (issue #132)', () => {
   async function seedTimedOutWake(): Promise<void> {
     const wakeStore = createStewardWakeStore(dir);

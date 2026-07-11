@@ -14,7 +14,7 @@ import { EventEmitter } from 'node:events';
 import * as childProcess from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveCreateAgents, runScript } from './workspace-creator.js';
+import { resolveCreateAgents, runScript, WorkspaceCreator } from './workspace-creator.js';
 
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
@@ -197,5 +197,68 @@ describe('runScript platform branching', () => {
 
     expect(res.ok).toBe(false);
     expect(res.stderr).not.toMatch(/gitforwindows\.org/);
+  });
+});
+
+describe('WorkspaceCreator.refreshStewardRuntime (issue #140 merge gate)', () => {
+  afterEach(() => mockSpawn.mockReset());
+
+  function makeCreator(
+    templateGet: (name: string) => unknown,
+  ): WorkspaceCreator {
+    return new WorkspaceCreator({
+      workspacesRoot: '/ws-root',
+      templateRegistry: { get: templateGet } as never,
+      adapterRegistry: {} as never,
+      bootstrapEnv: { templateDir: '/tpl', launcherRepoRoot: '/repo' },
+      bootstrapTimeoutMs: 60_000,
+      registry: {} as never,
+      logger: { child: () => ({}) } as never,
+    });
+  }
+  const stewardTemplate = {
+    bootstrapScript: '/tpl/steward/bootstrap.mjs',
+    filesDir: '/tpl/steward/files',
+    templateDir: '/tpl/steward',
+  };
+
+  it('is a no-op for a non-steward workspace (never spawns)', async () => {
+    const creator = makeCreator(() => undefined);
+    const res = await creator.refreshStewardRuntime({ template: 'chat', dir: '/ws' });
+    expect(res).toEqual({ ok: true });
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('runs the steward bootstrap in --refresh-runtime mode for the workspace dir', async () => {
+    const child = makeFakeChild();
+    mockSpawn.mockReturnValue(child as unknown as childProcess.ChildProcess);
+    const creator = makeCreator((name) => (name === 'steward' ? stewardTemplate : undefined));
+    const p = creator.refreshStewardRuntime({ template: 'steward', dir: '/ws/abc' });
+    child.emit('close', 0);
+    const res = await p;
+    expect(res).toEqual({ ok: true });
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const args = mockSpawn.mock.calls[0][1] as string[];
+    expect(args).toContain('--refresh-runtime');
+    expect(args).toContain('/ws/abc');
+  });
+
+  it('returns an actionable error when the refresh script exits non-zero', async () => {
+    const child = makeFakeChild();
+    mockSpawn.mockReturnValue(child as unknown as childProcess.ChildProcess);
+    const creator = makeCreator((name) => (name === 'steward' ? stewardTemplate : undefined));
+    const p = creator.refreshStewardRuntime({ template: 'steward', dir: '/ws' });
+    child.stderr.emit('data', Buffer.from('validator write failed'));
+    child.emit('close', 1);
+    const res = await p;
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.message).toContain('validator write failed');
+  });
+
+  it('errors when the steward template is not registered', async () => {
+    const creator = makeCreator(() => undefined);
+    const res = await creator.refreshStewardRuntime({ template: 'steward', dir: '/ws' });
+    expect(res.ok).toBe(false);
+    expect(mockSpawn).not.toHaveBeenCalled();
   });
 });

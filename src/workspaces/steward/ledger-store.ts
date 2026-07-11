@@ -1,7 +1,8 @@
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { canonicalDecisionFingerprint } from './ledger-receipt.js';
+import { withLedgerWrite } from './ledger-writer.js';
 import {
   parseStewardDecisionLedgerEntry,
   parseStewardDecisionLedgerEntryLenient,
@@ -101,9 +102,14 @@ export class StewardLedgerStore {
 
   async append(entry: StewardDecisionLedgerEntry): Promise<StewardDecisionLedgerEntry> {
     const parsed = parseStewardDecisionLedgerEntry(entry);
-    const path = this.path();
-    await mkdir(dirname(path), { recursive: true });
-    await appendFile(path, `${JSON.stringify(parsed)}\n`, 'utf8');
+    await mkdir(dirname(this.path()), { recursive: true });
+    // Issue #140: append through the SAME cross-process lock + atomic
+    // (temp+fsync+rename) write the generated validator uses, so a concurrent
+    // reader never sees a partial file and a concurrent writer can't be lost.
+    await withLedgerWrite(this.workspaceDir, (raw) => {
+      const prefix = raw.length === 0 || raw.endsWith('\n') ? raw : `${raw}\n`;
+      return `${prefix}${JSON.stringify(parsed)}\n`;
+    });
     return parsed;
   }
 

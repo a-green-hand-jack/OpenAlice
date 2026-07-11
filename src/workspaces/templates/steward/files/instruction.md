@@ -257,49 +257,41 @@ When a steward wake arrives:
    to a JSON file with the Write tool, then invoke
    `alice-uta <group> <verb> --json-file <path>` as the entire Bash
    command.
-6. Append exactly one JSON object as a single line to
-   `.alice/steward/ledger/decisions.jsonl` using the Write or Edit tool —
-   not a Bash command. A Bash heredoc containing JSON (e.g.
-   `cat >> decisions.jsonl <<'EOF' ... EOF`) can trip an interactive
-   security prompt with no one to answer it during an unattended wake;
-   Write/Edit does not. Compose the ledger object ONLY with your native
-   file-write tool — never assemble it as an inline shell string. Do not
-   build a large argument by hand (no giant heredoc body, no thousand-line
-   quoted string): a single oversized command argument can run away into a
-   degenerate turn that blows this wake's deadline at output-token speed
-   AND leaves the persistent session context poisoned for the next wake.
-   Keep every Bash argument small — the JSON content belongs in the file
-   you write, not on a command line.
+6. Write your decision as ONE JSON object to `.alice/steward/drafts/<wakeId>.json`
+   using the Write or Edit tool — NOT a Bash command, and NEVER by editing
+   `.alice/steward/ledger/decisions.jsonl` directly. You do not touch the ledger
+   at all; the validator is its only supported writer. (Editing decisions.jsonl
+   by hand truncates+rewrites it and is detected as corruption — see below.)
+   Compose the draft ONLY with your native file-write tool — never assemble it as
+   an inline shell string, and never build a giant one-shot argument (no huge
+   heredoc, no thousand-line quoted string): one oversized command argument can
+   run away into a degenerate turn that blows this wake's deadline at
+   output-token speed AND poisons the persistent session for the next wake.
    Keep `checklist`, `thesis`, `actions`, `pendingHash`, `invalidation`, and
-   `cost` as TOP-LEVEL fields of the ledger object; do not nest them inside
-   `completion`. The top-level `wakeId` MUST be the EXACT id of the wake you are
-   handling — copy it verbatim from the wake message / wake file for THIS wake;
-   never reuse or hand-retype a previous wake's id (copying a prior wake's UUID
-   suffix is a real, observed failure). The required `wake:<id>` entry in
-   `completion.evidenceRefs` must be that same id — the top-level `wakeId` and its
-   `wake:` self-reference must match exactly, or validation fails. The `wake:`
-   namespace in `evidenceRefs` is ONLY for this self-reference; cite a previous
-   wake's decision with `ledger:previous` (or a `tool:` ref), never
-   `wake:<another wake's id>`. Validate with that exact id:
-   `node .alice/steward/validate-ledger.mjs <wakeId>`.
-   Append EXACTLY ONE entry per wake: the first entry for a
-   wakeId is the authoritative decision and can never be revised by a second —
-   if you need to correct it, edit that same line in place, never append a new
-   one (a duplicate wakeId is a validation error, and the reader takes the
-   first). After writing the line, run
-   `node .alice/steward/validate-ledger.mjs <wakeId>`. If it fails, fix the
-   same ledger line before you stop; a schema-invalid line is not a completion
-   marker and the supervisor will treat the wake as unfinished.
-   **Running the validator is the commit point**: on success it publishes a
-   finalization marker, and the supervisor completes the wake only once that
-   marker matches the current line. So if you edit the ledger line for ANY
-   reason after it validated (even an allowed same-line correction), you MUST
-   re-run the validator — otherwise the marker no longer matches your line and
-   the wake will not complete. Writing the line alone never completes the wake;
-   validating it does.
-7. Stop the wake after the ledger entry validates AND you have re-validated any
-   later edit. The validated finalization marker is the completion boundary for
-   one wake.
+   `cost` as TOP-LEVEL fields; do not nest them inside `completion`. The top-level
+   `wakeId` MUST be the EXACT id of the wake you are handling — copy it verbatim
+   from the wake message / wake file for THIS wake; never reuse or hand-retype a
+   previous wake's id (copying a prior wake's UUID suffix is a real, observed
+   failure). The required `wake:<id>` entry in `completion.evidenceRefs` must be
+   that same id — the top-level `wakeId` and its `wake:` self-reference must match
+   exactly, or validation fails. The `wake:` namespace in `evidenceRefs` is ONLY
+   for this self-reference; cite a previous wake's decision with `ledger:previous`
+   (or a `tool:` ref), never `wake:<another wake's id>`.
+7. Run `node .alice/steward/validate-ledger.mjs <wakeId>` with that exact id.
+   This reads your draft, strictly validates it, and — on success — is the COMMIT
+   POINT: it atomically records your decision in the ledger (appending it, or
+   replacing your own earlier line in place for a pre-terminal correction) and
+   publishes a finalization marker. The supervisor completes the wake only after
+   that marker matches the committed entry. Exactly one entry per wake: to
+   correct a decision before it completes, WRITE `drafts/<wakeId>.json` again (a
+   successful run removes the draft) and re-run the validator — it replaces your
+   line in place (never a second line; a duplicate wakeId is a validation error).
+   If validation FAILS the draft is kept, so fix that same draft and re-run;
+   nothing is committed and no marker is written until it passes. Writing the
+   draft alone never completes the wake; validating it does.
+8. Stop the wake after the validator succeeds (and after re-running it on any
+   later draft edit). The validated finalization marker is the completion
+   boundary for one wake.
 
 If there is no wake envelope, do not explore the workspace as a coding task.
 Report that no active steward wake is present and wait for the next wake.

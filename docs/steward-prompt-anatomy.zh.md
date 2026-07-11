@@ -49,6 +49,16 @@
 > （schema 自洽 + validator 外部绑定 active wake + supervisor actionable mismatch 事件）见
 > `docs/steward-persistent-loop-implementation.zh.md` §7 的 #139 段。
 
+> **v8 完成协议 #140 增补（2026-07-11，draft 写、validator 提交）**：`files/instruction.md`
+> 完成步骤从「用 Write/Edit 直接把一行 JSON 追加进 `decisions.jsonl`」改为「把决策对象写到
+> `drafts/<wakeId>.json`，再运行 validator 提交」。因为 agent 的 native Write/Edit 对
+> decisions.jsonl 做 truncate+rewrite，其半写窗口被 supervisor 采样成假 `entry_missing`
+> （issue #140 的 v8matrix6 canary）。#140 起 validator 是 decisions.jsonl 的唯一受支持
+> writer（原子 append/原位 replace + finalize marker）；**agent 绝不直接编辑 ledger，手改
+> 仍按 corruption 论处**。属完成协议的写路径变更（Wake Loop step 6→7），代码半边（drafts +
+> 原子锁写 + 生成 validator 重写）见 `docs/steward-persistent-loop-implementation.zh.md` §7
+> 的 #140 段。
+
 > **真源约定**：实验提示词按不变量 I6 存于 orchestrator 侧（scratchpad，不入 `src/`）。
 > 为可复现/可审计，其**受版本管理的真源是本文件**（§5 全文）；scratchpad 的 `.mjs`
 > 是**可运行副本，须与本文件登记的文本逐字一致**。两者不一致时以本文件为准。
