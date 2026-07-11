@@ -55,6 +55,18 @@ describe('MachineThreadStore', () => {
     expect(await store.read()).toEqual(written);
   });
 
+  it('records an explicit provider and round-trips it (issue #146 S5)', async () => {
+    const store = createMachineThreadStore(dir);
+    const written = await store.write({
+      provider: 'claude',
+      threadId: 'claude-session-1',
+      createdAt: '2026-07-11T00:00:00.000Z',
+    });
+
+    expect(written.provider).toBe('claude');
+    expect(await store.read()).toEqual(written);
+  });
+
   it('treats a corrupt file as no thread (null), never throwing', async () => {
     const store = createMachineThreadStore(dir);
     await mkdir(dirname(store.path()), { recursive: true });

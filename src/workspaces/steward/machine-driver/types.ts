@@ -126,6 +126,23 @@ export interface StewardMachineDriver {
   isThreadLive(threadId: string): boolean;
   /** Latest `thread/tokenUsage/updated` snapshot for the thread, if any. */
   readTelemetry(threadId: string): ThreadTelemetry | null;
+  /**
+   * Whether this driver is still usable for a NEW acquire (issue #146 S5, item
+   * 2). The registry evicts + recreates a driver that reports unhealthy so a
+   * wake never reuses a dead client. Codex: the stdio transport is alive and the
+   * driver is not disposed/closed. Claude: not disposed (no persistent daemon —
+   * each turn spawns a fresh SDK query, so "unhealthy" only means disposed).
+   */
+  isHealthy(): boolean;
+  /**
+   * Interrupt whatever turn is currently in flight on `threadId`, settling it as
+   * `interrupted` (issue #146 S5, item 3). No-op when nothing is in flight. Used
+   * by the dispatch gate-timeout path to abort an orphan turn that was started
+   * (`turn/start` accepted) but whose start signal never arrived, so it does not
+   * keep running unowned. Codex interrupts via the tracked turnId; claude aborts
+   * the turn's `AbortController`.
+   */
+  interruptInFlight(threadId: string): Promise<void>;
   /** Kill the child process and reject any pending work. Idempotent. */
   dispose(): Promise<void>;
 }
@@ -162,9 +179,13 @@ export class MachineDriverProtocolError extends Error {
 // machine wake. NOT `data/config/` state, so no migration framework applies.
 export const MACHINE_THREAD_SCHEMA_VERSION = 1;
 
+/** The native providers a steward machine thread can be pinned to (issue #146
+ *  S5 adds `claude` alongside the original `codex`). */
+export type MachineThreadProvider = 'codex' | 'claude';
+
 export const machineThreadStateSchema = z.object({
   version: z.literal(MACHINE_THREAD_SCHEMA_VERSION),
-  provider: z.literal('codex'),
+  provider: z.enum(['codex', 'claude']),
   threadId: z.string().min(1),
   model: z.string().min(1).optional(),
   createdAt: z.string().min(1),

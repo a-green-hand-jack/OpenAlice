@@ -4,8 +4,10 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { claudeAdapter } from '../../adapters/claude.js';
 import { CODEX_MODEL_OVERRIDE_PATH, codexAdapter } from '../../adapters/codex.js';
 import type { WorkspaceMeta } from '../../workspace-registry.js';
+import { ClaudeAgentSdkDriver } from './claude-agent-sdk-driver.js';
 import { CodexAppServerDriver } from './codex-app-server-driver.js';
 import { NOOP_LOGGER } from './jsonrpc-stdio.js';
 import {
@@ -65,6 +67,7 @@ const COMPLETED: TurnOutcome = {
 interface MockDriverOverrides {
   readonly ensureThread?: (o: EnsureThreadOptions) => Promise<{ threadId: string; resumed: boolean }>;
   readonly runTurn?: (threadId: string, input: string, o?: RunTurnOptions) => Promise<TurnOutcome>;
+  readonly interruptInFlight?: (threadId: string) => Promise<void>;
   readonly isThreadLive?: (threadId: string) => boolean;
   readonly readTelemetry?: (threadId: string) => ThreadTelemetry | null;
 }
@@ -74,6 +77,7 @@ interface MockDriver {
   readonly calls: {
     ensureThread: EnsureThreadOptions[];
     runTurn: { threadId: string; input: string; deadlineMs?: number }[];
+    interruptInFlight: string[];
   };
 }
 
@@ -84,6 +88,7 @@ function makeMockDriver(overrides: MockDriverOverrides = {}): MockDriver {
   const calls = {
     ensureThread: [] as EnsureThreadOptions[],
     runTurn: [] as { threadId: string; input: string; deadlineMs?: number }[],
+    interruptInFlight: [] as string[],
   };
   const driver: StewardMachineDriver = {
     ensureThread: async (o) => {
@@ -98,7 +103,12 @@ function makeMockDriver(overrides: MockDriverOverrides = {}): MockDriver {
       return COMPLETED;
     },
     interruptTurn: async () => {},
+    interruptInFlight: async (threadId) => {
+      calls.interruptInFlight.push(threadId);
+      if (overrides.interruptInFlight) await overrides.interruptInFlight(threadId);
+    },
     isThreadLive: (threadId) => (overrides.isThreadLive ? overrides.isThreadLive(threadId) : true),
+    isHealthy: () => true,
     readTelemetry: (threadId) => (overrides.readTelemetry ? overrides.readTelemetry(threadId) : null),
     dispose: async () => {},
   };
@@ -174,18 +184,27 @@ describe('decideStewardControlFace (issue #146)', () => {
     expect(d).toEqual({ useMachine: true, agent: 'codex' });
   });
 
-  it('declines to PTY with a reason when the resolved agent is not codex', () => {
+  it('honors machine for a claude-enabled workspace (issue #146 S5)', () => {
     const d = decideStewardControlFace({
       config: { controlFace: 'machine' },
       requestedAgent: 'claude',
       workspaceAgents: ['codex', 'claude'],
     });
-    expect(d.useMachine).toBe(false);
-    expect(d.agent).toBe('claude');
-    expect(d.declineReason).toMatch(/codex-only/);
+    expect(d).toEqual({ useMachine: true, agent: 'claude' });
   });
 
-  it('declines to PTY when codex is not enabled on the workspace', () => {
+  it('declines to PTY with a reason when the resolved agent is neither codex nor claude', () => {
+    const d = decideStewardControlFace({
+      config: { controlFace: 'machine' },
+      requestedAgent: 'opencode',
+      workspaceAgents: ['codex', 'opencode'],
+    });
+    expect(d.useMachine).toBe(false);
+    expect(d.agent).toBe('opencode');
+    expect(d.declineReason).toMatch(/supports codex or claude/);
+  });
+
+  it('declines to PTY when the resolved agent is not enabled on the workspace', () => {
     const d = decideStewardControlFace({
       config: { controlFace: 'machine', agent: 'codex' },
       requestedAgent: undefined,
@@ -416,7 +435,7 @@ describe('dispatchMachineWake deadline + interrupt (issue #146 S4, item 2)', () 
 describe('dispatchMachineWake bounded turn/started wait (issue #146 S4, item 3)', () => {
   it('fails the dispatch when turn/started is never observed, leaving the wake queued + emitting an event', async () => {
     let wakeCreated = false;
-    const { driver } = makeMockDriver({
+    const { driver, calls } = makeMockDriver({
       // turn/start is accepted (never rejects) but turn/started never fires and
       // the turn never settles — the bounded wait must break the deadlock.
       runTurn: () => new Promise<TurnOutcome>(() => undefined),
@@ -430,6 +449,44 @@ describe('dispatchMachineWake bounded turn/started wait (issue #146 S4, item 3)'
     expect((await createStewardWakeStore(dir).get('wake-m'))?.status).toBe('queued');
     const timeout = (await readSupervisorEvents()).find((e) => e['type'] === 'machine_turn_dispatch_timeout');
     expect(timeout).toMatchObject({ wakeId: 'wake-m', timeoutMs: 20 });
+    // Item 3 (issue #146 S5): the orphan turn is actively aborted, not left running.
+    expect(calls.interruptInFlight).toEqual(['thread-fresh']);
+  });
+
+  it('aborts the orphan turn on gate timeout so it settles interrupted with no unhandled rejection (issue #146 S5, item 3)', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      let settleTurn!: (o: TurnOutcome) => void;
+      const turnPromise = new Promise<TurnOutcome>((resolve) => {
+        settleTurn = resolve;
+      });
+      const { driver, calls } = makeMockDriver({
+        // turn/start accepted, turn-started never fires; the turn only settles
+        // once interruptInFlight aborts it — exactly the orphan-turn shape.
+        runTurn: () => turnPromise,
+        interruptInFlight: async () => {
+          settleTurn({ turnId: 'turn-1', status: 'interrupted', agentMessage: null, durationMs: null, interrupted: true });
+        },
+      });
+
+      await expect(dispatchMachineWake(baseInput(driver, { startedTimeoutMs: 20 }))).rejects.toThrow(
+        /not observed within/,
+      );
+
+      expect(calls.interruptInFlight).toEqual(['thread-fresh']);
+      // The interrupted outcome is consumed by the detached turn handler → a
+      // distinct `machine_turn_interrupted` event, and NO unhandled rejection.
+      await waitFor(async () =>
+        (await readSupervisorEvents()).some((e) => e['type'] === 'machine_turn_interrupted'),
+      );
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 });
 
@@ -499,6 +556,58 @@ describe('machine-thread rotation on context overflow (issue #146 S4, item 5)', 
 
     expect(rotateThread).not.toHaveBeenCalled();
     expect(result.threadId).toBe('thread-old');
+  });
+});
+
+describe('machine-thread provider match (issue #146 S5)', () => {
+  async function seedCodexThread(): Promise<void> {
+    await createMachineThreadStore(dir).write({
+      provider: 'codex',
+      threadId: 'codex-old',
+      createdAt: '2026-07-01T00:00:00.000Z',
+      lastTurnAt: '2026-07-07T00:00:00.000Z',
+    });
+  }
+
+  it('a fresh claude dispatch records provider:claude in the thread store', async () => {
+    const { driver } = makeMockDriver({
+      ensureThread: async () => ({ threadId: 'claude-thread-1', resumed: false }),
+    });
+    await dispatchMachineWake(baseInput(driver, { provider: 'claude' }));
+
+    const stored = await createMachineThreadStore(dir).read();
+    expect(stored?.provider).toBe('claude');
+    expect(stored?.threadId).toBe('claude-thread-1');
+  });
+
+  it('a stored codex thread is NOT resumed by a claude wake — fresh thread + mismatch event', async () => {
+    await seedCodexThread();
+    const { driver, calls } = makeMockDriver({
+      ensureThread: async (o) => {
+        expect(o.threadId).toBeUndefined(); // mismatch forces a FRESH thread, not resume
+        return { threadId: 'claude-new', resumed: false };
+      },
+    });
+    const result = await dispatchMachineWake(baseInput(driver, { provider: 'claude' }));
+
+    expect(result).toMatchObject({ threadId: 'claude-new', resumed: false });
+    expect(calls.ensureThread[0]?.threadId).toBeUndefined();
+    const stored = await createMachineThreadStore(dir).read();
+    expect(stored?.provider).toBe('claude');
+    expect(stored?.threadId).toBe('claude-new');
+    const mismatch = (await readSupervisorEvents()).find((e) => e['type'] === 'machine_thread_provider_mismatch');
+    expect(mismatch).toMatchObject({ storedProvider: 'codex', provider: 'claude', priorThreadId: 'codex-old' });
+  });
+
+  it('a matching codex stored thread still resumes (no mismatch event)', async () => {
+    await seedCodexThread();
+    const { driver } = makeMockDriver({
+      ensureThread: async (o) => ({ threadId: o.threadId ?? 'fresh', resumed: o.threadId !== undefined }),
+    });
+    const result = await dispatchMachineWake(baseInput(driver, { provider: 'codex' }));
+
+    expect(result).toMatchObject({ threadId: 'codex-old', resumed: true });
+    expect((await readSupervisorEvents()).some((e) => e['type'] === 'machine_thread_provider_mismatch')).toBe(false);
   });
 });
 
@@ -599,6 +708,19 @@ describe('buildMachineDriver (issue #146 MINOR-1)', () => {
 
     expect(result).toBeInstanceOf(CodexAppServerDriver);
   });
+
+  it('constructs a ClaudeAgentSdkDriver for the claude adapter (issue #146 S5)', () => {
+    const result = buildMachineDriver({
+      ws: { ...ws, agents: ['claude'] },
+      adapter: claudeAdapter,
+      cwd: ws.dir,
+      env: {},
+      logger: NOOP_LOGGER,
+    });
+
+    expect(result).toBeInstanceOf(ClaudeAgentSdkDriver);
+    expect(result).not.toBeInstanceOf(CodexAppServerDriver);
+  });
 });
 
 describe('resolveStewardControlFace (issue #146 MINOR-1 + MINOR-3)', () => {
@@ -647,8 +769,8 @@ describe('resolveStewardControlFace (issue #146 MINOR-1 + MINOR-3)', () => {
     expect(result.adapter).toBeUndefined();
   });
 
-  it('declines to PTY for a non-codex agent without ever calling getAdapter', () => {
-    const getAdapter = vi.fn(() => codexAdapter);
+  it('resolves the claude adapter and honors machine for a claude-enabled workspace (issue #146 S5)', () => {
+    const getAdapter = vi.fn((id: string) => (id === 'claude' ? claudeAdapter : undefined));
 
     const result = resolveStewardControlFace({
       config: { controlFace: 'machine' },
@@ -657,8 +779,23 @@ describe('resolveStewardControlFace (issue #146 MINOR-1 + MINOR-3)', () => {
       getAdapter,
     });
 
+    expect(result).toMatchObject({ useMachine: true, agent: 'claude' });
+    expect(result.adapter).toBe(claudeAdapter);
+    expect(getAdapter).toHaveBeenCalledWith('claude');
+  });
+
+  it('declines to PTY for an unsupported agent without ever calling getAdapter', () => {
+    const getAdapter = vi.fn(() => codexAdapter);
+
+    const result = resolveStewardControlFace({
+      config: { controlFace: 'machine' },
+      requestedAgent: 'opencode',
+      workspaceAgents: ['codex', 'opencode'],
+      getAdapter,
+    });
+
     expect(result.useMachine).toBe(false);
-    expect(result.declineReason).toMatch(/codex-only/);
+    expect(result.declineReason).toMatch(/supports codex or claude/);
     expect(getAdapter).not.toHaveBeenCalled();
   });
 });
@@ -715,18 +852,34 @@ describe('machine driver factory wiring end-to-end (issue #146 MINOR-1)', () => 
     expect(driver).toBe(fakeDriver);
   });
 
-  it('decline path (non-codex agent) falls back to PTY without constructing a driver', () => {
+  it('decline path (unsupported agent) falls back to PTY without constructing a driver', () => {
     const factory = vi.fn(() => makeMockDriver().driver);
     const controlFace = resolveStewardControlFace({
       config: { controlFace: 'machine' },
-      requestedAgent: 'claude',
-      workspaceAgents: ['codex', 'claude'],
+      requestedAgent: 'opencode',
+      workspaceAgents: ['codex', 'opencode'],
       getAdapter,
     });
 
     const driver = dispatchDriverOrUndefined(controlFace, factory);
 
-    expect(controlFace.declineReason).toMatch(/codex-only/);
+    expect(controlFace.declineReason).toMatch(/supports codex or claude/);
+    expect(driver).toBeUndefined();
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it('claude requested but no claude adapter registered declines to PTY (adapter not registered)', () => {
+    const factory = vi.fn(() => makeMockDriver().driver);
+    const controlFace = resolveStewardControlFace({
+      config: { controlFace: 'machine' },
+      requestedAgent: 'claude',
+      workspaceAgents: ['codex', 'claude'],
+      getAdapter, // only knows codex → undefined for claude
+    });
+
+    const driver = dispatchDriverOrUndefined(controlFace, factory);
+
+    expect(controlFace.declineReason).toMatch(/adapter not registered/);
     expect(driver).toBeUndefined();
     expect(factory).not.toHaveBeenCalled();
   });

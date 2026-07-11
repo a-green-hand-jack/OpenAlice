@@ -26,6 +26,32 @@ export class MachineDriverRegistry {
     return created;
   }
 
+  /**
+   * Like {@link getOrCreate}, but EVICTS a cached driver that reports unhealthy
+   * before reusing it (issue #146 S5, item 2). Without this, an app-server crash
+   * leaves a dead client memoized here and the next wake reuses it. The dead
+   * driver is disposed (fire-and-forget — the replacement must not block on a
+   * broken transport's teardown), forgotten, `onEvict` fired for the caller's
+   * structured event, then a fresh driver is built via `factory`. A healthy
+   * cached driver is returned untouched.
+   */
+  getOrCreateHealthy(
+    wsId: string,
+    factory: () => StewardMachineDriver,
+    onEvict?: (info: { readonly wsId: string }) => void,
+  ): StewardMachineDriver {
+    const existing = this.drivers.get(wsId);
+    if (existing) {
+      if (existing.isHealthy()) return existing;
+      this.drivers.delete(wsId);
+      void existing.dispose().catch(() => undefined);
+      onEvict?.({ wsId });
+    }
+    const created = factory();
+    this.drivers.set(wsId, created);
+    return created;
+  }
+
   /** Dispose and forget one workspace's driver. Idempotent — a no-op if absent. */
   async dispose(wsId: string): Promise<void> {
     const driver = this.drivers.get(wsId);
