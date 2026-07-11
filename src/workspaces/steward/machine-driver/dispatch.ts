@@ -12,16 +12,38 @@
  */
 
 import { readCodexModelOverride } from '../../adapters/codex.js';
-import type { CliAdapter } from '../../cli-adapter.js';
+import type { CliAdapter, ContextTelemetry } from '../../cli-adapter.js';
 import type { Logger } from '../../logger.js';
 import type { WorkspaceMeta } from '../../workspace-registry.js';
 import { formatStewardWakeMessage } from '../injector.js';
+import { StewardLockConflictError, type StewardLockStore } from '../lock-store.js';
+import {
+  decideStewardRotation,
+  recordStewardRotation,
+  resolveRotationThreshold,
+  type StewardRotationReason,
+} from '../rotation.js';
 import { appendSupervisorEvent } from '../supervisor.js';
-import type { StewardWakeEnvelope } from '../types.js';
+import type { StewardWakeEnvelope, StewardWakeRecord } from '../types.js';
 import type { StewardWakeStore } from '../wake-store.js';
 import { CodexAppServerDriver } from './codex-app-server-driver.js';
 import type { MachineThreadStore } from './thread-store.js';
-import type { DriverEvent, EnsureThreadOptions, StewardMachineDriver } from './types.js';
+import type {
+  DriverEvent,
+  EnsureThreadOptions,
+  MachineThreadState,
+  StewardMachineDriver,
+  ThreadTelemetry,
+} from './types.js';
+
+/**
+ * Bounded wait for the `turn/started` signal (issue #146 S4, item 3). A server
+ * that accepts `turn/start` but never emits `turn/started` — nor completes nor
+ * errors the turn — would otherwise block `startDetachedTurn` forever. On expiry
+ * the dispatch is failed on the SAME path as a pre-start turn/start rejection
+ * (the wake is marked error + the account lock is released by the caller).
+ */
+export const DEFAULT_TURN_STARTED_TIMEOUT_MS = 30_000;
 
 export interface StewardControlFaceDecision {
   /** Take the machine (codex app-server) path when true; the PTY path otherwise. */
@@ -154,6 +176,26 @@ export interface DispatchMachineWakeInput {
    * a later throw marks the wake `error` + releases the lock.
    */
   readonly onWakeCreated?: () => void;
+  /**
+   * The workspace's `.alice/steward/config.json` (issue #146 S4, item 5). Only
+   * `sessionRotation.threshold` is read here, via the SAME `resolveRotationThreshold`
+   * policy the PTY path uses. Absent ⇒ the default threshold.
+   */
+  readonly config?: Record<string, unknown>;
+  /**
+   * Machine-thread rotation seam (issue #146 S4, item 5). Called BEFORE thread
+   * resolution when the stored thread's driver telemetry is over the steward
+   * rotation threshold: it must dispose the poisoned driver and return a FRESH
+   * one (the registry side effect lives in the service closure). Absent ⇒ no
+   * rotation (the cron/route callers always pass it; unit tests opt in). A wake
+   * is never blocked on rotation — missing telemetry resumes.
+   */
+  readonly rotateThread?: (input: { readonly disposedThreadId: string }) => Promise<StewardMachineDriver>;
+  /**
+   * Override the `turn/started` bounded wait (issue #146 S4, item 3). Test seam;
+   * production leaves it undefined and {@link DEFAULT_TURN_STARTED_TIMEOUT_MS} applies.
+   */
+  readonly startedTimeoutMs?: number;
 }
 
 export interface DispatchMachineWakeResult {
@@ -168,17 +210,43 @@ export interface DispatchMachineWakeResult {
 }
 
 export async function dispatchMachineWake(input: DispatchMachineWakeInput): Promise<DispatchMachineWakeResult> {
-  const { driver, threadStore, wakeStore, now } = input;
+  const { threadStore, wakeStore, now } = input;
   const { wakeId, deadline, envelope } = input.wake;
 
+  // (a) Machine-thread rotation on context overflow (issue #146 S4, item 5). The
+  // machine equivalent of the PTY `evaluateStewardRotation` path: if the stored
+  // thread's last driver telemetry is over the SAME rotation threshold, dispose
+  // the poisoned driver, swap in a fresh one, and force a fresh thread below.
+  // Reuses `resolveRotationThreshold` / `decideStewardRotation` — no new numbers.
+  const stored = await threadStore.read();
+  const rotation = await maybeRotateMachineThread(input, stored);
+  const driver = rotation.driver;
+
   // (b) Resolve the native thread — resume the stored one, else start fresh. A
-  // resume failure resets to a fresh thread (S3 policy) rather than failing.
-  const resolved = await resolveMachineThread(input);
+  // resume failure resets to a fresh thread (S3 policy) rather than failing. A
+  // rotation forces the fresh branch (the poisoned id is deliberately dropped).
+  const resolved = await resolveMachineThread(input, driver, rotation.rotated ? null : stored);
   await threadStore.write({
     threadId: resolved.threadId,
     createdAt: resolved.createdAt,
     lastTurnAt: now,
   });
+
+  // Record the rotation now that the fresh thread id is known — the SAME
+  // `session_rotated` event shape the PTY path emits (disposed/new session ids
+  // are the disposed/new native thread UUIDs for a machine wake).
+  if (rotation.rotated) {
+    await recordStewardRotation(input.workspaceDir, {
+      at: now,
+      wsId: input.wsId,
+      disposedSessionId: rotation.disposedThreadId,
+      newSessionId: resolved.threadId,
+      reason: rotation.reason,
+      inputTokens: rotation.inputTokens,
+      modelContextWindow: rotation.modelContextWindow,
+      threshold: rotation.threshold,
+    }).catch(() => undefined);
+  }
 
   // (c) Create the wake keyed off the native thread UUID — the supervisor keys a
   // machine wake's liveness/telemetry off `sessionId`.
@@ -195,7 +263,11 @@ export async function dispatchMachineWake(input: DispatchMachineWakeInput): Prom
   // (d)+(e) Fire the wake as ONE turn with the SAME body the PTY path injects (no
   // `\r`, no submit delay — those are PTY pathologies). Block only until
   // `turn/start` is accepted, then let the turn run DETACHED: completion is the
-  // supervisor's job (ledger + finalize markers), not the dispatcher's.
+  // supervisor's job (ledger + finalize markers), not the dispatcher's. The
+  // turn carries the wake's deadline so the driver actively interrupts at the
+  // deadline instead of burning tokens until the supervisor marks `timeout`
+  // (issue #146 S4, item 2).
+  const deadlineMs = Date.parse(deadline) - Date.parse(now);
   await startDetachedTurn({
     driver,
     threadId: resolved.threadId,
@@ -204,6 +276,8 @@ export async function dispatchMachineWake(input: DispatchMachineWakeInput): Prom
     wsId: input.wsId,
     wakeId,
     logger: input.logger,
+    ...(Number.isFinite(deadlineMs) && deadlineMs > 0 ? { deadlineMs } : {}),
+    ...(input.startedTimeoutMs !== undefined ? { startedTimeoutMs: input.startedTimeoutMs } : {}),
   });
 
   const injectedAt = new Date().toISOString();
@@ -216,6 +290,86 @@ export async function dispatchMachineWake(input: DispatchMachineWakeInput): Prom
   return { threadId: resolved.threadId, resumed: resolved.resumed, threadReset: resolved.reset, injectedAt };
 }
 
+interface MachineRotationOutcome {
+  /** The driver to run this wake on — the fresh one when `rotated`, else the
+   *  input driver. */
+  readonly driver: StewardMachineDriver;
+  readonly rotated: boolean;
+  readonly disposedThreadId: string;
+  readonly reason: StewardRotationReason;
+  readonly inputTokens: number | null;
+  readonly modelContextWindow: number | null;
+  readonly threshold: number;
+}
+
+/**
+ * Machine-thread rotation decision (issue #146 S4, item 5). Reads the CURRENT
+ * driver's last token-usage telemetry for the stored thread and, if it is over
+ * the steward rotation threshold (`resolveRotationThreshold` + `decideStewardRotation`,
+ * the same policy the PTY path uses), disposes the poisoned driver and returns a
+ * fresh one via `rotateThread`. Never blocks a wake: no stored thread, no
+ * `rotateThread` hook, or telemetry the driver hasn't reported (e.g. right after
+ * an Alice restart, when the in-memory driver has no snapshot) all resume on the
+ * existing driver.
+ */
+async function maybeRotateMachineThread(
+  input: DispatchMachineWakeInput,
+  stored: MachineThreadState | null,
+): Promise<MachineRotationOutcome> {
+  const threshold = resolveRotationThreshold(input.config ?? {});
+  const noRotation = {
+    driver: input.driver,
+    rotated: false as const,
+    disposedThreadId: '',
+    reason: 'under_threshold' as StewardRotationReason,
+    inputTokens: null,
+    modelContextWindow: null,
+    threshold,
+  };
+  if (!stored || !input.rotateThread) return noRotation;
+
+  const raw = input.driver.readTelemetry(stored.threadId);
+  const telemetry = adaptThreadTelemetry(raw, stored.threadId);
+  const decision = decideStewardRotation(telemetry, threshold);
+  if (!decision.rotate) return { ...noRotation, reason: decision.reason };
+
+  const freshDriver = await input.rotateThread({ disposedThreadId: stored.threadId });
+  input.logger.info('schedule.steward_machine_thread_rotated', {
+    wsId: input.wsId,
+    wakeId: input.wake.wakeId,
+    disposedThreadId: stored.threadId,
+    reason: decision.reason,
+    inputTokens: decision.telemetry?.inputTokens ?? null,
+    modelContextWindow: decision.telemetry?.modelContextWindow ?? null,
+    threshold,
+  });
+  return {
+    driver: freshDriver,
+    rotated: true,
+    disposedThreadId: stored.threadId,
+    reason: decision.reason,
+    inputTokens: decision.telemetry?.inputTokens ?? null,
+    modelContextWindow: decision.telemetry?.modelContextWindow ?? null,
+    threshold,
+  };
+}
+
+/**
+ * Adapt a machine driver's `ThreadTelemetry` snapshot into the `ContextTelemetry`
+ * shape the shared rotation policy consumes (issue #146 S4). Mirrors the
+ * supervisor's `machineTelemetryReader`: `contextWindow` maps to
+ * `modelContextWindow` (0 when the driver has reported none — no window means no
+ * overflow verdict). Null snapshot ⇒ null (no telemetry ⇒ never rotate).
+ */
+function adaptThreadTelemetry(raw: ThreadTelemetry | null, threadId: string): ContextTelemetry | null {
+  if (!raw) return null;
+  return {
+    inputTokens: raw.inputTokens,
+    modelContextWindow: raw.contextWindow ?? 0,
+    source: `machine-driver:${threadId}`,
+  };
+}
+
 interface ResolvedThread {
   readonly threadId: string;
   readonly resumed: boolean;
@@ -223,8 +377,12 @@ interface ResolvedThread {
   readonly createdAt: string;
 }
 
-async function resolveMachineThread(input: DispatchMachineWakeInput): Promise<ResolvedThread> {
-  const { driver, threadStore, cwd } = input;
+async function resolveMachineThread(
+  input: DispatchMachineWakeInput,
+  driver: StewardMachineDriver,
+  existing: MachineThreadState | null,
+): Promise<ResolvedThread> {
+  const { cwd } = input;
   // Issue #146 MAJOR-2: apply the steward core-model override
   // (`.alice/steward/core-agent-model.txt`) the PTY path applies via `-m`
   // (`adapters/codex.ts` `codexModelHead`) — reused here, not reparsed, so both
@@ -241,7 +399,6 @@ async function resolveMachineThread(input: DispatchMachineWakeInput): Promise<Re
     ...(threadId !== undefined ? { threadId } : {}),
   });
 
-  const existing = await threadStore.read();
   if (existing) {
     try {
       const { threadId, resumed } = await driver.ensureThread(ensureOpts(existing.threadId));
@@ -272,10 +429,13 @@ async function resolveMachineThread(input: DispatchMachineWakeInput): Promise<Re
 
 /**
  * Start a turn and resolve once `turn/start` is accepted (the `turn-started`
- * event OR a fast completion), leaving the turn running detached. Rejects ONLY
- * when the turn fails BEFORE it started — a failure AFTER start is logged +
- * evented but never rejects (the wake is already `injected`; the supervisor owns
- * terminal states).
+ * event OR a fast completion), leaving the turn running detached. Rejects when
+ * the turn fails BEFORE it started, OR when `turn/started` is not observed within
+ * the bounded wait (issue #146 S4, item 3) — both are dispatch failures the
+ * caller terminalizes (wake `error` + lock release). A failure AFTER start is
+ * logged + evented but never rejects (the wake is already `injected`; the
+ * supervisor owns terminal states). A deadline `interrupted` settle is a
+ * distinct `machine_turn_interrupted` event, NOT `machine_turn_failed` (item 2).
  */
 async function startDetachedTurn(input: {
   readonly driver: StewardMachineDriver;
@@ -285,6 +445,10 @@ async function startDetachedTurn(input: {
   readonly wsId: string;
   readonly wakeId: string;
   readonly logger: Logger;
+  /** Interrupt the turn at this many ms — the wake's remaining deadline (item 2). */
+  readonly deadlineMs?: number;
+  /** Bounded wait for `turn/started` (item 3). */
+  readonly startedTimeoutMs?: number;
 }): Promise<void> {
   const { driver, threadId, message } = input;
   let settled = false;
@@ -303,10 +467,34 @@ async function startDetachedTurn(input: {
     };
   });
 
+  // Item 3: bound the wait for `turn/started`. A server that accepts turn/start
+  // but never emits turn/started (nor completes nor errors) would otherwise
+  // block forever; on expiry we fail the dispatch on the same path as a
+  // pre-start rejection and record a structured event.
+  const startedTimeoutMs = input.startedTimeoutMs ?? DEFAULT_TURN_STARTED_TIMEOUT_MS;
+  const startedTimer = setTimeout(() => {
+    if (settled) return;
+    input.logger.warn('schedule.steward_machine_turn_start_timeout', {
+      wsId: input.wsId,
+      wakeId: input.wakeId,
+      threadId,
+      timeoutMs: startedTimeoutMs,
+    });
+    void appendSupervisorEvent(input.workspaceDir, {
+      at: new Date().toISOString(),
+      type: 'machine_turn_dispatch_timeout',
+      wakeId: input.wakeId,
+      threadId,
+      timeoutMs: startedTimeoutMs,
+    }).catch(() => undefined);
+    markFailed(new Error(`turn/started not observed within ${startedTimeoutMs}ms`));
+  }, startedTimeoutMs);
+
   const turn = driver.runTurn(threadId, message, {
     onEvent: (ev: DriverEvent) => {
       if (ev.type === 'turn-started') markStarted();
     },
+    ...(input.deadlineMs !== undefined ? { deadlineMs: input.deadlineMs } : {}),
   });
 
   // Detached completion handling. A completed turn definitely started; a
@@ -323,6 +511,18 @@ async function startDetachedTurn(input: {
         status: outcome.status,
         interrupted: outcome.interrupted,
       });
+      // Item 2: a deadline-interrupted turn is a DISTINCT event, not a failure.
+      // The supervisor still owns the `timeout` transition off the wake deadline;
+      // this only records that the driver actively stopped the turn.
+      if (outcome.interrupted) {
+        void appendSupervisorEvent(input.workspaceDir, {
+          at: new Date().toISOString(),
+          type: 'machine_turn_interrupted',
+          wakeId: input.wakeId,
+          threadId,
+          status: outcome.status,
+        }).catch(() => undefined);
+      }
     },
     (err) => {
       markFailed(err);
@@ -342,9 +542,161 @@ async function startDetachedTurn(input: {
     },
   );
 
-  await started;
+  try {
+    await started;
+  } finally {
+    clearTimeout(startedTimer);
+  }
 }
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+// --- Shared control-face gate + machine dispatch (issue #146 S4, item 1) ------
+//
+// The single code path the cron scanner AND the HTTP route go through to decide
+// PTY-vs-machine and, for a machine wake, run the WHOLE machine branch — driver
+// acquisition, the wake-exists + account-lock preflight, `dispatchMachineWake`,
+// and error terminalization. The registry side effects (get-or-create /
+// dispose the per-workspace driver) are injected as `acquireDriver`/`rotateDriver`
+// callbacks so this stays unit-testable with mock stores + a mock driver factory
+// while `service.ts` binds them to the live `MachineDriverRegistry` closure — the
+// "surface what the route needs through the service interface, not by exporting
+// globals" rule from the S3 review. The caller runs `refreshStewardRuntime`
+// BEFORE this; on a `{ face: 'pty' }` outcome the caller owns its own PTY inline
+// flow (byte-identical to pre-#146).
+
+export interface StewardWakeControlFaceInput {
+  /** The workspace's `.alice/steward/config.json` (already read by the caller). */
+  readonly config: Record<string, unknown>;
+  /** The wake's requested agent, if any (`wake.agent` / `body.session?.agent`). */
+  readonly requestedAgent: string | undefined;
+  readonly wakeId: string;
+  /** ISO wake deadline. */
+  readonly deadline: string;
+  /** ISO dispatch instant. */
+  readonly now: string;
+  readonly envelope: StewardWakeEnvelope;
+}
+
+export type StewardWakeControlFaceOutcome =
+  | {
+      /** Take the historical PTY inline flow — the caller owns it. `declineReason`
+       *  is set only when machine was REQUESTED but declined (the caller logs it). */
+      readonly face: 'pty';
+      readonly declineReason?: string;
+    }
+  | {
+      readonly face: 'machine';
+      /** The `injected` wake record, so the route can echo it in its 202 body. */
+      readonly wake: StewardWakeRecord;
+      readonly threadId: string;
+      readonly resumed: boolean;
+      readonly threadReset: boolean;
+    };
+
+export interface StewardWakeControlFaceDeps {
+  readonly wsId: string;
+  readonly workspaceDir: string;
+  /** cwd the codex thread runs in — normally the workspace dir. */
+  readonly cwd: string;
+  readonly workspaceAgents: readonly string[];
+  readonly getAdapter: (id: string) => CliAdapter | undefined;
+  readonly wakeStore: StewardWakeStore;
+  readonly lockStore: StewardLockStore;
+  readonly threadStore: MachineThreadStore;
+  readonly logger: Logger;
+  /**
+   * Get-or-create the workspace's machine driver (bound to the service's
+   * `MachineDriverRegistry`). Called ONLY once the machine path commits — after
+   * the wake-exists check + lock acquisition — so a duplicate-wakeId or lock
+   * conflict never spins up a live driver.
+   */
+  readonly acquireDriver: (adapter: CliAdapter) => StewardMachineDriver;
+  /**
+   * Dispose the poisoned driver and return a fresh one (rotation, item 5). Bound
+   * to the registry by the service; forwarded to `dispatchMachineWake` as its
+   * `rotateThread` hook.
+   */
+  readonly rotateDriver: (adapter: CliAdapter, input: { readonly disposedThreadId: string }) => Promise<StewardMachineDriver>;
+  /** Test seam for the `turn/started` bounded wait (item 3). */
+  readonly startedTimeoutMs?: number;
+}
+
+export async function dispatchStewardWakeControlFace(
+  input: StewardWakeControlFaceInput,
+  deps: StewardWakeControlFaceDeps,
+): Promise<StewardWakeControlFaceOutcome> {
+  const decision = resolveStewardControlFace({
+    config: input.config,
+    requestedAgent: input.requestedAgent,
+    workspaceAgents: deps.workspaceAgents,
+    getAdapter: deps.getAdapter,
+  });
+  if (!decision.useMachine || !decision.adapter) {
+    return decision.declineReason ? { face: 'pty', declineReason: decision.declineReason } : { face: 'pty' };
+  }
+  const adapter = decision.adapter;
+
+  // Machine preflight — mirrors the PTY path's wake-exists + lock ordering.
+  if (await deps.wakeStore.get(input.wakeId)) {
+    throw new Error(`steward wake already exists: ${input.wakeId}`);
+  }
+  try {
+    await deps.lockStore.acquire({
+      accountId: input.envelope.accountId,
+      wakeId: input.wakeId,
+      now: input.now,
+      expiresAt: input.deadline,
+    });
+  } catch (err) {
+    if (err instanceof StewardLockConflictError) throw err;
+    throw new Error(`steward lock failed: ${(err as Error).message}`);
+  }
+
+  let created = false;
+  try {
+    // Driver construction happens HERE, only once dispatch is committed (S3
+    // MINOR-3): a duplicate-wakeId or lock conflict above never builds a driver.
+    const driver = deps.acquireDriver(adapter);
+    const result = await dispatchMachineWake({
+      workspaceDir: deps.workspaceDir,
+      wsId: deps.wsId,
+      cwd: deps.cwd,
+      driver,
+      wakeStore: deps.wakeStore,
+      threadStore: deps.threadStore,
+      wake: { wakeId: input.wakeId, deadline: input.deadline, envelope: input.envelope },
+      now: input.now,
+      logger: deps.logger,
+      config: input.config,
+      rotateThread: (rotInput) => deps.rotateDriver(adapter, rotInput),
+      ...(deps.startedTimeoutMs !== undefined ? { startedTimeoutMs: deps.startedTimeoutMs } : {}),
+      onWakeCreated: () => {
+        created = true;
+      },
+    });
+    const wake = await deps.wakeStore.get(input.wakeId);
+    if (!wake) throw new Error(`machine wake vanished after dispatch: ${input.wakeId}`);
+    return {
+      face: 'machine',
+      wake,
+      threadId: result.threadId,
+      resumed: result.resumed,
+      threadReset: result.threadReset,
+    };
+  } catch (err) {
+    if (created) {
+      await deps.wakeStore
+        .updateStatus(input.wakeId, 'error', {
+          now: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+          error: err instanceof Error ? err.message : String(err),
+        })
+        .catch(() => undefined);
+    }
+    await deps.lockStore.release(input.envelope.accountId, input.wakeId).catch(() => undefined);
+    throw err;
+  }
 }

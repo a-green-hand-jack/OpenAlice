@@ -43,6 +43,7 @@ import {
   getAgentCredentialReadiness,
 } from '../../workspaces/agent-credential-readiness.js';
 import { approverFromAliceRequest } from './approver-identity.js';
+import { resolveStewardControlFace } from '../../workspaces/steward/machine-driver/dispatch.js';
 import { isTerminalThemeVariant, type TerminalThemeVariant } from '../../workspaces/terminal-theme.js';
 import {
   createStewardLedgerStore,
@@ -862,6 +863,66 @@ export function createWorkspaceRoutes(
       ...(body.riskContext !== undefined ? { riskContext: body.riskContext } : {}),
       ...(body.humanRequest !== undefined ? { humanRequest: body.humanRequest } : {}),
     };
+
+    // Issue #146 S4: pick the control face with the SAME pure decision function
+    // the cron path uses, then — ONLY for an honored machine face — hand the whole
+    // machine branch (wake-record creation, lock, rotation, detached turn, events)
+    // to the shared service method. A PTY (or declined-to-PTY) wake never touches
+    // the service method and falls through to the byte-identical inline flow
+    // below; this is the sole change to that path.
+    const face = resolveStewardControlFace({
+      config,
+      requestedAgent: body.session?.agent,
+      workspaceAgents: meta.agents,
+      getAdapter: (agentId) => svc.adapters.get(agentId),
+    });
+    if (face.useMachine) {
+      let outcome: Awaited<ReturnType<typeof svc.dispatchStewardWakeControlFace>>;
+      try {
+        outcome = await svc.dispatchStewardWakeControlFace(meta, {
+          config,
+          requestedAgent: body.session?.agent,
+          wakeId,
+          deadline,
+          now: now.toISOString(),
+          envelope,
+        });
+      } catch (err) {
+        if (err instanceof StewardLockConflictError) {
+          return c.json({ error: 'account_locked', message: err.message, lock: err.lock }, 409);
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes('already exists')) {
+          return c.json({ error: 'wake_exists', message }, 409);
+        }
+        return c.json({ error: 'machine_dispatch_failed', message }, 500);
+      }
+      // Machine dispatch owns wake-record creation + lock; echo the 202 shape the
+      // PTY path returns (session.sessionId carries the native thread UUID).
+      if (outcome.face === 'machine') {
+        const ledgerEntry = await ledgerStore.findByWakeId(outcome.wake.wakeId).catch(() => null);
+        return c.json({
+          wake: outcome.wake,
+          ledgerEntry,
+          session: {
+            sessionId: outcome.threadId,
+            agent: face.agent,
+            reused: outcome.resumed,
+            resumed: outcome.resumed,
+          },
+        }, 202);
+      }
+      // Defensive: a machine gate that resolves back to PTY did no side effects,
+      // so fall through to the inline PTY flow.
+    }
+    if (face.declineReason) {
+      launcherLogger.warn('schedule.steward_machine_face_declined', {
+        id,
+        wakeId,
+        agent: face.agent,
+        reason: face.declineReason,
+      });
+    }
 
     if (await wakeStore.get(wakeId)) {
       return c.json({ error: 'wake_exists', message: `steward wake already exists: ${wakeId}` }, 409);

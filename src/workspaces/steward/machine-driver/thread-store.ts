@@ -24,6 +24,17 @@ export interface MachineThreadWriteInput {
  * lenient read as the neighboring steward stores (`finalize-store`,
  * `wake-store`): a missing OR corrupt file resolves to null — absence is always
  * a valid state — never throws.
+ *
+ * SINGLE-THREAD-PER-WORKSPACE ASSUMPTION (issue #146 S4): there is exactly ONE
+ * record per workspace, not one per account. A steward workspace that manages
+ * several accounts multiplexes all of them onto the SAME native thread — the
+ * per-account isolation the account lock gives PTY wakes is NOT extended to the
+ * machine thread here. That is deliberate for S4 (a steward workspace is one
+ * agent with one persistent context) and unenforced: nothing stops a caller
+ * from dispatching two accounts' wakes onto one thread, and the driver's
+ * one-turn-per-thread invariant would simply serialize them. Per-account thread
+ * partitioning, if ever needed, is out of scope and would key this store by
+ * accountId.
  */
 export class MachineThreadStore {
   constructor(private readonly workspaceDir: string) {}

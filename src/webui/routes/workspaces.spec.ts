@@ -178,7 +178,7 @@ async function postWake(app: any, path: string, body?: unknown) {
   return reqPromise;
 }
 
-function buildSteward(opts: { dir: string; inboxStore?: IInboxStore }) {
+function buildSteward(opts: { dir: string; inboxStore?: IInboxStore; dispatchStewardWakeControlFace?: any }) {
   const meta = {
     id: 'ws-1',
     tag: 'steward-test',
@@ -250,6 +250,11 @@ function buildSteward(opts: { dir: string; inboxStore?: IInboxStore }) {
     adapters: { get: (id: string) => (id === 'codex' ? adapter : undefined) },
     resolveAdapter: () => adapter,
     refreshStewardRuntime: vi.fn(async () => ({ ok: true })),
+    // Issue #146 S4: the shared machine-face dispatch method. PTY wakes never
+    // reach it (the route gates on `resolveStewardControlFace` first), so the
+    // default is a spy that's simply present; the machine-face test injects one.
+    dispatchStewardWakeControlFace:
+      opts.dispatchStewardWakeControlFace ?? vi.fn(async () => ({ face: 'pty' as const })),
     config: { launcherRepoRoot: '/repo' },
     publicMeta: vi.fn(async (m: any) => m),
   } as unknown as WorkspaceService;
@@ -390,6 +395,64 @@ describe('steward wake API', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('machine control face: routes to the shared service method, echoes the PTY 202 shape, and never spawns a PTY (issue #146 S4)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-machine-'));
+    try {
+      await mkdir(join(dir, '.alice/steward'), { recursive: true });
+      await writeFile(join(dir, '.alice/steward/config.json'), JSON.stringify({ controlFace: 'machine' }), 'utf8');
+
+      const machineWake = {
+        wakeId: 'wake-machine-1',
+        status: 'injected',
+        controlFace: 'machine',
+        sessionId: 'thread-uuid-xyz',
+        deadline: '2026-07-08T14:03:00.000Z',
+        envelope: {
+          reason: 'scheduled_observe',
+          accountId: 'mock-simulator-1',
+          authzLevel: 'paper',
+          expectedDecision: 'no_trade',
+        },
+      };
+      const dispatchStewardWakeControlFace = vi.fn(async () => ({
+        face: 'machine' as const,
+        wake: machineWake,
+        threadId: 'thread-uuid-xyz',
+        resumed: false,
+        threadReset: false,
+      }));
+      const { app, pool } = buildSteward({ dir, dispatchStewardWakeControlFace });
+
+      const r = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-machine-1',
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+        deadline: '2026-07-08T14:03:00.000Z',
+      });
+
+      expect(r.status).toBe(202);
+      // Dispatched through the shared machine method — NOT the PTY inline flow.
+      expect(dispatchStewardWakeControlFace).toHaveBeenCalledTimes(1);
+      expect(dispatchStewardWakeControlFace).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'ws-1' }),
+        expect.objectContaining({
+          wakeId: 'wake-machine-1',
+          deadline: '2026-07-08T14:03:00.000Z',
+          envelope: expect.objectContaining({ accountId: 'mock-simulator-1' }),
+        }),
+      );
+      expect(pool.spawn).not.toHaveBeenCalled();
+      // 202 body mirrors the PTY shape; the native thread UUID is the session id.
+      expect(r.body.wake).toMatchObject({ wakeId: 'wake-machine-1', status: 'injected', controlFace: 'machine' });
+      expect(r.body.session).toMatchObject({ sessionId: 'thread-uuid-xyz', agent: 'codex', resumed: false });
+      expect(r.body.ledgerEntry).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('creates a wake file, spawns a Codex session, injects the wake, and records session config', async () => {
