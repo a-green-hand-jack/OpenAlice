@@ -10,7 +10,6 @@
 
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
 import { cliBinPath } from '@/core/paths.js';
@@ -84,10 +83,12 @@ import {
   evaluateStewardRotation,
   formatStewardWakeMessage,
   injectStewardWake,
+  prepareStewardSessionConfig,
   readStewardConfig,
   recordStewardRotation,
   StewardLockConflictError,
   StewardSupervisorScanner,
+  type StewardSessionConfigPreparation,
   type StewardWakeEnvelope,
 } from './steward/index.js';
 import { CodexAppServerDriver } from './steward/machine-driver/codex-app-server-driver.js';
@@ -156,6 +157,12 @@ export interface WorkspaceService {
     meta: WorkspaceMeta,
     input: StewardWakeControlFaceInput,
   ): Promise<StewardWakeControlFaceOutcome>;
+  /** Persistent wake dispatch used by the schedule scanner. Exposed so its
+   *  PTY ownership and cleanup invariants can be integration-tested directly. */
+  dispatchStewardWake(
+    meta: WorkspaceMeta,
+    wake: ScheduleStewardWakeInput,
+  ): Promise<{ wakeId: string }>;
   publicMeta(w: WorkspaceMeta): Promise<unknown>;
   /**
    * Probe the host PATH for each registered adapter's CLI binary. Keyed by
@@ -911,22 +918,6 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     }
   };
 
-  async function writeStewardSessionConfig(
-    ws: WorkspaceMeta,
-    current: Record<string, unknown>,
-    sessionId: string,
-    agent: string,
-  ): Promise<void> {
-    const path = join(ws.dir, '.alice', 'steward', 'config.json');
-    await mkdir(join(ws.dir, '.alice', 'steward'), { recursive: true });
-    await writeFile(path, `${JSON.stringify({
-      ...current,
-      version: typeof current['version'] === 'number' ? current['version'] : 1,
-      agent,
-      sessionId,
-    }, null, 2)}\n`, 'utf8');
-  }
-
   async function ensureStewardScheduleSession(
     ws: WorkspaceMeta,
     config: Record<string, unknown>,
@@ -1048,35 +1039,59 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       state: 'running',
     };
     await sessionRegistry.create(record);
+    let preparation: StewardSessionConfigPreparation | null = null;
+    let session: ReturnType<typeof pool.spawn>;
     try {
       // Persist the pointer before a seeded process can receive the wake. If
       // persistence fails, the caller terminalizes the uninjected wake and
       // releases its account lock without ever starting the agent.
-      await writeStewardSessionConfig(ws, stewardConfig, recordId, adapter.id);
-      const session = pool.spawn(ws.id, {
+      preparation = await prepareStewardSessionConfig(
+        ws.dir,
+        stewardConfig,
+        recordId,
+        adapter.id,
+      );
+      session = pool.spawn(ws.id, {
         agentId: adapter.id,
         ...(initialWakePrompt !== undefined ? { initialPrompt: initialWakePrompt } : {}),
         recordId,
         recordName,
       });
-      launcherLogger.info('workspace.steward_session_spawned', {
-        id: ws.id,
-        sessionId: session.recordId,
-        name: session.name,
-        pid: session.pid,
-        agent: adapter.id,
-      });
-      return {
-        sessionId: session.recordId,
-        agent: adapter.id,
-        reused: false,
-        resumed: false,
-        injectedByInitialPrompt: initialWakePrompt !== undefined,
-      };
+      await preparation.commit();
     } catch (err) {
+      let failure = err;
+      if (preparation) {
+        try {
+          await preparation.rollback();
+        } catch (rollbackError) {
+          launcherLogger.error('schedule.steward_session_config_rollback_failed', {
+            wsId: ws.id,
+            recordId,
+            err: rollbackError,
+          });
+          failure = new Error(
+            `${err instanceof Error ? err.message : String(err)}; ` +
+            `steward session config rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+          );
+        }
+      }
       await sessionRegistry.remove(ws.id, recordId).catch(() => undefined);
-      throw err;
+      throw failure;
     }
+    launcherLogger.info('workspace.steward_session_spawned', {
+      id: ws.id,
+      sessionId: session.recordId,
+      name: session.name,
+      pid: session.pid,
+      agent: adapter.id,
+    });
+    return {
+      sessionId: session.recordId,
+      agent: adapter.id,
+      reused: false,
+      resumed: false,
+      injectedByInitialPrompt: initialWakePrompt !== undefined,
+    };
   }
 
   async function resumeStewardScheduleSession(
@@ -1548,6 +1563,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     resolveAdapter,
     refreshStewardRuntime: (meta) => creator.refreshStewardRuntime(meta),
     dispatchStewardWakeControlFace: dispatchStewardWakeControlFaceMethod,
+    dispatchStewardWake: dispatchStewardWakeMethod,
     publicMeta,
     detectAgents,
     computeSpawnPlan,

@@ -52,12 +52,14 @@ import {
   evaluateStewardRotation,
   formatStewardWakeMessage,
   injectStewardWake,
+  prepareStewardSessionConfig,
   readStewardConfig,
   recordStewardRotation,
   runStewardSupervisorTick,
   StewardLockConflictError,
   stewardExpectedDecisionSchema,
   stewardWakeReasonSchema,
+  type StewardSessionConfigPreparation,
   type StewardWakeRecord,
 } from '../../workspaces/steward/index.js';
 
@@ -237,7 +239,9 @@ export function createWorkspaceRoutes(
       readonly terminalTheme?: TerminalThemeVariant;
       /** Steward uses this to persist its session pointer before a seeded
        * process can receive the wake. Other interactive spawns omit it. */
-      readonly beforeSpawn?: (session: { readonly sessionId: string; readonly agent: string }) => Promise<void>;
+      readonly beforeSpawn?: (
+        session: { readonly sessionId: string; readonly agent: string },
+      ) => Promise<StewardSessionConfigPreparation>;
     },
   ): Promise<SpawnSessionResult> {
     const id = meta.id;
@@ -300,15 +304,17 @@ export function createWorkspaceRoutes(
       launcherLogger.error('session_registry.create_failed', { id, recordId, err });
       return { ok: false, status: 500, body: { error: 'registry_failed', message: (err as Error).message } };
     }
+    let preparation: StewardSessionConfigPreparation | null = null;
     if (opts.beforeSpawn) {
       try {
-        await opts.beforeSpawn({ sessionId: recordId, agent: adapter.id });
+        preparation = await opts.beforeSpawn({ sessionId: recordId, agent: adapter.id });
       } catch (err) {
         await svc.sessionRegistry.remove(id, recordId).catch(() => undefined);
         launcherLogger.error('workspace.session_preparation_failed', { id, recordId, err });
         throw err;
       }
     }
+    let session: ReturnType<typeof svc.pool.spawn>;
     try {
       const ctx: SessionFactoryContext = {
         ...(resume !== undefined ? { resume } : {}),
@@ -318,49 +324,58 @@ export function createWorkspaceRoutes(
         recordId,
         recordName,
       };
-      const session = svc.pool.spawn(id, ctx);
-      launcherLogger.info('workspace.session_spawned', {
-        id,
+      session = svc.pool.spawn(id, ctx);
+      await preparation?.commit();
+    } catch (err) {
+      let failure = err;
+      if (preparation) {
+        try {
+          await preparation.rollback();
+        } catch (rollbackError) {
+          launcherLogger.error('workspace.session_preparation_rollback_failed', {
+            id,
+            recordId,
+            err: rollbackError,
+          });
+          failure = new Error(
+            `${err instanceof Error ? err.message : String(err)}; ` +
+            `steward session config rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+          );
+        }
+      }
+      await svc.sessionRegistry.remove(id, recordId).catch(() => undefined);
+      launcherLogger.error('workspace.session_spawn_failed', { id, err: failure });
+      return {
+        ok: false,
+        status: 500,
+        body: {
+          error: 'spawn_failed',
+          message: failure instanceof Error ? failure.message : String(failure),
+        },
+      };
+    }
+    launcherLogger.info('workspace.session_spawned', {
+      id,
+      sessionId: session.recordId,
+      name: session.name,
+      pid: session.pid,
+      agent: adapter.id,
+      resume: resume === undefined ? null : resume === 'last' ? 'last' : resume.sessionId,
+      seeded: resume === undefined && !!initialPrompt,
+    });
+    return {
+      ok: true,
+      session: {
         sessionId: session.recordId,
+        wsId: session.wsId,
         name: session.name,
         pid: session.pid,
         agent: adapter.id,
-        resume: resume === undefined ? null : resume === 'last' ? 'last' : resume.sessionId,
-        seeded: resume === undefined && !!initialPrompt,
-      });
-      return {
-        ok: true,
-        session: {
-          sessionId: session.recordId,
-          wsId: session.wsId,
-          name: session.name,
-          pid: session.pid,
-          agent: adapter.id,
-          agentSessionId: session.agentSessionId,
-          startedAt: session.startedAt,
-          title: title ?? null,
-        },
-      };
-    } catch (err) {
-      await svc.sessionRegistry.remove(id, recordId).catch(() => undefined);
-      launcherLogger.error('workspace.session_spawn_failed', { id, err });
-      return { ok: false, status: 500, body: { error: 'spawn_failed', message: (err as Error).message } };
-    }
-  }
-
-  async function writeStewardSessionConfig(
-    meta: WorkspaceMeta,
-    current: Record<string, unknown>,
-    sessionId: string,
-    agent: string,
-  ): Promise<void> {
-    const next = {
-      ...current,
-      version: typeof current['version'] === 'number' ? current['version'] : 1,
-      agent,
-      sessionId,
+        agentSessionId: session.agentSessionId,
+        startedAt: session.startedAt,
+        title: title ?? null,
+      },
     };
-    await writeWorkspaceFile(meta.dir, '.alice/steward/config.json', `${JSON.stringify(next, null, 2)}\n`);
   }
 
   async function ensureStewardSession(
@@ -410,7 +425,7 @@ export function createWorkspaceRoutes(
         agentId: agent,
         initialPrompt: initialWakePrompt,
         beforeSpawn: ({ sessionId, agent: spawnedAgent }) =>
-          writeStewardSessionConfig(meta, config, sessionId, spawnedAgent),
+          prepareStewardSessionConfig(meta.dir, config, sessionId, spawnedAgent),
       });
       if (!spawned.ok) return spawned;
       await recordStewardRotation(meta.dir, {
@@ -455,7 +470,7 @@ export function createWorkspaceRoutes(
       agentId: agent,
       initialPrompt: initialWakePrompt,
       beforeSpawn: ({ sessionId, agent: spawnedAgent }) =>
-        writeStewardSessionConfig(meta, config, sessionId, spawnedAgent),
+        prepareStewardSessionConfig(meta.dir, config, sessionId, spawnedAgent),
     });
     if (!spawned.ok) return spawned;
     return {

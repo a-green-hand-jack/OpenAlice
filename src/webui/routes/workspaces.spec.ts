@@ -4,7 +4,7 @@
  * (no real spawn). Modeled on trading-config.spec's harness.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -624,7 +624,13 @@ describe('steward wake API', () => {
       // target a directory so the write fails, and prove the seeded process is
       // never spawned before the same terminalize-then-release cleanup runs.
       const configPath = join(dir, '.alice/steward/config.json');
-      vi.mocked(sessionRegistry.create).mockImplementationOnce(async () => {
+      const createRecord = vi.mocked(sessionRegistry.create).getMockImplementation() as
+        ((record: any) => Promise<void>) | undefined;
+      let seededRecordId: string | null = null;
+      vi.mocked(sessionRegistry.create).mockImplementationOnce(async (record) => {
+        await createRecord?.(record);
+        seededRecordId = record.id;
+        expect(sessionRegistry.findById(record.id)).toBe(record);
         await mkdir(configPath, { recursive: true });
       });
       const configFailed = await post(app, '/ws-1/steward/wakes', {
@@ -644,6 +650,8 @@ describe('steward wake API', () => {
         },
       });
       expect(pool.spawn).not.toHaveBeenCalled();
+      expect(seededRecordId).not.toBeNull();
+      expect(sessionRegistry.findById(seededRecordId!)).toBeUndefined();
       expect(await lockStore.get(accountId)).toBeNull();
       await rm(configPath, { recursive: true, force: true });
 
@@ -669,6 +677,121 @@ describe('steward wake API', () => {
       });
       expect(await lockStore.get(accountId)).toMatchObject({
         wakeId: 'wake-session-prepare-retry',
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('restores the prior steward config and removes the seeded registry record when HTTP PTY spawn fails (issue #177)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
+    const accountId = 'mock-simulator-1';
+    const configPath = join(dir, '.alice/steward/config.json');
+    const priorConfig = `${JSON.stringify({
+      version: 7,
+      controlFace: 'pty',
+      agent: 'codex',
+      sessionId: null,
+      preserved: 'yes',
+    }, null, 2)}\n`;
+    try {
+      await mkdir(join(dir, '.alice/steward'), { recursive: true });
+      await writeFile(configPath, priorConfig, 'utf8');
+      const { app, pool, sessionRegistry } = buildSteward({ dir });
+      const removeRecord = vi.mocked(sessionRegistry.remove).getMockImplementation() as
+        ((wsId: string, recordId: string) => Promise<any>) | undefined;
+      let removedSeededRecord = false;
+      vi.mocked(sessionRegistry.remove).mockImplementationOnce(async (wsId, recordId) => {
+        removedSeededRecord = sessionRegistry.findById(recordId) !== undefined;
+        return removeRecord?.(wsId, recordId);
+      });
+      vi.mocked(pool.spawn).mockImplementationOnce(() => {
+        throw new Error('PTY spawn failed after config preparation');
+      });
+
+      const failed = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-http-spawn-fail',
+        reason: 'scheduled_observe',
+        accountId,
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+
+      expect(failed.status).toBe(500);
+      expect(failed.body).toEqual({
+        error: 'spawn_failed',
+        message: 'PTY spawn failed after config preparation',
+      });
+      const createdRecord = vi.mocked(sessionRegistry.create).mock.calls[0]?.[0];
+      expect(createdRecord).toBeDefined();
+      expect(removedSeededRecord).toBe(true);
+      expect(sessionRegistry.findById(createdRecord!.id)).toBeUndefined();
+      expect(await readFile(configPath, 'utf8')).toBe(priorConfig);
+
+      expect(await createStewardWakeStore(dir).require('wake-http-spawn-fail')).toMatchObject({
+        status: 'error',
+        injectedAt: null,
+        completedAt: expect.any(String),
+        error: 'PTY spawn failed after config preparation',
+      });
+      expect(await createStewardLockStore(dir).get(accountId)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a newer config while still cleaning the HTTP wake and lock when rollback loses ownership (issue #177)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
+    const accountId = 'mock-simulator-1';
+    const configPath = join(dir, '.alice/steward/config.json');
+    const priorConfig = '{"version":1,"controlFace":"pty","agent":"codex","sessionId":null}\n';
+    const externalConfig = '{"version":1,"controlFace":"pty","agent":"codex","sessionId":null,"owner":"external"}\n';
+    try {
+      await mkdir(join(dir, '.alice/steward'), { recursive: true });
+      await writeFile(configPath, priorConfig, 'utf8');
+      const { app, pool, sessionRegistry } = buildSteward({ dir });
+      vi.mocked(pool.spawn).mockImplementationOnce(() => {
+        writeFileSync(configPath, externalConfig, 'utf8');
+        throw new Error('HTTP PTY spawn failed after external config publication');
+      });
+
+      const failed = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-http-rollback-owner-lost',
+        reason: 'scheduled_observe',
+        accountId,
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+
+      expect(failed.status).toBe(500);
+      expect(failed.body.error).toBe('spawn_failed');
+      expect(failed.body.message).toContain('refusing stale rollback');
+      expect(await readFile(configPath, 'utf8')).toBe(externalConfig);
+      const failedRecord = vi.mocked(sessionRegistry.create).mock.calls[0]?.[0];
+      expect(failedRecord).toBeDefined();
+      expect(sessionRegistry.findById(failedRecord!.id)).toBeUndefined();
+      expect(await createStewardWakeStore(dir).require('wake-http-rollback-owner-lost')).toMatchObject({
+        status: 'error',
+        injectedAt: null,
+        completedAt: expect.any(String),
+        error: expect.stringContaining('refusing stale rollback'),
+      });
+      expect(await createStewardLockStore(dir).get(accountId)).toBeNull();
+
+      const retry = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-http-rollback-retry',
+        reason: 'scheduled_observe',
+        accountId,
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+      expect(retry.status).toBe(202);
+      expect(retry.body.wake).toMatchObject({
+        wakeId: 'wake-http-rollback-retry',
+        status: 'injected',
+      });
+      expect(await createStewardLockStore(dir).get(accountId)).toMatchObject({
+        wakeId: 'wake-http-rollback-retry',
       });
     } finally {
       await rm(dir, { recursive: true, force: true });
