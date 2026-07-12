@@ -1,0 +1,124 @@
+{
+  "cases": [
+    {
+      "name": "single target reaches requested maximum",
+      "account": {
+        "equity": "10000",
+        "positionQuantity": "0",
+        "markPrice": "100",
+        "quantityIncrement": "1"
+      },
+      "caps": {
+        "maxPositionPctOfEquity": "25",
+        "maxSingleOrderPctOfEquity": "20",
+        "remainingLossPctOfEquity": "5"
+      },
+      "capabilities": {
+        "market": true,
+        "stop": true,
+        "stopLimit": { "supported": true, "limitOffsetBps": 25 }
+      },
+      "expected": {
+        "kind": "proposal",
+        "quantity": "15",
+        "protectionOrderType": "STP"
+      }
+    },
+    {
+      "name": "single-order ceiling clips to target minimum",
+      "account": {
+        "equity": "10000",
+        "positionQuantity": "0",
+        "markPrice": "100",
+        "quantityIncrement": "1"
+      },
+      "caps": {
+        "maxPositionPctOfEquity": "25",
+        "maxSingleOrderPctOfEquity": "10",
+        "remainingLossPctOfEquity": "5"
+      },
+      "capabilities": {
+        "market": true,
+        "stop": true,
+        "stopLimit": { "supported": false }
+      },
+      "expected": {
+        "kind": "clipped",
+        "quantity": "10",
+        "protectionOrderType": "STP"
+      }
+    },
+    {
+      "name": "explicit stop-limit offset is deterministic",
+      "account": {
+        "equity": "10000",
+        "positionQuantity": "0",
+        "markPrice": "100",
+        "quantityIncrement": "1"
+      },
+      "caps": {
+        "maxPositionPctOfEquity": "25",
+        "maxSingleOrderPctOfEquity": "20",
+        "remainingLossPctOfEquity": "5"
+      },
+      "capabilities": {
+        "market": true,
+        "stop": false,
+        "stopLimit": { "supported": true, "limitOffsetBps": 25 }
+      },
+      "expected": {
+        "kind": "proposal",
+        "quantity": "15",
+        "protectionOrderType": "STP_LMT",
+        "limitPrice": "93.9645"
+      }
+    },
+    {
+      "name": "flat target closes without a price or naked fallback",
+      "account": {
+        "equity": "10000",
+        "positionQuantity": "12",
+        "markPrice": null,
+        "quantityIncrement": "1"
+      },
+      "caps": {
+        "maxPositionPctOfEquity": "25",
+        "maxSingleOrderPctOfEquity": "20",
+        "remainingLossPctOfEquity": "0"
+      },
+      "capabilities": {
+        "market": true,
+        "stop": false,
+        "stopLimit": { "supported": false }
+      },
+      "expected": {
+        "kind": "proposal",
+        "quantity": "12",
+        "protectionOrderType": null
+      }
+    },
+    {
+      "name": "non-intersecting order ceiling rejects",
+      "account": {
+        "equity": "10000",
+        "positionQuantity": "0",
+        "markPrice": "100",
+        "quantityIncrement": "1"
+      },
+      "caps": {
+        "maxPositionPctOfEquity": "25",
+        "maxSingleOrderPctOfEquity": "5",
+        "remainingLossPctOfEquity": "5"
+      },
+      "capabilities": {
+        "market": true,
+        "stop": true,
+        "stopLimit": { "supported": false }
+      },
+      "expected": {
+        "kind": "rejected",
+        "code": "empty_feasible_quantity"
+      }
+    }
+  ]
+}

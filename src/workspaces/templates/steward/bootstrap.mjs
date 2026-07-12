@@ -331,7 +331,11 @@ const LEDGER_SEMANTIC_KEYS = ['version', 'wakeId', 'at', 'accountId', 'decision'
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize)
   if (value && typeof value === 'object') {
-    const out = {}
+    // JSON.parse can produce own "__proto__" / "constructor" keys. A normal
+    // object assignment treats the former as the legacy prototype setter and
+    // silently drops semantic data; a null-prototype object preserves every
+    // own JSON key without changing JSON.stringify bytes for ordinary values.
+    const out = Object.create(null)
     for (const key of Object.keys(value).sort()) out[key] = canonicalize(value[key])
     return out
   }

@@ -20,7 +20,11 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { canonicalDecisionFingerprint } from '../../steward/ledger-receipt.js';
+import {
+  canonicalDecisionFingerprint,
+  canonicalizeJson,
+  semanticLedgerProjection,
+} from '../../steward/ledger-receipt.js';
 import { LEDGER_RENAME_RETRY_CODES, LOCK_TTL_MS } from '../../steward/ledger-writer.js';
 import { canonicalInformationSnapshotHash } from '../../steward/snapshot.js';
 import { stewardDecisionLedgerEntryV3Schema } from '../../steward/types.js';
@@ -183,6 +187,57 @@ describe('generated validate-ledger.mjs — draft → ledger commit (issue #140)
     const marker = JSON.parse(await readFile(markerPathFor('wake-1'), 'utf8'));
     expect(marker.fingerprint).toBe(canonicalDecisionFingerprint(e));
     expect(existsSync(draftPathFor('wake-1'))).toBe(false); // cleaned on success
+  });
+
+  it('hashes nested own __proto__/constructor exactly like the TypeScript receipt canonicalizer', async () => {
+    const wakeId = 'wake-hostile-json-keys';
+    const params = JSON.parse(
+      '{"nested":{"z":1,"__proto__":{"polluted":true},"constructor":{"prototype":{"constructorPolluted":true}}}}',
+    ) as Record<string, unknown>;
+    const hostile = entry({
+      wakeId,
+      actions: [{ kind: 'git_reject', params, outcome: 'awaiting_approval' }],
+    });
+    await seedWakeRecord(wakeId);
+    await writeRawDraft(wakeId, hostile);
+
+    expect(runValidate(wakeId).code).toBe(0);
+    const committedHostile = JSON.parse((await ledgerLines())[0]!) as Record<string, unknown>;
+    const hostileMarker = JSON.parse(await readFile(markerPathFor(wakeId), 'utf8')) as Record<string, unknown>;
+    const committedParams = (
+      (committedHostile['actions'] as Array<Record<string, unknown>>)[0]!['params'] as Record<string, unknown>
+    );
+    const nested = committedParams['nested'] as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(nested, '__proto__')).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(nested, 'constructor')).toBe(true);
+    expect(JSON.stringify(canonicalizeJson(semanticLedgerProjection(committedHostile)))).toContain(
+      '"__proto__":{"polluted":true}',
+    );
+    expect(hostileMarker['fingerprint']).toBe(canonicalDecisionFingerprint(committedHostile));
+
+    const withoutProto = JSON.parse(JSON.stringify(committedHostile)) as Record<string, unknown>;
+    const withoutProtoNested = (
+      (((withoutProto['actions'] as Array<Record<string, unknown>>)[0]!['params'] as Record<string, unknown>)['nested'])
+    ) as Record<string, unknown>;
+    delete withoutProtoNested['__proto__'];
+    await writeRawDraft(wakeId, withoutProto);
+    expect(runValidate(wakeId).code).toBe(0);
+    const protoFreeMarker = JSON.parse(await readFile(markerPathFor(wakeId), 'utf8')) as Record<string, unknown>;
+    expect(protoFreeMarker['fingerprint']).toBe(canonicalDecisionFingerprint(withoutProto));
+    expect(protoFreeMarker['fingerprint']).not.toBe(hostileMarker['fingerprint']);
+
+    const withoutConstructor = JSON.parse(JSON.stringify(withoutProto)) as Record<string, unknown>;
+    const withoutConstructorNested = (
+      (((withoutConstructor['actions'] as Array<Record<string, unknown>>)[0]!['params'] as Record<string, unknown>)['nested'])
+    ) as Record<string, unknown>;
+    delete withoutConstructorNested['constructor'];
+    await writeRawDraft(wakeId, withoutConstructor);
+    expect(runValidate(wakeId).code).toBe(0);
+    const cleanMarker = JSON.parse(await readFile(markerPathFor(wakeId), 'utf8')) as Record<string, unknown>;
+    expect(cleanMarker['fingerprint']).toBe(canonicalDecisionFingerprint(withoutConstructor));
+    expect(cleanMarker['fingerprint']).not.toBe(protoFreeMarker['fingerprint']);
+    expect((Object.prototype as { polluted?: unknown }).polluted).toBeUndefined();
+    expect((Object.prototype as { constructorPolluted?: unknown }).constructorPolluted).toBeUndefined();
   });
 
   it('appends a new wake and preserves the prior line byte-for-byte', async () => {

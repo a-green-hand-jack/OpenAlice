@@ -13,7 +13,12 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { canonicalDecisionFingerprint, createStewardLedgerStore } from './index.js';
+import {
+  canonicalDecisionFingerprint,
+  canonicalIntentFingerprint,
+  canonicalizeJson,
+  createStewardLedgerStore,
+} from './index.js';
 
 /** The pinned golden ledger entry. If the projection/canonicalization changes,
  *  update GOLDEN_FINGERPRINT here AND the copy asserted in bootstrap.spec.ts. */
@@ -71,6 +76,44 @@ describe('canonicalDecisionFingerprint (issue #134)', () => {
 
   it('changes when a semantic field changes', () => {
     expect(canonicalDecisionFingerprint({ ...GOLDEN_ENTRY, decision: 'propose_trade' })).not.toBe(GOLDEN_FINGERPRINT);
+  });
+
+  it('retains nested disk-origin __proto__/constructor as canonical data and fingerprints them', () => {
+    const hostile = JSON.parse(
+      '{"a":1,"nested":{"z":1,"__proto__":{"polluted":true},"constructor":{"prototype":{"constructorPolluted":true}}}}',
+    ) as Record<string, unknown>;
+    const canonical = canonicalizeJson(hostile) as Record<string, unknown>;
+    const nested = canonical['nested'] as Record<string, unknown>;
+
+    expect(Object.getPrototypeOf(canonical)).toBeNull();
+    expect(Object.getPrototypeOf(nested)).toBeNull();
+    expect(Object.prototype.hasOwnProperty.call(nested, '__proto__')).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(nested, 'constructor')).toBe(true);
+    expect(nested['__proto__']).toEqual({ polluted: true });
+    expect(nested['constructor']).toEqual({ prototype: { constructorPolluted: true } });
+    expect(JSON.stringify(canonical)).toBe(
+      '{"a":1,"nested":{"__proto__":{"polluted":true},"constructor":{"prototype":{"constructorPolluted":true}},"z":1}}',
+    );
+
+    const withoutProto = JSON.parse(JSON.stringify(hostile)) as Record<string, unknown>;
+    delete (withoutProto['nested'] as Record<string, unknown>)['__proto__'];
+    const withoutConstructor = JSON.parse(JSON.stringify(withoutProto)) as Record<string, unknown>;
+    delete (withoutConstructor['nested'] as Record<string, unknown>)['constructor'];
+    expect(canonicalIntentFingerprint(hostile)).not.toBe(canonicalIntentFingerprint(withoutProto));
+    expect(canonicalIntentFingerprint(withoutProto)).not.toBe(canonicalIntentFingerprint(withoutConstructor));
+
+    const ledgerWithHostileParams = {
+      ...GOLDEN_ENTRY,
+      actions: [{ kind: 'git_reject', params: hostile, outcome: 'awaiting_approval' }],
+    };
+    const ledgerWithoutProto = {
+      ...GOLDEN_ENTRY,
+      actions: [{ kind: 'git_reject', params: withoutProto, outcome: 'awaiting_approval' }],
+    };
+    expect(canonicalDecisionFingerprint(ledgerWithHostileParams))
+      .not.toBe(canonicalDecisionFingerprint(ledgerWithoutProto));
+    expect((Object.prototype as { polluted?: unknown }).polluted).toBeUndefined();
+    expect((Object.prototype as { constructorPolluted?: unknown }).constructorPolluted).toBeUndefined();
   });
 });
 

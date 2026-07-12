@@ -14,3 +14,5 @@ export * from './supervisor-scanner.js';
 export * from './rotation.js';
 export * from './session-config.js';
 export * from './snapshot.js';
+export * from './sizing.js';
+export * from './execution-record.js';
