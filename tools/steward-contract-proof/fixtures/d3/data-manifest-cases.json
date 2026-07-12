@@ -1,0 +1,226 @@
+{
+  "contents": {
+    "fixture:data:dev": "dev-bars-v1",
+    "fixture:data:validation": "validation-bars-v1",
+    "fixture:data:holdout": "holdout-bars-v1",
+    "fixture:data:delisted": "delisted-bars-v1",
+    "fixture:snapshot:dev:1": "dev-snapshot-wake-1-v1",
+    "fixture:snapshot:dev:2": "dev-snapshot-wake-2-v1",
+    "fixture:snapshot:validation:1": "validation-snapshot-wake-1-v1",
+    "fixture:snapshot:validation:2": "validation-snapshot-wake-2-v1",
+    "fixture:snapshot:holdout:1": "holdout-snapshot-wake-1-v1",
+    "fixture:snapshot:holdout:2": "holdout-snapshot-wake-2-v1",
+    "fixture:plan:dev": "dev-sampling-plan-v1",
+    "fixture:plan:validation": "validation-sampling-plan-v1",
+    "fixture:plan:holdout": "holdout-sampling-plan-v1"
+  },
+  "validManifests": [
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "datasetId": "fixture-dev",
+      "source": { "provider": "fixture", "dataset": "synthetic-bars", "rawSymbol": "ASSET-A", "assetClass": "equity" },
+      "decisionCutoffs": [
+        {
+          "wake": 1,
+          "asOf": "2026-01-03T00:00:00.000Z",
+          "snapshot": { "ref": "fixture:snapshot:dev:1", "sha256": "8c8a66e91cea066364dafa5512133cb491472fafd95830619f16ffe2f70f0e7d" }
+        },
+        {
+          "wake": 2,
+          "asOf": "2026-01-06T00:00:00.000Z",
+          "snapshot": { "ref": "fixture:snapshot:dev:2", "sha256": "2a79f5ecfbe0b0003cfe71c26cea06fa58664a0ab995fd2cb371d8eba41dd276" }
+        }
+      ],
+      "timezone": "America/New_York",
+      "exchangeCalendar": "XNYS",
+      "adjustment": { "mode": "adjusted", "corporateActionRefs": ["fixture:action:split-a"] },
+      "publications": {
+        "provided": true,
+        "items": [
+          {
+            "ref": "fixture:event:earnings-a",
+            "eventAt": "2025-12-20T00:00:00.000Z",
+            "publishedAt": "2025-12-20T21:00:00.000Z",
+            "usedAtWakes": [1, 2]
+          }
+        ]
+      },
+      "corporateActions": [
+        {
+          "ref": "fixture:action:split-a",
+          "kind": "split",
+          "effectiveAt": "2025-12-15T00:00:00.000Z",
+          "publishedAt": "2025-12-01T00:00:00.000Z",
+          "usedAtWakes": [1, 2]
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2025-12-31T00:00:00.000Z",
+        "effectiveFrom": "2020-01-01T00:00:00.000Z",
+        "effectiveTo": null,
+        "sourceRef": "fixture:universe:xnys-2025"
+      },
+      "delisting": { "status": "active", "handling": "not_applicable", "delistedAt": null },
+      "sampling": {
+        "kind": "continuous_walk_forward",
+        "frozenAt": "2026-07-12T08:00:00.000Z",
+        "plan": { "ref": "fixture:plan:dev", "sha256": "b1f3ada23e31233f9810ec1a546da5b85a37411435971c93733a86929677d128" }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-12T08:05:00.000Z",
+        "evaluationStartedAt": "2026-07-12T09:00:00.000Z"
+      },
+      "content": { "ref": "fixture:data:dev", "sha256": "61c24e012855f8d6fca46ae69624ecd167a7f2567acf870b7c3dac3b019ddd7d" },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:fixture-a",
+        "leakageGroups": ["family:fixture-equity"],
+        "inputStart": "2026-01-01T00:00:00.000Z",
+        "decisionStart": "2026-01-03T00:00:00.000Z",
+        "decisionEnd": "2026-01-07T00:00:00.000Z",
+        "outcomeEnd": "2026-01-10T00:00:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "datasetId": "fixture-validation",
+      "source": { "provider": "fixture", "dataset": "synthetic-bars", "rawSymbol": "ASSET-B", "assetClass": "equity" },
+      "decisionCutoffs": [
+        {
+          "wake": 1,
+          "asOf": "2026-02-03T00:00:00.000Z",
+          "snapshot": { "ref": "fixture:snapshot:validation:1", "sha256": "1f28bd2b01cbd66720f5a447564492553308ccc8f129a12aace03235bd2a16da" }
+        },
+        {
+          "wake": 2,
+          "asOf": "2026-02-06T00:00:00.000Z",
+          "snapshot": { "ref": "fixture:snapshot:validation:2", "sha256": "bd3a1534c312bacd195d579ca561ce991320f088e398afd715b3a8aaaeae3e60" }
+        }
+      ],
+      "timezone": "America/New_York",
+      "exchangeCalendar": "XNYS",
+      "adjustment": { "mode": "unadjusted", "corporateActionRefs": [] },
+      "publications": { "provided": false, "items": [] },
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2026-01-31T00:00:00.000Z",
+        "effectiveFrom": "2021-01-01T00:00:00.000Z",
+        "effectiveTo": null,
+        "sourceRef": "fixture:universe:xnys-2026-01"
+      },
+      "delisting": { "status": "active", "handling": "not_applicable", "delistedAt": null },
+      "sampling": {
+        "kind": "continuous_walk_forward",
+        "frozenAt": "2026-07-12T08:10:00.000Z",
+        "plan": { "ref": "fixture:plan:validation", "sha256": "8784046cf7a8cabce1d3df7c445ff412bcbd5cb3a784aed00dbf144707440973" }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-12T08:15:00.000Z",
+        "evaluationStartedAt": "2026-07-12T09:10:00.000Z"
+      },
+      "content": { "ref": "fixture:data:validation", "sha256": "ee021f29d2a32a7210fe238f3729dcfaa86d2b45568d85c7385e272137cd52c6" },
+      "split": {
+        "name": "validation",
+        "identity": "split:validation:fixture-b",
+        "leakageGroups": ["family:fixture-equity"],
+        "inputStart": "2026-02-01T00:00:00.000Z",
+        "decisionStart": "2026-02-03T00:00:00.000Z",
+        "decisionEnd": "2026-02-07T00:00:00.000Z",
+        "outcomeEnd": "2026-02-10T00:00:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "datasetId": "fixture-holdout-delisted",
+      "source": { "provider": "fixture", "dataset": "synthetic-bars", "rawSymbol": "ASSET-DELISTED", "assetClass": "equity" },
+      "decisionCutoffs": [
+        {
+          "wake": 1,
+          "asOf": "2026-03-03T00:00:00.000Z",
+          "snapshot": { "ref": "fixture:snapshot:holdout:1", "sha256": "94ea7c74955591131e20701bf162bf1875f2dd992bb0eb5048ddc43d59c10370" }
+        },
+        {
+          "wake": 2,
+          "asOf": "2026-03-07T00:00:00.000Z",
+          "snapshot": { "ref": "fixture:snapshot:holdout:2", "sha256": "4c30f26592ab600f94430507c940f365f38f7e86b176ce6b595f552bc7c47787" }
+        }
+      ],
+      "timezone": "America/New_York",
+      "exchangeCalendar": "XNYS",
+      "adjustment": { "mode": "unadjusted", "corporateActionRefs": [] },
+      "publications": { "provided": false, "items": [] },
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2026-02-28T00:00:00.000Z",
+        "effectiveFrom": "2019-01-01T00:00:00.000Z",
+        "effectiveTo": "2026-03-09T00:00:00.000Z",
+        "sourceRef": "fixture:universe:xnys-2026-02"
+      },
+      "delisting": { "status": "delisted", "handling": "terminal_return", "delistedAt": "2026-03-09T00:00:00.000Z" },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-12T08:20:00.000Z",
+        "plan": { "ref": "fixture:plan:holdout", "sha256": "f560a9a56c2a66dc533dec6cc88463e4ab7f7762107ed076249a020b00f69665" }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-12T08:25:00.000Z",
+        "evaluationStartedAt": "2026-07-12T09:20:00.000Z"
+      },
+      "content": { "ref": "fixture:data:delisted", "sha256": "5084d34f4122a2266f83684d0966a6648d284d784e013e0ca39296b07a77fada" },
+      "split": {
+        "name": "holdout",
+        "identity": "split:holdout:fixture-delisted",
+        "leakageGroups": ["family:fixture-equity"],
+        "inputStart": "2026-03-01T00:00:00.000Z",
+        "decisionStart": "2026-03-03T00:00:00.000Z",
+        "decisionEnd": "2026-03-07T00:00:00.000Z",
+        "outcomeEnd": "2026-03-10T00:00:00.000Z",
+        "embargoMs": 86400000
+      }
+    }
+  ],
+  "invalidPatches": {
+    "overlapValidationSplit": {
+      "inputStart": "2026-01-08T00:00:00.000Z",
+      "decisionStart": "2026-01-09T00:00:00.000Z",
+      "decisionEnd": "2026-01-12T00:00:00.000Z",
+      "outcomeEnd": "2026-01-15T00:00:00.000Z"
+    },
+    "futureCorporateAction": {
+      "adjustment": { "mode": "adjusted", "corporateActionRefs": ["fixture:action:future-split"] },
+      "corporateActions": [
+        {
+          "ref": "fixture:action:future-split",
+          "kind": "split",
+          "effectiveAt": "2026-02-05T00:00:00.000Z",
+          "publishedAt": "2026-02-01T00:00:00.000Z",
+          "usedAtWakes": [1]
+        }
+      ]
+    },
+    "futurePublication": {
+      "provided": true,
+      "items": [
+        {
+          "ref": "fixture:event:not-yet-published",
+          "eventAt": "2025-12-20T00:00:00.000Z",
+          "publishedAt": "2026-01-04T00:00:00.000Z",
+          "usedAtWakes": [1]
+        }
+      ]
+    },
+    "survivorshipUniverse": {
+      "selectionBasis": "current_members",
+      "membershipAsOf": "2026-07-12T00:00:00.000Z",
+      "effectiveFrom": "2021-01-01T00:00:00.000Z",
+      "effectiveTo": null,
+      "sourceRef": "fixture:universe:current"
+    },
+    "badContentHash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  }
+}

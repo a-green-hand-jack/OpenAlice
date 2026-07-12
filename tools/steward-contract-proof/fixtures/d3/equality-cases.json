@@ -1,0 +1,74 @@
+{
+  "paired": {
+    "left": {
+      "snapshotBytes": "{\"version\":1,\"snapshotId\":\"snap:paired-1\",\"wakeId\":\"paired-1\",\"asOf\":\"2026-01-02T00:00:00.000Z\"}\n",
+      "evaluatorInputBytes": "{\"tapeId\":\"tape:paired-1\",\"policy\":\"decision-reference-midpoint-next-open@2\"}\n"
+    },
+    "right": {
+      "snapshotBytes": "{\"version\":1,\"snapshotId\":\"snap:paired-1\",\"wakeId\":\"paired-1\",\"asOf\":\"2026-01-02T00:00:00.000Z\"}\n",
+      "evaluatorInputBytes": "{\"tapeId\":\"tape:paired-1\",\"policy\":\"decision-reference-midpoint-next-open@2\"}\n"
+    },
+    "semanticButNotByteEqual": {
+      "snapshotBytes": "{\"wakeId\":\"paired-1\",\"snapshotId\":\"snap:paired-1\",\"asOf\":\"2026-01-02T00:00:00.000Z\",\"version\":1}\n",
+      "evaluatorInputBytes": "{\"tapeId\":\"tape:paired-1\",\"policy\":\"decision-reference-midpoint-next-open@2\"}\n"
+    },
+    "differentEvaluatorInput": {
+      "snapshotBytes": "{\"version\":1,\"snapshotId\":\"snap:paired-1\",\"wakeId\":\"paired-1\",\"asOf\":\"2026-01-02T00:00:00.000Z\"}\n",
+      "evaluatorInputBytes": "{\"tapeId\":\"tape:paired-CHANGED\",\"policy\":\"decision-reference-midpoint-next-open@2\"}\n"
+    }
+  },
+  "stateful": {
+    "left": {
+      "initialSnapshotBytes": "{\"snapshotId\":\"snap:stateful-initial\",\"portfolio\":{\"cash\":1000}}\n",
+      "tapeBytes": "[{\"at\":\"2026-01-02T00:00:00.000Z\",\"close\":100},{\"at\":\"2026-01-03T00:00:00.000Z\",\"close\":105}]\n",
+      "wakeScheduleBytes": "{\"schema\":\"steward-wake-schedule/1\",\"wakes\":[{\"ordinal\":2,\"at\":\"2026-01-02T00:00:00.000Z\"},{\"ordinal\":3,\"at\":\"2026-01-03T00:00:00.000Z\"}]}\n",
+      "costAssumptionsBytes": "{\"feeBps\":0,\"slippageBps\":0}\n",
+      "evaluator": { "id": "decision-reference-midpoint-next-open", "version": 2 },
+      "laterStateChain": [
+        { "wake": 2, "portfolioHash": "model-a-portfolio-2", "historyHash": "model-a-history-2" },
+        { "wake": 3, "portfolioHash": "model-a-portfolio-3", "historyHash": "model-a-history-3" }
+      ]
+    },
+    "right": {
+      "initialSnapshotBytes": "{\"snapshotId\":\"snap:stateful-initial\",\"portfolio\":{\"cash\":1000}}\n",
+      "tapeBytes": "[{\"at\":\"2026-01-02T00:00:00.000Z\",\"close\":100},{\"at\":\"2026-01-03T00:00:00.000Z\",\"close\":105}]\n",
+      "wakeScheduleBytes": "{\"schema\":\"steward-wake-schedule/1\",\"wakes\":[{\"ordinal\":2,\"at\":\"2026-01-02T00:00:00.000Z\"},{\"ordinal\":3,\"at\":\"2026-01-03T00:00:00.000Z\"}]}\n",
+      "costAssumptionsBytes": "{\"feeBps\":0,\"slippageBps\":0}\n",
+      "evaluator": { "id": "decision-reference-midpoint-next-open", "version": 2 },
+      "laterStateChain": [
+        { "wake": 2, "portfolioHash": "model-b-portfolio-2", "historyHash": "model-b-history-2" },
+        { "wake": 3, "portfolioHash": "model-b-portfolio-3", "historyHash": "model-b-history-3" }
+      ]
+    },
+    "differentTape": {
+      "initialSnapshotBytes": "{\"snapshotId\":\"snap:stateful-initial\",\"portfolio\":{\"cash\":1000}}\n",
+      "tapeBytes": "[{\"at\":\"2026-01-02T00:00:00.000Z\",\"close\":100},{\"at\":\"2026-01-03T00:00:00.000Z\",\"close\":106}]\n",
+      "wakeScheduleBytes": "{\"schema\":\"steward-wake-schedule/1\",\"wakes\":[{\"ordinal\":2,\"at\":\"2026-01-02T00:00:00.000Z\"},{\"ordinal\":3,\"at\":\"2026-01-03T00:00:00.000Z\"}]}\n",
+      "costAssumptionsBytes": "{\"feeBps\":0,\"slippageBps\":0}\n",
+      "evaluator": { "id": "decision-reference-midpoint-next-open", "version": 2 },
+      "laterStateChain": [
+        { "wake": 2, "portfolioHash": "model-c-portfolio-2", "historyHash": "model-c-history-2" },
+        { "wake": 3, "portfolioHash": "model-c-portfolio-3", "historyHash": "model-c-history-3" }
+      ]
+    },
+    "missingWake": {
+      "initialSnapshotBytes": "{\"snapshotId\":\"snap:stateful-initial\",\"portfolio\":{\"cash\":1000}}\n",
+      "tapeBytes": "[{\"at\":\"2026-01-02T00:00:00.000Z\",\"close\":100},{\"at\":\"2026-01-03T00:00:00.000Z\",\"close\":105}]\n",
+      "wakeScheduleBytes": "{\"schema\":\"steward-wake-schedule/1\",\"wakes\":[{\"ordinal\":2,\"at\":\"2026-01-02T00:00:00.000Z\"},{\"ordinal\":3,\"at\":\"2026-01-03T00:00:00.000Z\"}]}\n",
+      "costAssumptionsBytes": "{\"feeBps\":0,\"slippageBps\":0}\n",
+      "evaluator": { "id": "decision-reference-midpoint-next-open", "version": 2 },
+      "laterStateChain": []
+    },
+    "reorderedWakes": {
+      "initialSnapshotBytes": "{\"snapshotId\":\"snap:stateful-initial\",\"portfolio\":{\"cash\":1000}}\n",
+      "tapeBytes": "[{\"at\":\"2026-01-02T00:00:00.000Z\",\"close\":100},{\"at\":\"2026-01-03T00:00:00.000Z\",\"close\":105}]\n",
+      "wakeScheduleBytes": "{\"schema\":\"steward-wake-schedule/1\",\"wakes\":[{\"ordinal\":2,\"at\":\"2026-01-02T00:00:00.000Z\"},{\"ordinal\":3,\"at\":\"2026-01-03T00:00:00.000Z\"}]}\n",
+      "costAssumptionsBytes": "{\"feeBps\":0,\"slippageBps\":0}\n",
+      "evaluator": { "id": "decision-reference-midpoint-next-open", "version": 2 },
+      "laterStateChain": [
+        { "wake": 3, "portfolioHash": "model-d-portfolio-3", "historyHash": "model-d-history-3" },
+        { "wake": 2, "portfolioHash": "model-d-portfolio-2", "historyHash": "model-d-history-2" }
+      ]
+    }
+  }
+}
