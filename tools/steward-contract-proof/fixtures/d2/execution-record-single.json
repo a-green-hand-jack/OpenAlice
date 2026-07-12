@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "recordId": "execution:wake-v3-single:1",
+  "decisionWakeId": "wake-v3-single",
+  "accountId": "mock-simulator-1",
+  "snapshotId": "snap:wake-v3-single",
+  "snapshotSha256": "0c9cb6265d7f42c6779945b5d7ab586c12484f555fc205a9391797ed36a3a972",
+  "envelopeVersion": 3,
+  "accountStateVersion": "account-state:2026-07-12T10:00:00.000Z",
+  "intentFingerprint": "9aa2b2dd2dd51e86e26b3824c6aa4ae861698a40d70db18a68f153f11c1186bf",
+  "sizingOutcome": {
+    "kind": "proposal",
+    "operations": [
+      {
+        "operationId": "operation:entry:asset-a",
+        "kind": "order_place",
+        "effect": "increase",
+        "instrument": "mock-simulator-1/ASSET-A",
+        "side": "BUY",
+        "totalQuantity": "12"
+      }
+    ],
+    "appliedCaps": [
+      "riskEnvelope.maxSingleOrderPctOfEquity",
+      "intent.maxAcceptableLossPct"
+    ],
+    "protections": [
+      {
+        "kind": "selected",
+        "operationId": "operation:entry:asset-a",
+        "instrument": "mock-simulator-1/ASSET-A",
+        "exitSide": "SELL",
+        "orderType": "STP",
+        "triggerPrice": "94.2"
+      }
+    ]
+  },
+  "venueOutcomes": [],
+  "reconciliation": {
+    "status": "not_dispatched",
+    "note": "Wave 0.5 contract proof records no broker mutation."
+  },
+  "uncertainty": null
+}

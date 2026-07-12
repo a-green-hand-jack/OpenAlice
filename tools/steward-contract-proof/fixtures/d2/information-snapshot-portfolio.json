@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "snapshotId": "snap:wake-v3-portfolio",
+  "wakeId": "wake-v3-portfolio",
+  "accountId": "mock-simulator-1",
+  "asOf": "2026-07-12T10:05:00.000Z",
+  "market": {
+    "provided": true,
+    "refs": [
+      {
+        "ref": "bars:asset-a-and-b:1d:through-2026-07-12",
+        "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+        "asOf": "2026-07-12T10:05:00.000Z",
+        "freshness": "delayed_15m"
+      }
+    ]
+  },
+  "portfolio": {
+    "provided": true,
+    "refs": [
+      {
+        "ref": "uta:account-info:mock-simulator-1",
+        "sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+        "asOf": "2026-07-12T10:05:00.000Z"
+      }
+    ]
+  },
+  "risk": {
+    "provided": true,
+    "envelopeVersion": 3,
+    "refs": [
+      {
+        "ref": "uta:risk-state:mock-simulator-1",
+        "sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+        "asOf": "2026-07-12T10:05:00.000Z"
+      }
+    ]
+  },
+  "events": {
+    "provided": false,
+    "note": "No event input was supplied for this portfolio proof."
+  },
+  "history": {
+    "provided": true,
+    "openTheses": [],
+    "refs": [
+      {
+        "ref": "ledger:open-theses",
+        "sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+        "asOf": "2026-07-12T10:05:00.000Z"
+      }
+    ]
+  }
+}

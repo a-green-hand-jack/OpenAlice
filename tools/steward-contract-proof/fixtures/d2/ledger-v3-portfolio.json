@@ -1,0 +1,87 @@
+{
+  "version": 3,
+  "wakeId": "wake-v3-portfolio",
+  "at": "2026-07-12T10:05:00.000Z",
+  "accountId": "mock-simulator-1",
+  "decision": "propose_change",
+  "status": "done",
+  "completion": {
+    "reason": "Record a portfolio proposal without granting execution eligibility.",
+    "evidenceRefs": [
+      "wake:wake-v3-portfolio",
+      "snapshot:snap:wake-v3-portfolio"
+    ]
+  },
+  "checklist": {
+    "account": "ok",
+    "positions": "ok",
+    "orders": "ok",
+    "risk": "NORMAL",
+    "market": "open",
+    "history": "checked"
+  },
+  "thesis": "Pair a bounded long allocation with a smaller defensive short allocation.",
+  "actions": [],
+  "pendingHash": null,
+  "invalidation": "Each target has its own price-defined invalidation.",
+  "cost": {
+    "model": "claude",
+    "inputTokens": 1500,
+    "outputTokens": 320,
+    "modelCostUsd": null,
+    "allocatedServerCostUsd": 0,
+    "tradingFeesUsd": 0,
+    "estimatedSlippageUsd": 0,
+    "totalEstimatedCostUsd": 0
+  },
+  "intent": {
+    "kind": "portfolio",
+    "targets": [
+      {
+        "direction": "long",
+        "instrument": "mock-simulator-1/ASSET-A",
+        "targetExposure": {
+          "minPct": 10,
+          "maxPct": 15
+        },
+        "invalidation": [
+          {
+            "kind": "price_below",
+            "value": "94.2",
+            "note": "Exit the ASSET-A thesis below the swing low."
+          }
+        ]
+      },
+      {
+        "direction": "short",
+        "instrument": "mock-simulator-1/ASSET-B",
+        "targetExposure": {
+          "minPct": 5,
+          "maxPct": 8
+        },
+        "invalidation": [
+          {
+            "kind": "price_above",
+            "value": "52.5",
+            "note": "Exit the ASSET-B short thesis above resistance."
+          }
+        ]
+      }
+    ],
+    "confidence": "high",
+    "maxAcceptableLossPct": 2.5,
+    "timeHorizon": {
+      "unit": "week",
+      "value": 3
+    },
+    "evidence": [
+      {
+        "ref": "snapshot:snap:wake-v3-portfolio#market",
+        "note": "Both targets use the same frozen market snapshot."
+      }
+    ],
+    "snapshotId": "snap:wake-v3-portfolio",
+    "snapshotSha256": "78c51099a4f98e8fe0eb1dc33276112c31fa29b4ba6e62e2dde199f46a8c6f60"
+  },
+  "thesisDispositions": []
+}

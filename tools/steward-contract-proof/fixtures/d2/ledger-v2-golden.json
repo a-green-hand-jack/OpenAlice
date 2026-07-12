@@ -1,0 +1,34 @@
+{
+  "version": 2,
+  "wakeId": "golden-wake",
+  "at": "2026-07-11T00:00:00.000Z",
+  "accountId": "mock-simulator-1",
+  "decision": "no_trade",
+  "status": "done",
+  "completion": {
+    "reason": "checklist complete; no entry signal",
+    "evidenceRefs": ["wake:golden-wake", "tool:risk"]
+  },
+  "checklist": {
+    "account": "ok",
+    "positions": "ok",
+    "orders": "ok",
+    "risk": "NORMAL",
+    "market": "open",
+    "history": "checked"
+  },
+  "thesis": "No trade: no thesis or entry signal.",
+  "actions": [],
+  "pendingHash": null,
+  "invalidation": "A new explicit thesis or entry signal would reopen the decision.",
+  "cost": {
+    "model": "codex",
+    "inputTokens": null,
+    "outputTokens": null,
+    "modelCostUsd": null,
+    "allocatedServerCostUsd": null,
+    "tradingFeesUsd": null,
+    "estimatedSlippageUsd": null,
+    "totalEstimatedCostUsd": null
+  }
+}

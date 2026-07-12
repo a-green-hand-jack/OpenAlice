@@ -1,0 +1,88 @@
+{
+  "version": 3,
+  "wakeId": "wake-v3-single",
+  "at": "2026-07-12T10:00:00.000Z",
+  "accountId": "mock-simulator-1",
+  "decision": "propose_change",
+  "status": "done",
+  "context": {
+    "manifestPath": ".alice/steward/context-manifest.json",
+    "manifestSha256": "5555555555555555555555555555555555555555555555555555555555555555"
+  },
+  "completion": {
+    "reason": "Propose a bounded long exposure with a price-defined invalidation.",
+    "evidenceRefs": ["wake:wake-v3-single", "snapshot:snap:wake-v3-single"]
+  },
+  "checklist": {
+    "account": "ok",
+    "positions": "ok",
+    "orders": "ok",
+    "risk": "NORMAL",
+    "market": "open",
+    "history": "checked"
+  },
+  "thesis": "ASSET-A has a favorable trend while the loss budget remains bounded.",
+  "actions": [],
+  "pendingHash": null,
+  "invalidation": "Close the thesis if ASSET-A trades below 94.2.",
+  "cost": {
+    "model": "codex",
+    "inputTokens": 1200,
+    "outputTokens": 260,
+    "modelCostUsd": null,
+    "allocatedServerCostUsd": 0,
+    "tradingFeesUsd": 0,
+    "estimatedSlippageUsd": 0,
+    "totalEstimatedCostUsd": 0
+  },
+  "intent": {
+    "kind": "single",
+    "direction": "long",
+    "instrument": "mock-simulator-1/ASSET-A",
+    "targetExposure": {
+      "minPct": 10,
+      "maxPct": 15
+    },
+    "invalidation": [
+      {
+        "kind": "price_below",
+        "value": "94.2",
+        "note": "The trend thesis fails below the recent swing low."
+      },
+      {
+        "kind": "time_expiry",
+        "note": "Retire the proposal if there is no breakout within two weeks."
+      }
+    ],
+    "confidence": "medium",
+    "maxAcceptableLossPct": 2,
+    "timeHorizon": {
+      "unit": "week",
+      "value": 2
+    },
+    "evidence": [
+      {
+        "ref": "tool:quant:rsi-sma",
+        "note": "Momentum and moving averages are aligned."
+      },
+      {
+        "ref": "snapshot:snap:wake-v3-single#market",
+        "note": "Market evidence is bound to the wake snapshot."
+      }
+    ],
+    "snapshotId": "snap:wake-v3-single",
+    "snapshotSha256": "0c9cb6265d7f42c6779945b5d7ab586c12484f555fc205a9391797ed36a3a972"
+  },
+  "thesisDispositions": [
+    {
+      "wakeId": "wake-thesis-a",
+      "disposition": "supersede",
+      "note": "Replace the prior ASSET-A thesis with this bounded intent."
+    },
+    {
+      "wakeId": "wake-thesis-b",
+      "disposition": "expire",
+      "note": "Acknowledge that the unrelated ASSET-B thesis expired."
+    }
+  ]
+}
