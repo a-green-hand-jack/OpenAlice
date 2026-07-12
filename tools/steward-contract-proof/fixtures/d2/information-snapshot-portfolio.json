@@ -42,7 +42,20 @@
   },
   "history": {
     "provided": true,
-    "openTheses": [],
+    "openTheses": [
+      {
+        "wakeId": "wake-thesis-portfolio",
+        "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "instrument": "mock-simulator-1/ASSET-A",
+        "expiresAt": "2026-07-20T10:05:00.000Z"
+      },
+      {
+        "wakeId": "wake-thesis-portfolio",
+        "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "instrument": "mock-simulator-1/ASSET-B",
+        "expiresAt": "2026-07-20T10:05:00.000Z"
+      }
+    ],
     "refs": [
       {
         "ref": "ledger:open-theses",

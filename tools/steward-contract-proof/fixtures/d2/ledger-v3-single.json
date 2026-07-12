@@ -76,11 +76,13 @@
   "thesisDispositions": [
     {
       "wakeId": "wake-thesis-a",
+      "instrument": "mock-simulator-1/ASSET-A",
       "disposition": "supersede",
       "note": "Replace the prior ASSET-A thesis with this bounded intent."
     },
     {
       "wakeId": "wake-thesis-b",
+      "instrument": "mock-simulator-1/ASSET-B",
       "disposition": "expire",
       "note": "Acknowledge that the unrelated ASSET-B thesis expired."
     }

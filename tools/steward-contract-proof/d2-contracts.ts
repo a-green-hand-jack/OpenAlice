@@ -146,10 +146,18 @@ export type DecisionIntent = z.infer<typeof decisionIntentSchema>;
 export const thesisDispositionSchema = z
   .object({
     wakeId: nonEmptyString,
+    instrument: nonEmptyString,
     disposition: z.enum(["supersede", "invalidate", "expire", "keep"]),
     note: nonEmptyString,
   })
   .strict();
+
+function thesisDispositionIdentity(input: {
+  readonly wakeId: string;
+  readonly instrument: string;
+}): string {
+  return JSON.stringify([input.wakeId, input.instrument]);
+}
 
 export const decisionLedgerV3Schema = z
   .object({
@@ -172,6 +180,19 @@ export const decisionLedgerV3Schema = z
   })
   .strict()
   .superRefine((entry, ctx) => {
+    const dispositionIdentities = new Set<string>();
+    entry.thesisDispositions.forEach((disposition, index) => {
+      const identity = thesisDispositionIdentity(disposition);
+      if (dispositionIdentities.has(identity)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["thesisDispositions", index],
+          message: `duplicate thesis disposition identity: ${disposition.wakeId}:${disposition.instrument}`,
+        });
+      }
+      dispositionIdentities.add(identity);
+    });
+
     const hasExecuted = entry.actions.some(
       (action) => action.outcome === "executed",
     );
@@ -293,16 +314,42 @@ const openThesisSchema = z
   })
   .strict();
 
-const historySnapshotSchema = z.discriminatedUnion("provided", [
-  z
-    .object({
-      provided: z.literal(true),
-      openTheses: z.array(openThesisSchema),
-      refs: z.array(snapshotRefSchema).min(1),
-    })
-    .strict(),
-  z.object({ provided: z.literal(false), note: nonEmptyString }).strict(),
-]);
+const historySnapshotSchema = z
+  .discriminatedUnion("provided", [
+    z
+      .object({
+        provided: z.literal(true),
+        openTheses: z.array(openThesisSchema),
+        refs: z.array(snapshotRefSchema).min(1),
+      })
+      .strict(),
+    z.object({ provided: z.literal(false), note: nonEmptyString }).strict(),
+  ])
+  .superRefine((history, ctx) => {
+    if (!history.provided) return;
+
+    const addresses = new Set<string>();
+    const instruments = new Set<string>();
+    history.openTheses.forEach((thesis, index) => {
+      const address = thesisDispositionIdentity(thesis);
+      if (addresses.has(address)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["openTheses", index],
+          message: `duplicate open thesis address: ${thesis.wakeId}:${thesis.instrument}`,
+        });
+      }
+      if (instruments.has(thesis.instrument)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["openTheses", index, "instrument"],
+          message: `account-bound snapshot has more than one open thesis for instrument: ${thesis.instrument}`,
+        });
+      }
+      addresses.add(address);
+      instruments.add(thesis.instrument);
+    });
+  });
 
 export const informationSnapshotSchema = z
   .object({
@@ -925,43 +972,63 @@ export function validateThesisDispositionCoverage(
   entry: DecisionLedgerV3,
   snapshot: InformationSnapshot,
 ): string[] {
-  if (!snapshot.history.provided) return [];
-
   const errors: string[] = [];
-  const openByWakeId = new Map(
-    snapshot.history.openTheses.map((thesis) => [thesis.wakeId, thesis]),
+  const dispositionCounts = new Map<string, number>();
+  for (const disposition of entry.thesisDispositions) {
+    const identity = thesisDispositionIdentity(disposition);
+    const nextCount = (dispositionCounts.get(identity) ?? 0) + 1;
+    dispositionCounts.set(identity, nextCount);
+    if (nextCount === 2) {
+      errors.push(
+        `duplicate_thesis_disposition:${disposition.wakeId}:${disposition.instrument}`,
+      );
+    }
+  }
+
+  if (!snapshot.history.provided) return errors;
+
+  const openByIdentity = new Map(
+    snapshot.history.openTheses.map((thesis) => [
+      thesisDispositionIdentity(thesis),
+      thesis,
+    ]),
   );
   const touched = intentInstruments(entry.intent);
-  const dispositionCounts = new Map<string, number>();
 
   for (const disposition of entry.thesisDispositions) {
-    dispositionCounts.set(
-      disposition.wakeId,
-      (dispositionCounts.get(disposition.wakeId) ?? 0) + 1,
-    );
-    const thesis = openByWakeId.get(disposition.wakeId);
+    const identity = thesisDispositionIdentity(disposition);
+    const thesis = openByIdentity.get(identity);
     if (!thesis) {
-      errors.push(`unknown_thesis:${disposition.wakeId}`);
+      errors.push(
+        `unknown_thesis:${disposition.wakeId}:${disposition.instrument}`,
+      );
       continue;
     }
     if (
       disposition.disposition === "supersede" &&
       !touched.has(thesis.instrument)
     ) {
-      errors.push(`supersede_without_replacement:${disposition.wakeId}`);
+      errors.push(
+        `supersede_without_replacement:${disposition.wakeId}:${disposition.instrument}`,
+      );
     }
     const expired = Date.parse(thesis.expiresAt) <= Date.parse(entry.at);
     if (expired && disposition.disposition === "keep") {
-      errors.push(`expired_thesis_cannot_keep:${disposition.wakeId}`);
+      errors.push(
+        `expired_thesis_cannot_keep:${disposition.wakeId}:${disposition.instrument}`,
+      );
     }
   }
 
   for (const thesis of snapshot.history.openTheses) {
     const expired = Date.parse(thesis.expiresAt) <= Date.parse(entry.at);
     if (!expired && !touched.has(thesis.instrument)) continue;
-    const count = dispositionCounts.get(thesis.wakeId) ?? 0;
+    const count =
+      dispositionCounts.get(thesisDispositionIdentity(thesis)) ?? 0;
     if (count !== 1) {
-      errors.push(`required_disposition_count:${thesis.wakeId}:${count}`);
+      errors.push(
+        `required_disposition_count:${thesis.wakeId}:${thesis.instrument}:${count}`,
+      );
     }
   }
 

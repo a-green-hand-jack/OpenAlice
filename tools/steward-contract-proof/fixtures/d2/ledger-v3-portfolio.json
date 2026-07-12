@@ -81,7 +81,20 @@
       }
     ],
     "snapshotId": "snap:wake-v3-portfolio",
-    "snapshotSha256": "78c51099a4f98e8fe0eb1dc33276112c31fa29b4ba6e62e2dde199f46a8c6f60"
+    "snapshotSha256": "1753d48ee14f9c6f943c5cf9940da248ffa9419c9c85359347ca3e89b6664b4b"
   },
-  "thesisDispositions": []
+  "thesisDispositions": [
+    {
+      "wakeId": "wake-thesis-portfolio",
+      "instrument": "mock-simulator-1/ASSET-A",
+      "disposition": "supersede",
+      "note": "Replace the prior ASSET-A thesis without changing its ASSET-B sibling identity."
+    },
+    {
+      "wakeId": "wake-thesis-portfolio",
+      "instrument": "mock-simulator-1/ASSET-B",
+      "disposition": "supersede",
+      "note": "Replace the prior ASSET-B thesis independently of its ASSET-A sibling."
+    }
+  ]
 }
