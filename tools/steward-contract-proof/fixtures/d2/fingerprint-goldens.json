@@ -1,9 +1,9 @@
 {
   "legacyLedgerV2": "a00e0bc4ff92f38b3e7bfab09e797e73d5f9248664cee740ac1efedf4849ef9f",
-  "ledgerV3Single": "c9eb06a85cc86f88d3ffd68e4ba1bb0a294679d7af53436b31ba63c03f20c867",
-  "ledgerV3Portfolio": "c5320303f8987509992a741fce9760613e18c4bc34cbd58adf8ce657970aba51",
+  "ledgerV3Single": "b053b60e164f8572b5e3d9f034b527967d5f76bb2839af127b357d58d6cce69f",
+  "ledgerV3Portfolio": "5b9d3d2b897059e00d0ed0f6397b8c1a7f8ad810a3180af8c4753e3cec57aaf7",
   "singleIntent": "9aa2b2dd2dd51e86e26b3824c6aa4ae861698a40d70db18a68f153f11c1186bf",
-  "portfolioIntent": "bffb7b6f699a39abfbda81c30dac093c43527a081c73c01f3cdee7393363c517",
+  "portfolioIntent": "64720aefee26eac9a41359090c8c96a81ad0d407e3275b0280ab2f429d471000",
   "informationSnapshotSingle": "0c9cb6265d7f42c6779945b5d7ab586c12484f555fc205a9391797ed36a3a972",
-  "informationSnapshotPortfolio": "78c51099a4f98e8fe0eb1dc33276112c31fa29b4ba6e62e2dde199f46a8c6f60"
+  "informationSnapshotPortfolio": "1753d48ee14f9c6f943c5cf9940da248ffa9419c9c85359347ca3e89b6664b4b"
 }

@@ -150,6 +150,18 @@ describe("AUTH-CP-D2 Decision Intent and ledger v3 proof", () => {
     }
   });
 
+  it("requires every thesis disposition to address an instrument", () => {
+    const missingInstrument = cloneJson(singleLedgerRaw);
+    const dispositions = missingInstrument["thesisDispositions"] as Array<
+      Record<string, unknown>
+    >;
+    delete dispositions[0]!["instrument"];
+
+    expect(decisionLedgerV3Schema.safeParse(missingInstrument).success).toBe(
+      false,
+    );
+  });
+
   it("inherits the v2 typed-action and strict-pending invariants", () => {
     expect(
       decisionLedgerV3Schema.safeParse({
@@ -379,6 +391,72 @@ describe("AUTH-CP-D2 Information Snapshot and thesis proof", () => {
     ).toBe(false);
   });
 
+  it("rejects duplicate open-thesis addresses and duplicate account instruments", () => {
+    const duplicateAddress = cloneJson(singleSnapshotRaw);
+    const duplicateAddressHistory = duplicateAddress["history"] as Record<
+      string,
+      unknown
+    >;
+    const duplicateAddressTheses = duplicateAddressHistory[
+      "openTheses"
+    ] as Array<Record<string, unknown>>;
+    duplicateAddressTheses.push({
+      ...duplicateAddressTheses[0]!,
+      fingerprint:
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      expiresAt: "2026-07-30T10:00:00.000Z",
+    });
+    const duplicateAddressResult =
+      informationSnapshotSchema.safeParse(duplicateAddress);
+    expect(duplicateAddressResult.success).toBe(false);
+    if (duplicateAddressResult.success) {
+      throw new Error("duplicate open-thesis address unexpectedly parsed");
+    }
+    const duplicateAddressMessages = duplicateAddressResult.error.issues.map(
+      (issue) => issue.message,
+    );
+    expect(duplicateAddressMessages).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("duplicate open thesis address"),
+        expect.stringContaining(
+          "account-bound snapshot has more than one open thesis for instrument",
+        ),
+      ]),
+    );
+
+    const duplicateInstrument = cloneJson(singleSnapshotRaw);
+    const duplicateInstrumentHistory = duplicateInstrument[
+      "history"
+    ] as Record<string, unknown>;
+    const duplicateInstrumentTheses = duplicateInstrumentHistory[
+      "openTheses"
+    ] as Array<Record<string, unknown>>;
+    duplicateInstrumentTheses.push({
+      ...duplicateInstrumentTheses[0]!,
+      wakeId: "wake-thesis-a-reissued",
+      fingerprint:
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    });
+    const duplicateInstrumentResult =
+      informationSnapshotSchema.safeParse(duplicateInstrument);
+    expect(duplicateInstrumentResult.success).toBe(false);
+    if (duplicateInstrumentResult.success) {
+      throw new Error("duplicate account instrument unexpectedly parsed");
+    }
+    const duplicateInstrumentMessages =
+      duplicateInstrumentResult.error.issues.map((issue) => issue.message);
+    expect(duplicateInstrumentMessages).toContainEqual(
+      expect.stringContaining(
+        "account-bound snapshot has more than one open thesis for instrument",
+      ),
+    );
+    expect(
+      duplicateInstrumentMessages.some((message) =>
+        message.includes("duplicate open thesis address"),
+      ),
+    ).toBe(false);
+  });
+
   it("binds snapshot id, wake, and account to the decision", () => {
     expect(
       validateDecisionSnapshotBinding(singleLedger, singleSnapshot),
@@ -461,7 +539,9 @@ describe("AUTH-CP-D2 Information Snapshot and thesis proof", () => {
     };
     expect(
       validateThesisDispositionCoverage(missing, singleSnapshot),
-    ).toContain("required_disposition_count:wake-thesis-b:0");
+    ).toContain(
+      "required_disposition_count:wake-thesis-b:mock-simulator-1/ASSET-B:0",
+    );
 
     const duplicate = {
       ...singleLedger,
@@ -472,7 +552,134 @@ describe("AUTH-CP-D2 Information Snapshot and thesis proof", () => {
     };
     expect(
       validateThesisDispositionCoverage(duplicate, singleSnapshot),
-    ).toContain("required_disposition_count:wake-thesis-a:2");
+    ).toContain(
+      "required_disposition_count:wake-thesis-a:mock-simulator-1/ASSET-A:2",
+    );
+  });
+
+  it("keeps portfolio sibling theses distinct when they share one wakeId", () => {
+    if (!portfolioSnapshot.history.provided) {
+      throw new Error("portfolio fixture history is missing");
+    }
+    expect(portfolioSnapshot.history.openTheses).toHaveLength(2);
+    expect(
+      new Set(
+        portfolioSnapshot.history.openTheses.map((thesis) => thesis.wakeId),
+      ).size,
+    ).toBe(1);
+    const wakeIdOnlyIndex = new Map(
+      portfolioSnapshot.history.openTheses.map((thesis) => [
+        thesis.wakeId,
+        thesis,
+      ]),
+    );
+    expect(wakeIdOnlyIndex.size).toBe(1);
+    expect(
+      new Set(
+        portfolioSnapshot.history.openTheses.map((thesis) =>
+          JSON.stringify([thesis.wakeId, thesis.instrument]),
+        ),
+      ).size,
+    ).toBe(2);
+    expect(
+      validateThesisDispositionCoverage(portfolioLedger, portfolioSnapshot),
+    ).toEqual([]);
+
+    for (const missingInstrument of [
+      "mock-simulator-1/ASSET-A",
+      "mock-simulator-1/ASSET-B",
+    ]) {
+      const missing = {
+        ...portfolioLedger,
+        thesisDispositions: portfolioLedger.thesisDispositions.filter(
+          (item) => item.instrument !== missingInstrument,
+        ),
+      };
+      expect(
+        validateThesisDispositionCoverage(missing, portfolioSnapshot),
+      ).toContain(
+        `required_disposition_count:wake-thesis-portfolio:${missingInstrument}:0`,
+      );
+    }
+
+    const collapsed = {
+      ...portfolioLedger,
+      thesisDispositions: portfolioLedger.thesisDispositions.map((item) =>
+        item.instrument === "mock-simulator-1/ASSET-B"
+          ? { ...item, instrument: "mock-simulator-1/ASSET-A" }
+          : item,
+      ),
+    };
+    expect(
+      validateThesisDispositionCoverage(collapsed, portfolioSnapshot),
+    ).toEqual(
+      expect.arrayContaining([
+        "required_disposition_count:wake-thesis-portfolio:mock-simulator-1/ASSET-A:2",
+        "required_disposition_count:wake-thesis-portfolio:mock-simulator-1/ASSET-B:0",
+      ]),
+    );
+  });
+
+  it("rejects contradictory duplicate dispositions even for an optional thesis", () => {
+    const optionalSnapshotRaw = cloneJson(singleSnapshotRaw);
+    const optionalHistory = optionalSnapshotRaw["history"] as Record<
+      string,
+      unknown
+    >;
+    const optionalOpenTheses = optionalHistory["openTheses"] as Array<
+      Record<string, unknown>
+    >;
+    optionalOpenTheses.push({
+      wakeId: "wake-thesis-optional",
+      fingerprint:
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      instrument: "mock-simulator-1/ASSET-C",
+      expiresAt: "2026-07-30T10:00:00.000Z",
+    });
+    const optionalSnapshot =
+      informationSnapshotSchema.parse(optionalSnapshotRaw);
+    const duplicateOptional = {
+      ...singleLedger,
+      thesisDispositions: [
+        ...singleLedger.thesisDispositions,
+        {
+          wakeId: "wake-thesis-optional",
+          instrument: "mock-simulator-1/ASSET-C",
+          disposition: "keep" as const,
+          note: "Keep the untouched optional thesis open.",
+        },
+        {
+          wakeId: "wake-thesis-optional",
+          instrument: "mock-simulator-1/ASSET-C",
+          disposition: "invalidate" as const,
+          note: "Contradict the prior disposition for the same thesis.",
+        },
+      ],
+    };
+
+    const schemaResult = decisionLedgerV3Schema.safeParse(duplicateOptional);
+    expect(schemaResult.success).toBe(false);
+    if (schemaResult.success) {
+      throw new Error("duplicate thesis dispositions unexpectedly parsed");
+    }
+    expect(schemaResult.error.issues.map((issue) => issue.message)).toContainEqual(
+      expect.stringContaining("duplicate thesis disposition identity"),
+    );
+
+    const coverageErrors = validateThesisDispositionCoverage(
+      duplicateOptional,
+      optionalSnapshot,
+    );
+    expect(coverageErrors).toContain(
+      "duplicate_thesis_disposition:wake-thesis-optional:mock-simulator-1/ASSET-C",
+    );
+    expect(
+      coverageErrors.some((error) =>
+        error.startsWith(
+          "required_disposition_count:wake-thesis-optional:mock-simulator-1/ASSET-C:",
+        ),
+      ),
+    ).toBe(false);
   });
 
   it("rejects supersede when the replacement intent does not touch that instrument", () => {
@@ -486,7 +693,9 @@ describe("AUTH-CP-D2 Information Snapshot and thesis proof", () => {
     };
     expect(
       validateThesisDispositionCoverage(invalid, singleSnapshot),
-    ).toContain("supersede_without_replacement:wake-thesis-b");
+    ).toContain(
+      "supersede_without_replacement:wake-thesis-b:mock-simulator-1/ASSET-B",
+    );
   });
 
   it("rejects keep for an already expired thesis", () => {
@@ -500,7 +709,9 @@ describe("AUTH-CP-D2 Information Snapshot and thesis proof", () => {
     };
     expect(
       validateThesisDispositionCoverage(invalid, singleSnapshot),
-    ).toContain("expired_thesis_cannot_keep:wake-thesis-b");
+    ).toContain(
+      "expired_thesis_cannot_keep:wake-thesis-b:mock-simulator-1/ASSET-B",
+    );
   });
 });
 
