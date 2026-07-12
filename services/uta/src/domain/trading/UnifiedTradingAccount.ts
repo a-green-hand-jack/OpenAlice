@@ -14,7 +14,14 @@ import { BrokerError, type IBroker, type AccountInfo, type Position, type OpenOr
 
 const REACH_RANK: Record<UTAReach, number> = { down: 0, connected: 1, readable: 2 }
 import { TradingGit } from './git/TradingGit.js'
-import type { PushOptions, PushPreflightContext, RejectOptions, SyntheticMutationParams } from './git/interfaces.js'
+import type {
+  PushOptions,
+  PushPreflightContext,
+  RejectOptions,
+  StewardMutationParams,
+  StewardMutationResult,
+  SyntheticMutationParams,
+} from './git/interfaces.js'
 import { recomputeCostBasisFromCommits } from './cost-basis.js'
 import { projectOrderHistory, projectTradeHistory } from './order-history.js'
 import {
@@ -1037,6 +1044,12 @@ export class UnifiedTradingAccount {
         this._pushInFlightHash = null
       }
     }
+  }
+
+  /** D2 fixture-only deterministic operation path. TradingGit owns the
+   * durable mutation lease, external-key dedupe, and crash recovery. */
+  executeStewardMutation(params: StewardMutationParams): Promise<StewardMutationResult> {
+    return this.git.executeStewardMutation(params)
   }
 
   private _emitRiskRejectedPush(err: unknown, approver?: ApproverIdentity): void {

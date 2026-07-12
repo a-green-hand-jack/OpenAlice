@@ -28,6 +28,7 @@ import type {
   MutationAttemptContextV1,
   MutationResolutionAction,
   MutationResolveResult,
+  StewardUtaMutationRequest,
 } from './types.js'
 
 export interface SyntheticMutationParams {
@@ -38,6 +39,28 @@ export interface SyntheticMutationParams {
   /** Runs after the account lease is acquired. */
   prepare: () => Promise<Operation[]>
   execute: (operation: Operation) => Promise<unknown>
+}
+
+export interface StewardMutationParams {
+  request: StewardUtaMutationRequest
+  payloadFingerprint: string
+  prepareOperation: () => Operation
+  message: string
+  approver?: ApproverIdentity
+  /** Runs with the account mutation lease already held. The UTA manager uses
+   * this callback to acquire the accounts-config lock, perform admission, and
+   * load fresh durable state. The transaction checks durable dedupe/conflict
+   * before calling `beforeNewInvocation` for source checks, then dispatches
+   * without releasing the config lock. */
+  boundary: <T>(transaction: (
+    freshState: GitExportState | undefined,
+    beforeNewInvocation: () => Promise<void>,
+  ) => Promise<T>) => Promise<T>
+  execute: (operation: Operation) => Promise<unknown>
+}
+
+export interface StewardMutationResult {
+  deduplicated: boolean
 }
 
 export interface ResolveMutationParams {
@@ -75,6 +98,7 @@ export interface ITradingGit {
   push(approver?: ApproverIdentity, options?: PushOptions): Promise<PushResult>
   reject(reason?: string, approver?: ApproverIdentity, options?: RejectOptions): Promise<RejectResult>
   executeSyntheticMutation(params: SyntheticMutationParams): Promise<PushResult>
+  executeStewardMutation(params: StewardMutationParams): Promise<StewardMutationResult>
   resolveMutation(params: ResolveMutationParams): Promise<MutationResolveResult>
 
   // ---- wallet reconciliation (synthesized commits) ----

@@ -35,6 +35,9 @@ export interface UTAClient {
 export interface RequestOpts {
   body?: unknown
   params?: Record<string, string | number | undefined>
+  /** Internal SDK bindings only. The Guardian token is always written last
+   * and cannot be overridden through this map. */
+  headers?: Record<string, string>
   signal?: AbortSignal
 }
 
@@ -74,6 +77,7 @@ export function createUTAClient(options: UTAClientOptions): UTAClient {
       method,
       headers: {
         'content-type': 'application/json',
+        ...opts.headers,
         ...(internalToken ? { [UTA_INTERNAL_TOKEN_HEADER]: internalToken } : {}),
       },
       signal,

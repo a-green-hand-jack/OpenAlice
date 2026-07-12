@@ -10,7 +10,10 @@ import {
 import { searchTradeableContracts } from '../domain/trading/contract-search.js'
 import {
   AUTHZ_LEVELS,
+  UTA_STEWARD_WORKSPACE_AUTHZ_HEADER,
   stewardAdmissionRequestSchema,
+  stewardUtaMutationRequestSchema,
+  stewardUtaMutationResponseSchema,
   type ApproverIdentity,
   type AssetClassHint,
 } from '@traderalice/uta-protocol'
@@ -602,6 +605,25 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
     try {
       const request = stewardAdmissionRequestSchema.parse(await c.req.json().catch(() => ({})))
       return c.json(await ctx.utaManager.checkStewardAdmission(id, request))
+    } catch (err) {
+      if (err instanceof z.ZodError) return c.json({ error: err.message }, 400)
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/uta/:id/steward/mutation', async (c) => {
+    const id = c.req.param('id')
+    if (!ctx.utaManager.has(id)) return c.json({ error: 'Account not found' }, 404)
+    try {
+      const workspaceAuthzLevel = z.enum(AUTHZ_LEVELS).parse(
+        c.req.header(UTA_STEWARD_WORKSPACE_AUTHZ_HEADER),
+      )
+      const request = stewardUtaMutationRequestSchema.parse(await c.req.json().catch(() => ({})))
+      if (request.accountId !== id) {
+        return c.json({ error: 'Steward mutation account identity does not match route account' }, 400)
+      }
+      const response = await ctx.utaManager.invokeStewardMutation(id, workspaceAuthzLevel, request)
+      return c.json(stewardUtaMutationResponseSchema.parse(response))
     } catch (err) {
       if (err instanceof z.ZodError) return c.json({ error: err.message }, 400)
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)

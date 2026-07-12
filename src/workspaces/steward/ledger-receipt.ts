@@ -62,7 +62,12 @@ export function canonicalizeJson(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalizeJson);
   if (value && typeof value === 'object') {
     const source = value as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
+    // Disk JSON can carry an own "__proto__" key. A normal object assignment
+    // would invoke Object.prototype's legacy setter and silently drop that key,
+    // making two different raw intents hash identically. A null-prototype
+    // object keeps every JSON key as ordinary enumerable data while preserving
+    // the exact canonical JSON byte output for all existing values.
+    const out = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(source).sort()) {
       out[key] = canonicalizeJson(source[key]);
     }
@@ -89,6 +94,19 @@ export function semanticLedgerProjection(entry: unknown): Record<string, unknown
 export function canonicalDecisionFingerprint(entry: unknown): string {
   const canonical = canonicalizeJson(semanticLedgerProjection(entry));
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
+/** SHA-256 of the raw Decision Intent after key-order-only canonicalization.
+ *
+ * Unlike {@link canonicalDecisionFingerprint}, this deliberately does not
+ * project through a parsed schema. Every value present on disk is part of the
+ * identity, including a forbidden/unknown field. That keeps the audit link
+ * stable across sizing and Execution Record publication without normalizing a
+ * malformed agent proposal into a different intent. */
+export function canonicalIntentFingerprint(intent: unknown): string {
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalizeJson(intent)))
+    .digest('hex');
 }
 
 /**
