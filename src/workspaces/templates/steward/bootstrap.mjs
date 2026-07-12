@@ -93,6 +93,10 @@ decisions.jsonl directly. Do not end a wake without a validated decision.
 `
 
 const validateLedger = `#!/usr/bin/env node
+class ValidationFailure extends Error {}
+function fail(message) { throw new ValidationFailure(message) }
+
+try {
 const wakeId = process.argv[2]
 if (!wakeId) fail('usage: node .alice/steward/validate-ledger.mjs <wakeId>')
 
@@ -331,10 +335,10 @@ await atomicWrite(markerPath, JSON.stringify(marker, null, 2) + '\\n')
 await fs.rm(draftPath, { force: true }).catch(() => {})
 
 console.log('ok: wake ' + wakeId + ' committed to ledger (line ' + committedLine + ') and finalization marker published')
-
-function fail(message) {
-  console.error('validate-ledger: ' + message)
-  process.exit(1)
+} catch (err) {
+  if (!(err instanceof ValidationFailure)) throw err
+  console.error('validate-ledger: ' + err.message)
+  process.exitCode = 1
 }
 `
 

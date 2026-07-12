@@ -71,6 +71,7 @@ const draftPathFor = (wakeId: string) => join(wsDir, '.alice', 'steward', 'draft
 const markerPathFor = (wakeId: string) => join(wsDir, '.alice', 'steward', 'finalize', `${encodeURIComponent(wakeId)}.json`);
 const wakePathFor = (wakeId: string) => join(wsDir, '.alice', 'steward', 'wakes', `${encodeURIComponent(wakeId)}.json`);
 const ledgerFile = () => join(wsDir, '.alice', 'steward', 'ledger', 'decisions.jsonl');
+const ledgerLockFile = () => `${ledgerFile()}.lock`;
 
 async function writeDraft(wakeId: string, over: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   const e = entry({ wakeId, ...over });
@@ -278,6 +279,57 @@ describe('generated validate-ledger.mjs — prior terminal integrity cross-check
   });
 });
 
+describe('generated validate-ledger.mjs — failure lock cleanup (issue #176)', () => {
+  it('releases its owned token after representative post-acquire failures', async () => {
+    await terminalWakeWithReceipt('wake-prior');
+    await seedLedger([]);
+    await writeDraft('wake-missing-prior');
+    await seedWakeRecord('wake-missing-prior');
+
+    const integrityFailure = runValidate('wake-missing-prior');
+    expect(integrityFailure.code).toBe(1);
+    expect(integrityFailure.stderr).toMatch(/has no ledger entry/);
+    expect(existsSync(ledgerLockFile())).toBe(false);
+
+    await rm(wakePathFor('wake-prior'), { force: true });
+    await rm(wakePathFor('wake-missing-prior'), { force: true });
+    await seedLedger([
+      entry({ wakeId: 'wake-duplicate', thesis: 'first' }),
+      entry({ wakeId: 'wake-duplicate', thesis: 'second' }),
+    ]);
+    await writeDraft('wake-duplicate');
+    await seedWakeRecord('wake-duplicate');
+
+    const duplicateFailure = runValidate('wake-duplicate');
+    expect(duplicateFailure.code).toBe(1);
+    expect(duplicateFailure.stderr).toMatch(/already has 2 entries/);
+    expect(existsSync(ledgerLockFile())).toBe(false);
+  });
+
+  it('survives repeated failed retries without stranding the lock, then commits immediately', async () => {
+    const prior = await terminalWakeWithReceipt('wake-prior');
+    await seedLedger([]);
+    await writeDraft('wake-retry');
+    await seedWakeRecord('wake-retry');
+
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const failed = runValidate('wake-retry');
+      expect(failed.code, `attempt ${attempt}`).toBe(1);
+      expect(failed.stderr).toMatch(/has no ledger entry/);
+      expect(existsSync(ledgerLockFile()), `attempt ${attempt}`).toBe(false);
+    }
+
+    await seedLedger([prior]);
+    const recovered = runValidate('wake-retry');
+    expect(recovered.code, recovered.stderr).toBe(0);
+    expect(existsSync(ledgerLockFile())).toBe(false);
+    expect((await ledgerLines()).map((line) => JSON.parse(line).wakeId)).toEqual([
+      'wake-prior',
+      'wake-retry',
+    ]);
+  });
+});
+
 describe('generated validate-ledger.mjs — golden fingerprint parity (TS ↔ JS)', () => {
   const GOLDEN_ENTRY = {
     version: 2,
@@ -415,6 +467,6 @@ describe('generated validate-ledger.mjs — concurrent atomic writes (issue #140
     expect(codes.every((c) => c === 0)).toBe(true);
     const committed = (await ledgerLines()).map((l) => JSON.parse(l).wakeId).sort();
     expect(committed).toEqual([...ids].sort());
-    expect(existsSync(join(wsDir, '.alice', 'steward', 'ledger', 'decisions.jsonl.lock'))).toBe(false);
+    expect(existsSync(ledgerLockFile())).toBe(false);
   });
 });
