@@ -17,7 +17,7 @@ import {
   LOCK_TTL_MS,
   stewardLedgerLockPath,
   withLedgerWrite,
-  type StewardDecisionLedgerEntryV2,
+  type StewardDecisionLedgerEntryV3,
 } from './index.js';
 import { stewardLedgerPath } from './paths.js';
 
@@ -32,7 +32,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-function entry(wakeId: string): StewardDecisionLedgerEntryV2 {
+function entry(wakeId: string): StewardDecisionLedgerEntryV3 {
   return {
     version: DECISION_LEDGER_SCHEMA_VERSION,
     wakeId,
@@ -50,6 +50,8 @@ function entry(wakeId: string): StewardDecisionLedgerEntryV2 {
       model: 'c', inputTokens: null, outputTokens: null, modelCostUsd: null,
       allocatedServerCostUsd: null, tradingFeesUsd: null, estimatedSlippageUsd: null, totalEstimatedCostUsd: null,
     },
+    intent: null,
+    thesisDispositions: [],
   };
 }
 

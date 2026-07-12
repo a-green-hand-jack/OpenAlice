@@ -12,12 +12,21 @@
 
 import { EventEmitter } from 'node:events';
 import * as childProcess from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { refreshWorkspaceInstructions } from './context-injector.js';
 import { resolveCreateAgents, runScript, WorkspaceCreator } from './workspace-creator.js';
 
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
+}));
+vi.mock('./context-injector.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./context-injector.js')>()),
+  refreshWorkspaceInstructions: vi.fn(async () => ({ changed: false })),
+  writeStewardContextManifest: vi.fn(async () => undefined),
 }));
 
 const mockSpawn = vi.mocked(childProcess.spawn);
@@ -201,7 +210,12 @@ describe('runScript platform branching', () => {
 });
 
 describe('WorkspaceCreator.refreshStewardRuntime (issue #140 merge gate)', () => {
-  afterEach(() => mockSpawn.mockReset());
+  const statePath = (dir: string) => join(dir, '.alice/steward/runtime-state.json');
+
+  afterEach(() => {
+    mockSpawn.mockReset();
+    vi.mocked(refreshWorkspaceInstructions).mockReset().mockResolvedValue({ changed: false });
+  });
 
   function makeCreator(
     templateGet: (name: string) => unknown,
@@ -222,6 +236,31 @@ describe('WorkspaceCreator.refreshStewardRuntime (issue #140 merge gate)', () =>
     templateDir: '/tpl/steward',
   };
 
+  async function prepareRuntimeArtifacts(
+    dir: string,
+    agents = '# steward agents v3\n',
+  ): Promise<void> {
+    await mkdir(join(dir, '.alice/steward'), { recursive: true });
+    await Promise.all([
+      writeFile(join(dir, '.alice/steward/runtime.json'), '{"protocol":3}\n', 'utf8'),
+      writeFile(join(dir, 'AGENTS.md'), agents, 'utf8'),
+      writeFile(join(dir, 'CLAUDE.md'), '# steward claude v3\n', 'utf8'),
+    ]);
+  }
+
+  async function completeSuccessfulRefresh(
+    creator: WorkspaceCreator,
+    dir: string,
+  ): Promise<Awaited<ReturnType<WorkspaceCreator['refreshStewardRuntime']>>> {
+    const expectedCalls = mockSpawn.mock.calls.length + 1;
+    const child = makeFakeChild();
+    mockSpawn.mockReturnValueOnce(child as unknown as childProcess.ChildProcess);
+    const pending = creator.refreshStewardRuntime({ template: 'steward', dir });
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(expectedCalls));
+    child.emit('close', 0);
+    return pending;
+  }
+
   it('is a no-op for a non-steward workspace (never spawns)', async () => {
     const creator = makeCreator(() => undefined);
     const res = await creator.refreshStewardRuntime({ template: 'chat', dir: '/ws' });
@@ -230,17 +269,24 @@ describe('WorkspaceCreator.refreshStewardRuntime (issue #140 merge gate)', () =>
   });
 
   it('runs the steward bootstrap in --refresh-runtime mode for the workspace dir', async () => {
-    const child = makeFakeChild();
-    mockSpawn.mockReturnValue(child as unknown as childProcess.ChildProcess);
-    const creator = makeCreator((name) => (name === 'steward' ? stewardTemplate : undefined));
-    const p = creator.refreshStewardRuntime({ template: 'steward', dir: '/ws/abc' });
-    child.emit('close', 0);
-    const res = await p;
-    expect(res).toEqual({ ok: true });
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
-    const args = mockSpawn.mock.calls[0][1] as string[];
-    expect(args).toContain('--refresh-runtime');
-    expect(args).toContain('/ws/abc');
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-creator-runtime-mode-'));
+    try {
+      await prepareRuntimeArtifacts(dir);
+      const creator = makeCreator((name) => (name === 'steward' ? stewardTemplate : undefined));
+      const res = await completeSuccessfulRefresh(creator, dir);
+      expect(res).toMatchObject({
+        ok: true,
+        desiredDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        forceFreshPty: true,
+        forceFreshMachine: true,
+      });
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      const args = mockSpawn.mock.calls[0][1] as string[];
+      expect(args).toContain('--refresh-runtime');
+      expect(args).toContain(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('returns an actionable error when the refresh script exits non-zero', async () => {
@@ -248,6 +294,7 @@ describe('WorkspaceCreator.refreshStewardRuntime (issue #140 merge gate)', () =>
     mockSpawn.mockReturnValue(child as unknown as childProcess.ChildProcess);
     const creator = makeCreator((name) => (name === 'steward' ? stewardTemplate : undefined));
     const p = creator.refreshStewardRuntime({ template: 'steward', dir: '/ws' });
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
     child.stderr.emit('data', Buffer.from('validator write failed'));
     child.emit('close', 1);
     const res = await p;
@@ -260,5 +307,289 @@ describe('WorkspaceCreator.refreshStewardRuntime (issue #140 merge gate)', () =>
     const res = await creator.refreshStewardRuntime({ template: 'steward', dir: '/ws' });
     expect(res.ok).toBe(false);
     expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('requires both faces on first wake and persists exact-digest acknowledgements across refreshes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-creator-runtime-refresh-'));
+    try {
+      await prepareRuntimeArtifacts(dir);
+      const creator = makeCreator((name) => (name === 'steward' ? stewardTemplate : undefined));
+      const first = await completeSuccessfulRefresh(creator, dir);
+      expect(first.ok).toBe(true);
+      if (!first.ok || !first.desiredDigest) throw new Error('expected steward runtime digest');
+      expect(first).toMatchObject({ forceFreshPty: true, forceFreshMachine: true });
+
+      await expect(creator.acknowledgeStewardRuntimeFresh(
+        { template: 'steward', dir },
+        'pty',
+        first.desiredDigest,
+      )).resolves.toBe(true);
+
+      await expect(completeSuccessfulRefresh(creator, dir)).resolves.toEqual({
+        ok: true,
+        desiredDigest: first.desiredDigest,
+        forceFreshPty: false,
+        forceFreshMachine: true,
+      });
+      expect(JSON.parse(await readFile(statePath(dir), 'utf8'))).toEqual({
+        version: 1,
+        desiredDigest: first.desiredDigest,
+        acknowledged: { pty: first.desiredDigest, machine: null },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('repairs a partial state record without losing a valid face acknowledgement', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-creator-runtime-repair-'));
+    try {
+      await prepareRuntimeArtifacts(dir);
+      const creator = makeCreator((name) => (name === 'steward' ? stewardTemplate : undefined));
+      const first = await completeSuccessfulRefresh(creator, dir);
+      if (!first.ok || !first.desiredDigest) throw new Error('expected steward runtime digest');
+      await writeFile(statePath(dir), `${JSON.stringify({
+        version: 1,
+        desiredDigest: first.desiredDigest,
+        acknowledged: { pty: first.desiredDigest, machine: 'invalid-digest' },
+      })}\n`, 'utf8');
+
+      await expect(completeSuccessfulRefresh(creator, dir)).resolves.toEqual({
+        ok: true,
+        desiredDigest: first.desiredDigest,
+        forceFreshPty: false,
+        forceFreshMachine: true,
+      });
+      expect(JSON.parse(await readFile(statePath(dir), 'utf8'))).toEqual({
+        version: 1,
+        desiredDigest: first.desiredDigest,
+        acknowledged: { pty: first.desiredDigest, machine: null },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refreshes authoritatively inside the lease and auto-acknowledges generation B after successful use', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-creator-runtime-lease-'));
+    try {
+      await prepareRuntimeArtifacts(dir, '# steward agents generation A\n');
+      const creator = makeCreator((name) => (name === 'steward' ? stewardTemplate : undefined));
+      const generationA = await completeSuccessfulRefresh(creator, dir);
+      if (!generationA.ok || !generationA.desiredDigest) throw new Error('expected generation A');
+      await creator.acknowledgeStewardRuntimeFresh(
+        { template: 'steward', dir },
+        'pty',
+        generationA.desiredDigest,
+      );
+
+      // A caller observed acknowledged A before taking its account lock. B
+      // publishes new authoritative instruction bytes before A enters its
+      // post-lock lease.
+      await writeFile(join(dir, 'AGENTS.md'), '# steward agents generation B\n', 'utf8');
+      const leaseChild = makeFakeChild();
+      mockSpawn.mockReturnValueOnce(leaseChild as unknown as childProcess.ChildProcess);
+      const leased = creator.withStewardRuntimeLease(
+        { template: 'steward', dir },
+        'pty',
+        async (runtime) => {
+          expect(runtime.desiredDigest).not.toBe(generationA.desiredDigest);
+          expect(runtime.forceFresh).toBe(true);
+          const during = JSON.parse(await readFile(statePath(dir), 'utf8'));
+          expect(during.acknowledged.pty).toBe(generationA.desiredDigest);
+          return runtime.desiredDigest;
+        },
+      );
+      await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(2));
+      leaseChild.emit('close', 0);
+      const generationB = await leased;
+
+      expect(JSON.parse(await readFile(statePath(dir), 'utf8'))).toEqual({
+        version: 1,
+        desiredDigest: generationB,
+        acknowledged: { pty: generationB, machine: null },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks competing refresh and ack transitions until the leased face finishes selecting and injecting', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-creator-runtime-lease-block-'));
+    try {
+      await prepareRuntimeArtifacts(dir);
+      const creator = makeCreator((name) => (name === 'steward' ? stewardTemplate : undefined));
+      const leaseChild = makeFakeChild();
+      const queuedRefreshChild = makeFakeChild();
+      mockSpawn
+        .mockReturnValueOnce(leaseChild as unknown as childProcess.ChildProcess)
+        .mockReturnValueOnce(queuedRefreshChild as unknown as childProcess.ChildProcess);
+      let operationStarted!: () => void;
+      const started = new Promise<void>((resolve) => { operationStarted = resolve; });
+      let finishOperation!: () => void;
+      const operationGate = new Promise<void>((resolve) => { finishOperation = resolve; });
+      let leasedDigest = '';
+
+      const leased = creator.withStewardRuntimeLease(
+        { template: 'steward', dir },
+        'pty',
+        async (runtime) => {
+          leasedDigest = runtime.desiredDigest;
+          operationStarted();
+          await operationGate;
+          return 'injected';
+        },
+      );
+      await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledOnce());
+      leaseChild.emit('close', 0);
+      await started;
+
+      let acknowledgementSettled = false;
+      const competingAcknowledgement = creator.acknowledgeStewardRuntimeFresh(
+        { template: 'steward', dir },
+        'machine',
+        leasedDigest,
+      ).then((value) => {
+        acknowledgementSettled = true;
+        return value;
+      });
+      const competingRefresh = creator.refreshStewardRuntime({ template: 'steward', dir });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(mockSpawn).toHaveBeenCalledOnce();
+      expect(vi.mocked(refreshWorkspaceInstructions)).toHaveBeenCalledTimes(1);
+      expect(acknowledgementSettled).toBe(false);
+
+      finishOperation();
+      await expect(leased).resolves.toBe('injected');
+      await expect(competingAcknowledgement).resolves.toBe(true);
+      await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(2));
+      queuedRefreshChild.emit('close', 0);
+      await expect(competingRefresh).resolves.toMatchObject({ ok: true });
+      expect(vi.mocked(refreshWorkspaceInstructions)).toHaveBeenCalledTimes(2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not acknowledge a failed face operation and releases the lease for the next refresh', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-creator-runtime-lease-error-'));
+    try {
+      await prepareRuntimeArtifacts(dir);
+      const creator = makeCreator((name) => (name === 'steward' ? stewardTemplate : undefined));
+      const leaseChild = makeFakeChild();
+      const nextRefreshChild = makeFakeChild();
+      mockSpawn
+        .mockReturnValueOnce(leaseChild as unknown as childProcess.ChildProcess)
+        .mockReturnValueOnce(nextRefreshChild as unknown as childProcess.ChildProcess);
+
+      const leased = creator.withStewardRuntimeLease(
+        { template: 'steward', dir },
+        'machine',
+        async () => { throw new Error('turn did not start'); },
+      );
+      await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledOnce());
+      leaseChild.emit('close', 0);
+      await expect(leased).rejects.toThrow('turn did not start');
+      expect(JSON.parse(await readFile(statePath(dir), 'utf8')).acknowledged.machine).toBeNull();
+
+      const nextRefresh = creator.refreshStewardRuntime({ template: 'steward', dir });
+      await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(2));
+      nextRefreshChild.emit('close', 0);
+      await expect(nextRefresh).resolves.toMatchObject({ ok: true, forceFreshMachine: true });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects stale acknowledgements across an A-B-A runtime sequence', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-creator-runtime-aba-'));
+    try {
+      const agentsA = '# steward agents generation A\n';
+      await prepareRuntimeArtifacts(dir, agentsA);
+      const creator = makeCreator((name) => (name === 'steward' ? stewardTemplate : undefined));
+
+      const generationA = await completeSuccessfulRefresh(creator, dir);
+      if (!generationA.ok || !generationA.desiredDigest) throw new Error('expected generation A');
+      await expect(creator.acknowledgeStewardRuntimeFresh(
+        { template: 'steward', dir },
+        'pty',
+        generationA.desiredDigest,
+      )).resolves.toBe(true);
+
+      await writeFile(join(dir, 'AGENTS.md'), '# steward agents generation B\n', 'utf8');
+      const generationBChild = makeFakeChild();
+      mockSpawn.mockReturnValueOnce(generationBChild as unknown as childProcess.ChildProcess);
+      const generationBPending = creator.refreshStewardRuntime({ template: 'steward', dir });
+      await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(2));
+      const staleGenerationAAck = creator.acknowledgeStewardRuntimeFresh(
+        { template: 'steward', dir },
+        'pty',
+        generationA.desiredDigest,
+      );
+      generationBChild.emit('close', 0);
+      const generationB = await generationBPending;
+      if (!generationB.ok || !generationB.desiredDigest) throw new Error('expected generation B');
+      expect(generationB.desiredDigest).not.toBe(generationA.desiredDigest);
+      await expect(staleGenerationAAck).resolves.toBe(false);
+      await expect(creator.acknowledgeStewardRuntimeFresh(
+        { template: 'steward', dir },
+        'pty',
+        generationB.desiredDigest,
+      )).resolves.toBe(true);
+
+      await writeFile(join(dir, 'AGENTS.md'), agentsA, 'utf8');
+      const generationAAgain = await completeSuccessfulRefresh(creator, dir);
+      expect(generationAAgain).toEqual({
+        ok: true,
+        desiredDigest: generationA.desiredDigest,
+        forceFreshPty: true,
+        forceFreshMachine: true,
+      });
+      await expect(creator.acknowledgeStewardRuntimeFresh(
+        { template: 'steward', dir },
+        'pty',
+        generationB.desiredDigest,
+      )).resolves.toBe(false);
+      expect(JSON.parse(await readFile(statePath(dir), 'utf8'))).toEqual({
+        version: 1,
+        desiredDigest: generationA.desiredDigest,
+        acknowledged: { pty: generationB.desiredDigest, machine: null },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('coalesces concurrent refreshes so every caller observes the same desired digest', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-creator-runtime-concurrent-'));
+    try {
+      await prepareRuntimeArtifacts(dir);
+      const child = makeFakeChild();
+      mockSpawn.mockReturnValue(child as unknown as childProcess.ChildProcess);
+      const creator = makeCreator((name) => (name === 'steward' ? stewardTemplate : undefined));
+
+      const first = creator.refreshStewardRuntime({ template: 'steward', dir });
+      const second = creator.refreshStewardRuntime({ template: 'steward', dir });
+      await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledOnce());
+      child.emit('close', 0);
+
+      const firstResult = await first;
+      const secondResult = await second;
+      expect(firstResult).toEqual(secondResult);
+      expect(firstResult).toMatchObject({
+        ok: true,
+        desiredDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        forceFreshPty: true,
+        forceFreshMachine: true,
+      });
+      expect(mockSpawn).toHaveBeenCalledOnce();
+      expect(JSON.parse(await readFile(statePath(dir), 'utf8'))).toMatchObject({
+        version: 1,
+        desiredDigest: firstResult.ok ? firstResult.desiredDigest : undefined,
+        acknowledged: { pty: null, machine: null },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

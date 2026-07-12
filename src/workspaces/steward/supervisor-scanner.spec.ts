@@ -26,10 +26,17 @@ const noopLogger = {
 } as unknown as Logger
 
 const envelope: StewardWakeEnvelope = {
+  version: 2,
   reason: 'scheduled_observe',
   accountId: 'mock-simulator-1',
   authzLevel: 'paper',
   expectedDecision: 'no_trade',
+  snapshotRef: {
+    snapshotId: 'snap:test',
+    sha256: '0'.repeat(64),
+    path: '.alice/steward/snapshots/test.json',
+    asOf: '2026-07-08T14:00:00.000Z',
+  },
 }
 
 /** In-memory `SessionPoolLike` — a session is "running" iff it was marked live. */

@@ -22,9 +22,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { canonicalDecisionFingerprint } from '../../steward/ledger-receipt.js';
 import { LEDGER_RENAME_RETRY_CODES, LOCK_TTL_MS } from '../../steward/ledger-writer.js';
+import { canonicalInformationSnapshotHash } from '../../steward/snapshot.js';
+import { stewardDecisionLedgerEntryV3Schema } from '../../steward/types.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const bootstrapPath = join(here, 'bootstrap.mjs');
+const d2FixtureDir = fileURLToPath(new URL('../../../../tools/steward-contract-proof/fixtures/d2/', import.meta.url));
 
 let root: string;
 let wsDir: string;
@@ -46,11 +49,11 @@ const goodCost = {
   allocatedServerCostUsd: null, tradingFeesUsd: null, estimatedSlippageUsd: null, totalEstimatedCostUsd: null,
 };
 
-/** A well-formed v2 decision object (self-consistent evidence), for use as a draft. */
+/** A well-formed v3 decision object (self-consistent evidence), for use as a draft. */
 function entry(over: Record<string, unknown> = {}): Record<string, unknown> {
   const wakeId = (over.wakeId as string | undefined) ?? 'wake-1';
   return {
-    version: 2,
+    version: 3,
     wakeId,
     at: '2026-07-10T14:01:23.000Z',
     accountId: 'mock-simulator-1',
@@ -63,6 +66,8 @@ function entry(over: Record<string, unknown> = {}): Record<string, unknown> {
     pendingHash: null,
     invalidation: 'a new entry signal would reopen the decision',
     cost: goodCost,
+    intent: null,
+    thesisDispositions: [],
     ...over,
   };
 }
@@ -70,6 +75,7 @@ function entry(over: Record<string, unknown> = {}): Record<string, unknown> {
 const draftPathFor = (wakeId: string) => join(wsDir, '.alice', 'steward', 'drafts', `${encodeURIComponent(wakeId)}.json`);
 const markerPathFor = (wakeId: string) => join(wsDir, '.alice', 'steward', 'finalize', `${encodeURIComponent(wakeId)}.json`);
 const wakePathFor = (wakeId: string) => join(wsDir, '.alice', 'steward', 'wakes', `${encodeURIComponent(wakeId)}.json`);
+const snapshotPathFor = (wakeId: string) => join(wsDir, '.alice', 'steward', 'snapshots', `${encodeURIComponent(wakeId)}.json`);
 const ledgerFile = () => join(wsDir, '.alice', 'steward', 'ledger', 'decisions.jsonl');
 const ledgerLockFile = () => `${ledgerFile()}.lock`;
 
@@ -87,7 +93,38 @@ async function seedWakeRecord(
   status = 'injected',
   extra: Record<string, unknown> = {},
 ): Promise<void> {
-  await writeFile(wakePathFor(wakeId), JSON.stringify({ version: 1, wakeId, status, ...extra }, null, 2), 'utf8');
+  const snapshot = {
+    version: 1,
+    snapshotId: `snap:${wakeId}`,
+    wakeId,
+    accountId: 'mock-simulator-1',
+    asOf: '2026-07-10T14:00:00.000Z',
+    market: { provided: false, note: 'not supplied' },
+    portfolio: { provided: false, note: 'not supplied' },
+    risk: { provided: false, envelopeVersion: null, note: 'not supplied' },
+    events: { provided: false, note: 'not supplied' },
+    history: { provided: false, note: 'not supplied' },
+  } as const;
+  await writeFile(snapshotPathFor(wakeId), `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
+  await writeFile(wakePathFor(wakeId), JSON.stringify({
+    version: 1,
+    wakeId,
+    status,
+    envelope: {
+      version: 2,
+      reason: 'scheduled_observe',
+      accountId: snapshot.accountId,
+      authzLevel: 'paper',
+      expectedDecision: 'no_trade',
+      snapshotRef: {
+        snapshotId: snapshot.snapshotId,
+        sha256: canonicalInformationSnapshotHash(snapshot),
+        path: `.alice/steward/snapshots/${encodeURIComponent(wakeId)}.json`,
+        asOf: snapshot.asOf,
+      },
+    },
+    ...extra,
+  }, null, 2), 'utf8');
 }
 async function seedLedger(entries: Record<string, unknown>[]): Promise<void> {
   await writeFile(ledgerFile(), entries.length ? `${entries.map((e) => JSON.stringify(e)).join('\n')}\n` : '', 'utf8');
@@ -98,6 +135,32 @@ function runValidate(wakeId: string): { code: number; stdout: string; stderr: st
 }
 async function ledgerLines(): Promise<string[]> {
   return (await readFile(ledgerFile(), 'utf8')).split('\n').filter(Boolean);
+}
+async function seedProofSingle(
+  mutate?: (entry: Record<string, unknown>, snapshot: Record<string, unknown>) => void,
+): Promise<{ entry: Record<string, unknown>; snapshot: Record<string, unknown> }> {
+  const entry = JSON.parse(await readFile(join(d2FixtureDir, 'ledger-v3-single.json'), 'utf8')) as Record<string, unknown>;
+  const snapshot = JSON.parse(await readFile(join(d2FixtureDir, 'information-snapshot-single.json'), 'utf8')) as Record<string, unknown>;
+  mutate?.(entry, snapshot);
+  const wakeId = entry['wakeId'] as string;
+  await seedWakeRecord(wakeId, 'injected', {
+    envelope: {
+      version: 2,
+      reason: 'scheduled_observe',
+      accountId: entry['accountId'],
+      authzLevel: 'paper',
+      expectedDecision: 'propose_change',
+      snapshotRef: {
+        snapshotId: snapshot['snapshotId'],
+        sha256: canonicalInformationSnapshotHash(snapshot),
+        path: `.alice/steward/snapshots/${encodeURIComponent(wakeId)}.json`,
+        asOf: snapshot['asOf'],
+      },
+    },
+  });
+  await writeFile(snapshotPathFor(wakeId), `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
+  await writeRawDraft(wakeId, entry);
+  return { entry, snapshot };
 }
 /** A prior terminal wake record + its committed ledger line + receipt fingerprint. */
 async function terminalWakeWithReceipt(wakeId: string): Promise<Record<string, unknown>> {
@@ -139,12 +202,12 @@ describe('generated validate-ledger.mjs — draft → ledger commit (issue #140)
     await seedLedger([entry({ wakeId: 'wake-a' }), entry({ wakeId: 'wake-b' })]);
     await seedWakeRecord('wake-a');
     // correct wake-a in place
-    await writeDraft('wake-a', { thesis: 'corrected', decision: 'propose_trade' });
+    await writeDraft('wake-a', { thesis: 'corrected', decision: 'blocked' });
     expect(runValidate('wake-a').code).toBe(0);
     const lines = await ledgerLines();
     expect(lines).toHaveLength(2); // no duplicate
     expect(JSON.parse(lines[0]).wakeId).toBe('wake-a'); // same position (line 1)
-    expect(JSON.parse(lines[0]).decision).toBe('propose_trade');
+    expect(JSON.parse(lines[0]).decision).toBe('blocked');
     expect(JSON.parse(lines[1]).wakeId).toBe('wake-b'); // untouched
   });
 
@@ -184,7 +247,7 @@ describe('generated validate-ledger.mjs — strict schema on the draft (issue #1
 
   it('accepts an executed typed action with pendingHash null', async () => {
     await writeDraft('wake-1', {
-      decision: 'propose_trade',
+      decision: 'no_trade',
       pendingHash: null,
       actions: [{ kind: 'order_place', aliceId: 'mock-simulator-1/ASSET-A', params: { action: 'BUY' }, commitHash: 'deadbeef', outcome: 'executed' }],
     });
@@ -194,14 +257,14 @@ describe('generated validate-ledger.mjs — strict schema on the draft (issue #1
 
   it('rejects a commit hash parked in pendingHash after an executed outcome (D1)', async () => {
     await expectRejected({
-      decision: 'propose_trade',
+      decision: 'no_trade',
       pendingHash: 'deadbeef',
       actions: [{ kind: 'order_place', aliceId: 'mock-simulator-1/ASSET-A', params: { action: 'BUY' }, commitHash: 'deadbeef', outcome: 'executed' }],
     }, /pendingHash must be null/);
   });
 
-  it('rejects version 1, free-text action, and policy_denied with no violations', async () => {
-    await expectRejected({ version: 1 }, /version must be 2/);
+  it('rejects legacy versions, free-text action, and policy_denied with no violations', async () => {
+    await expectRejected({ version: 2 }, /version must be 3/);
     await expectRejected({ actions: ['placed a market buy'] }, /free-text action strings are rejected/);
     await expectRejected({
       decision: 'no_trade',
@@ -210,7 +273,8 @@ describe('generated validate-ledger.mjs — strict schema on the draft (issue #1
   });
 
   it('rejects a missing / contradictory wake self-reference (#139)', async () => {
-    await expectRejected({ completion: { reason: 'done', evidenceRefs: ['tool:risk'] } }, /must include the self-reference/);
+    await expectRejected({ completion: { reason: 'done', evidenceRefs: ['tool:risk'] } }, /exactly one/);
+    await expectRejected({ completion: { reason: 'done', evidenceRefs: ['wake:wake-1', 'wake:wake-1'] } }, /exactly one/);
     // self-ref present, but ALSO names another wake → contradictory.
     await expectRejected({ completion: { reason: 'done', evidenceRefs: ['wake:wake-1', 'wake:wake-other', 'tool:risk'] } }, /references a different wake/);
   });
@@ -221,6 +285,208 @@ describe('generated validate-ledger.mjs — strict schema on the draft (issue #1
     const res = runValidate('wake-1');
     expect(res.code).toBe(1);
     expect(res.stderr).toMatch(/must equal the wake you are finalizing/);
+  });
+
+  it('rejects every representative malformed-v3 draft that the TypeScript schema rejects', async () => {
+    const singleIntent = (wakeId: unknown): Record<string, unknown> => ({
+      kind: 'single',
+      direction: 'long',
+      instrument: 'mock-simulator-1/ASSET-A',
+      targetExposure: { minPct: 10, maxPct: 15 },
+      invalidation: [{ kind: 'price_below', value: '90', note: 'fixture stop' }],
+      confidence: 'medium',
+      maxAcceptableLossPct: 2,
+      timeHorizon: { unit: 'week', value: 1 },
+      evidence: [{ ref: 'fixture:market', note: 'fixture evidence' }],
+      snapshotId: `snap:${String(wakeId)}`,
+      snapshotSha256: '0'.repeat(64),
+    });
+    const cases: ReadonlyArray<readonly [string, (candidate: Record<string, unknown>) => void]> = [
+      ['empty pendingHash', (candidate) => { candidate.pendingHash = ''; }],
+      ['blank pendingHash', (candidate) => { candidate.pendingHash = '   '; }],
+      ['invalid timestamp', (candidate) => { candidate.at = 'not-an-iso-timestamp'; }],
+      ['blank account id', (candidate) => { candidate.accountId = '   '; }],
+      ['null context', (candidate) => { candidate.context = null; }],
+      ['empty context path', (candidate) => { candidate.context = { manifestPath: '', manifestSha256: 'hash' }; }],
+      ['blank completion reason', (candidate) => { candidate.completion = { reason: ' ', evidenceRefs: [`wake:${candidate.wakeId}`] }; }],
+      ['empty evidence ref', (candidate) => { candidate.completion = { reason: 'done', evidenceRefs: [`wake:${candidate.wakeId}`, ''] }; }],
+      ['non-string evidence ref', (candidate) => { candidate.completion = { reason: 'done', evidenceRefs: [`wake:${candidate.wakeId}`, 7] }; }],
+      ['empty checklist field', (candidate) => { candidate.checklist = { ...goodChecklist, account: '' }; }],
+      ['non-string thesis', (candidate) => { candidate.thesis = 7; }],
+      ['non-string invalidation', (candidate) => { candidate.invalidation = null; }],
+      ['array action params', (candidate) => { candidate.actions = [{ kind: 'git_reject', params: [], outcome: 'awaiting_approval' }]; }],
+      ['empty action aliceId', (candidate) => { candidate.actions = [{ kind: 'order_place', aliceId: '', params: {}, outcome: 'awaiting_approval' }]; }],
+      ['empty optional commitHash', (candidate) => { candidate.actions = [{ kind: 'git_reject', params: {}, commitHash: '', outcome: 'awaiting_approval' }]; }],
+      ['empty violation string', (candidate) => { candidate.actions = [{ kind: 'git_reject', params: {}, outcome: 'awaiting_approval', violations: [''] }]; }],
+      ['invalid violation value', (candidate) => { candidate.actions = [{ kind: 'git_reject', params: {}, outcome: 'awaiting_approval', violations: [null] }]; }],
+      ['empty cost model', (candidate) => { candidate.cost = { ...goodCost, model: '' }; }],
+      ['negative input tokens', (candidate) => { candidate.cost = { ...goodCost, inputTokens: -1 }; }],
+      ['fractional input tokens', (candidate) => { candidate.cost = { ...goodCost, inputTokens: 1.5 }; }],
+      ['uncoercible input tokens', (candidate) => { candidate.cost = { ...goodCost, inputTokens: 'many' }; }],
+      ['negative model cost', (candidate) => { candidate.cost = { ...goodCost, modelCostUsd: -0.01 }; }],
+      ['uncoercible model cost', (candidate) => { candidate.cost = { ...goodCost, modelCostUsd: 'unknown' }; }],
+      ['missing cost field', (candidate) => {
+        const cost = { ...goodCost } as Record<string, unknown>;
+        delete cost.totalEstimatedCostUsd;
+        candidate.cost = cost;
+      }],
+      ['no-trade with intent', (candidate) => { candidate.intent = singleIntent(candidate.wakeId); }],
+      ['proposal without intent', (candidate) => { candidate.decision = 'propose_change'; candidate.intent = null; }],
+      ['intent unknown field', (candidate) => {
+        candidate.decision = 'propose_change';
+        candidate.intent = { ...singleIntent(candidate.wakeId), quantity: 10 };
+      }],
+      ['reversed exposure range', (candidate) => {
+        candidate.decision = 'propose_change';
+        candidate.intent = { ...singleIntent(candidate.wakeId), targetExposure: { minPct: 20, maxPct: 10 } };
+      }],
+      ['proposal without price invalidation', (candidate) => {
+        candidate.decision = 'propose_change';
+        candidate.intent = {
+          ...singleIntent(candidate.wakeId),
+          invalidation: [{ kind: 'time_expiry', note: 'no price condition' }],
+        };
+      }],
+      ['duplicate portfolio targets', (candidate) => {
+        const target = {
+          direction: 'long', instrument: 'mock-simulator-1/ASSET-A',
+          targetExposure: { minPct: 10, maxPct: 15 },
+          invalidation: [{ kind: 'price_below', value: '90', note: 'fixture stop' }],
+        };
+        candidate.decision = 'propose_change';
+        candidate.intent = {
+          ...singleIntent(candidate.wakeId),
+          kind: 'portfolio',
+          targets: [target, { ...target, instrument: ' mock-simulator-1/ASSET-A ' }],
+        };
+        delete (candidate.intent as Record<string, unknown>).direction;
+        delete (candidate.intent as Record<string, unknown>).instrument;
+        delete (candidate.intent as Record<string, unknown>).targetExposure;
+        delete (candidate.intent as Record<string, unknown>).invalidation;
+      }],
+      ['duplicate thesis disposition', (candidate) => {
+        const disposition = { wakeId: 'prior', instrument: 'mock-simulator-1/ASSET-A', disposition: 'keep', note: 'still open' };
+        candidate.thesisDispositions = [
+          disposition,
+          { ...disposition, wakeId: ' prior ', instrument: ' mock-simulator-1/ASSET-A ' },
+        ];
+      }],
+      ['unknown top-level field', (candidate) => { candidate.unapproved = true; }],
+    ];
+
+    for (let index = 0; index < cases.length; index++) {
+      const [name, mutate] = cases[index];
+      const wakeId = `wake-parity-invalid-${index}`;
+      const candidate = structuredClone(entry({ wakeId }));
+      mutate(candidate);
+      expect(stewardDecisionLedgerEntryV3Schema.safeParse(candidate).success, name).toBe(false);
+      await writeRawDraft(wakeId, candidate);
+      await seedWakeRecord(wakeId);
+      const result = runValidate(wakeId);
+      expect(result.code, `${name}: ${result.stderr}`).toBe(1);
+      expect(existsSync(markerPathFor(wakeId)), name).toBe(false);
+    }
+    expect(await ledgerLines()).toEqual([]);
+  });
+
+  it('accepts coercible numerics and historical min-length strings exactly as the TypeScript schema does', async () => {
+    const wakeId = 'wake-parity-valid';
+    const candidate = entry({
+      wakeId,
+      at: '2026-07-10T14:01:23.123456Z',
+      context: { manifestPath: ' ', manifestSha256: ' ' },
+      completion: { reason: 'done', evidenceRefs: [`wake:${wakeId}`, ' '] },
+      checklist: { ...goodChecklist, account: ' ' },
+      actions: [{
+        kind: 'git_reject',
+        aliceId: ' ',
+        params: {},
+        commitHash: ' ',
+        outcome: 'awaiting_approval',
+        violations: [' ', {}],
+      }],
+      cost: {
+        ...goodCost,
+        inputTokens: '12',
+        outputTokens: false,
+        modelCostUsd: '1.25',
+        allocatedServerCostUsd: '',
+      },
+    });
+    expect(stewardDecisionLedgerEntryV3Schema.safeParse(candidate).success).toBe(true);
+    await writeRawDraft(wakeId, candidate);
+    await seedWakeRecord(wakeId);
+    const result = runValidate(wakeId);
+    expect(result.code, result.stderr).toBe(0);
+    expect(await ledgerLines()).toEqual([JSON.stringify(candidate)]);
+  });
+});
+
+describe('generated validate-ledger.mjs — Snapshot M1 and thesis binding (issue #174)', () => {
+  it('rejects a tampered snapshot hash before acquiring the ledger lock', async () => {
+    await writeDraft('wake-snapshot');
+    await seedWakeRecord('wake-snapshot');
+    const wake = JSON.parse(await readFile(wakePathFor('wake-snapshot'), 'utf8'));
+    wake.envelope.snapshotRef.sha256 = 'f'.repeat(64);
+    await writeFile(wakePathFor('wake-snapshot'), JSON.stringify(wake, null, 2), 'utf8');
+
+    const result = runValidate('wake-snapshot');
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/snapshot hash mismatch/);
+    expect(await ledgerLines()).toEqual([]);
+    expect(existsSync(ledgerLockFile())).toBe(false);
+  });
+
+  it('rejects missing composite thesis coverage from the approved production fixture', async () => {
+    const { entry } = await seedProofSingle((candidate) => {
+      const dispositions = candidate['thesisDispositions'] as Array<Record<string, unknown>>;
+      candidate['thesisDispositions'] = dispositions.filter((item) => item['instrument'] !== 'mock-simulator-1/ASSET-B');
+    });
+    const result = runValidate(entry['wakeId'] as string);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/disposition required thesis exactly once/);
+    expect(await ledgerLines()).toEqual([]);
+  });
+
+  it('normalizes trimmed disposition identities when matching required thesis coverage', async () => {
+    const { entry } = await seedProofSingle((candidate) => {
+      const dispositions = candidate['thesisDispositions'] as Array<Record<string, unknown>>;
+      for (const disposition of dispositions) {
+        disposition['wakeId'] = ` ${String(disposition['wakeId'])} `;
+        disposition['instrument'] = ` ${String(disposition['instrument'])} `;
+      }
+    });
+    const result = runValidate(entry['wakeId'] as string);
+    expect(result.code, result.stderr).toBe(0);
+    expect(await ledgerLines()).toEqual([JSON.stringify(entry)]);
+  });
+
+  it('rejects snapshot thesis addresses that collide after identity trimming', async () => {
+    const { entry } = await seedProofSingle((_candidate, snapshot) => {
+      const history = snapshot['history'] as Record<string, unknown>;
+      const openTheses = history['openTheses'] as Array<Record<string, unknown>>;
+      const first = openTheses[0]!;
+      openTheses.push({
+        ...first,
+        wakeId: ` ${String(first['wakeId'])} `,
+        instrument: ` ${String(first['instrument'])} `,
+      });
+    });
+    const result = runValidate(entry['wakeId'] as string);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/duplicate open thesis address/);
+    expect(await ledgerLines()).toEqual([]);
+  });
+
+  it('rejects keeping an open thesis while a same-instrument replacement intent is proposed', async () => {
+    const { entry } = await seedProofSingle((candidate) => {
+      const dispositions = candidate['thesisDispositions'] as Array<Record<string, unknown>>;
+      dispositions[0]!['disposition'] = 'keep';
+    });
+    const result = runValidate(entry['wakeId'] as string);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/cannot keep a thesis while replacing/);
+    expect(await ledgerLines()).toEqual([]);
   });
 });
 
@@ -260,7 +526,7 @@ describe('generated validate-ledger.mjs — prior terminal integrity cross-check
   it('blocks the commit when a prior terminal wake\'s entry was mutated (fingerprint mismatch)', async () => {
     const prior = await terminalWakeWithReceipt('wake-prior');
     // ledger carries a MUTATED prior entry (semantic change)
-    await seedLedger([{ ...prior, thesis: 'rewritten', decision: 'propose_trade', completion: { reason: 'r', evidenceRefs: ['wake:wake-prior', 'tool:risk'] } }]);
+    await seedLedger([{ ...prior, thesis: 'rewritten', decision: 'blocked', completion: { reason: 'r', evidenceRefs: ['wake:wake-prior', 'tool:risk'] } }]);
     await writeDraft('wake-cur');
     await seedWakeRecord('wake-cur');
     const res = runValidate('wake-cur');
@@ -331,7 +597,7 @@ describe('generated validate-ledger.mjs — failure lock cleanup (issue #176)', 
 });
 
 describe('generated validate-ledger.mjs — golden fingerprint parity (TS ↔ JS)', () => {
-  const GOLDEN_ENTRY = {
+  const LEGACY_V2_GOLDEN_ENTRY = {
     version: 2,
     wakeId: 'golden-wake',
     at: '2026-07-11T00:00:00.000Z',
@@ -347,15 +613,18 @@ describe('generated validate-ledger.mjs — golden fingerprint parity (TS ↔ JS
     cost: goodCost,
   } as const;
   // Pinned in ledger-receipt.spec.ts too — keep in sync.
-  const GOLDEN_FINGERPRINT = 'a00e0bc4ff92f38b3e7bfab09e797e73d5f9248664cee740ac1efedf4849ef9f';
+  const LEGACY_V2_GOLDEN_FINGERPRINT = 'a00e0bc4ff92f38b3e7bfab09e797e73d5f9248664cee740ac1efedf4849ef9f';
 
-  it('the validator writes a marker whose fingerprint matches the pinned TS golden vector', async () => {
-    expect(canonicalDecisionFingerprint(GOLDEN_ENTRY)).toBe(GOLDEN_FINGERPRINT);
-    await writeRawDraft('golden-wake', GOLDEN_ENTRY);
-    await seedWakeRecord('golden-wake');
-    expect(runValidate('golden-wake').code).toBe(0);
-    const marker = JSON.parse(await readFile(markerPathFor('golden-wake'), 'utf8'));
-    expect(marker.fingerprint).toBe(GOLDEN_FINGERPRINT);
+  it('preserves the legacy-v2 raw hash and writes the proof-fixture v3 hash byte-identically', async () => {
+    expect(canonicalDecisionFingerprint(LEGACY_V2_GOLDEN_ENTRY)).toBe(LEGACY_V2_GOLDEN_FINGERPRINT);
+
+    const { entry: v3 } = await seedProofSingle();
+    const goldens = JSON.parse(await readFile(join(d2FixtureDir, 'fingerprint-goldens.json'), 'utf8'));
+    const result = runValidate(v3['wakeId'] as string);
+    expect(result.code, result.stderr).toBe(0);
+    const marker = JSON.parse(await readFile(markerPathFor(v3['wakeId'] as string), 'utf8'));
+    expect(marker.fingerprint).toBe(goldens.ledgerV3Single);
+    expect(marker.fingerprint).toBe(canonicalDecisionFingerprint(v3));
   });
 });
 
@@ -382,7 +651,7 @@ describe('bootstrap.mjs --refresh-runtime (issue #140 merge gate)', () => {
     return { code: res.status ?? -1, stderr: res.stderr };
   }
 
-  it('upgrades an OLD workspace in place: new validator + drafts dir, user content byte-preserved, next wake commits', async () => {
+  it('upgrades an OLD workspace in place: v3 validator/schema/snapshot dirs, user content byte-preserved, next wake commits', async () => {
     // Simulate a workspace bootstrapped before #140: old ledger-based validator,
     // no drafts/ dir, no runtime marker.
     await writeFile(stewardFile('validate-ledger.mjs'), '// OLD LEDGER-BASED VALIDATOR\n', 'utf8');
@@ -391,6 +660,8 @@ describe('bootstrap.mjs --refresh-runtime (issue #140 merge gate)', () => {
     // Existing user content: a prior completed wake + its ledger line + config.
     const prior = await terminalWakeWithReceipt('wake-old');
     await seedLedger([prior]);
+    await rm(stewardFile('snapshots'), { recursive: true, force: true });
+    await rm(stewardFile('schemas'), { recursive: true, force: true });
     const ledgerBefore = await readFile(ledgerFile(), 'utf8');
     const configBefore = await readFile(stewardFile('config.json'), 'utf8');
     const wakeBefore = await readFile(wakePathFor('wake-old'), 'utf8');
@@ -404,7 +675,9 @@ describe('bootstrap.mjs --refresh-runtime (issue #140 merge gate)', () => {
     expect(validator).not.toContain('OLD LEDGER-BASED');
     expect(validator).toContain('drafts');
     expect(existsSync(stewardFile('drafts'))).toBe(true);
-    expect(JSON.parse(await readFile(stewardFile('runtime.json'), 'utf8')).protocol).toBe(2);
+    expect(existsSync(stewardFile('snapshots'))).toBe(true);
+    expect(JSON.parse(await readFile(stewardFile('schemas/decision-ledger.v3.json'), 'utf8')).title).toContain('v3');
+    expect(JSON.parse(await readFile(stewardFile('runtime.json'), 'utf8')).protocol).toBe(3);
     // User content preserved byte-for-byte:
     expect(await readFile(ledgerFile(), 'utf8')).toBe(ledgerBefore);
     expect(await readFile(stewardFile('config.json'), 'utf8')).toBe(configBefore);
@@ -444,7 +717,34 @@ describe('bootstrap.mjs --refresh-runtime (issue #140 merge gate)', () => {
     })));
     expect(runs.every((c) => c === 0)).toBe(true);
     expect(existsSync(stewardFile('drafts'))).toBe(true);
-    expect(JSON.parse(await readFile(stewardFile('runtime.json'), 'utf8')).protocol).toBe(2);
+    expect(JSON.parse(await readFile(stewardFile('runtime.json'), 'utf8')).protocol).toBe(3);
+  });
+});
+
+describe('decision-ledger.v3.json auxiliary schema artifact', () => {
+  it('labels validator authority and structurally constrains decision/intent nullability', async () => {
+    const artifact = JSON.parse(await readFile(
+      join(wsDir, '.alice/steward/schemas/decision-ledger.v3.json'),
+      'utf8',
+    )) as Record<string, any>;
+    expect(artifact['x-openalice-role']).toBe('auxiliary-structural');
+    expect(artifact['x-openalice-authoritative-validator']).toBe('.alice/steward/validate-ledger.mjs');
+    expect(artifact.description).toContain('authoritative');
+
+    const branches = artifact.allOf as Array<Record<string, any>>;
+    const intentRule = (decision: string) => branches.find((branch) =>
+      branch.if?.properties?.decision?.enum?.includes(decision)
+    )?.then?.properties?.intent;
+    expect(intentRule('no_trade')).toEqual({ type: 'null' });
+    expect(intentRule('blocked')).toEqual({ type: 'null' });
+    expect(intentRule('propose_change')?.oneOf).toHaveLength(2);
+    expect(intentRule('reduce_risk')?.oneOf).toHaveLength(2);
+    expect(intentRule('propose_change')?.oneOf).not.toContainEqual({ type: 'null' });
+
+    const executedRule = branches.find((branch) =>
+      branch.if?.properties?.actions?.contains?.properties?.outcome?.const === 'executed'
+    );
+    expect(executedRule?.then?.properties?.pendingHash).toEqual({ type: 'null' });
   });
 });
 

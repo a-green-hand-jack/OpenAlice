@@ -180,7 +180,7 @@ export function createStewardLedgerStore(workspaceDir: string): StewardLedgerSto
  *  the schema-valid `entries` (file order), the `invalid` lines, the `duplicates`
  *  (D3, first-wins over valid entries), AND the `firstWins` index in one sweep.
  *
- *  Reads are LENIENT (issue #125): a strict-v2 OR a legacy-v1 entry both parse.
+ *  Reads are LENIENT (issue #125): current v3 and historical v1/v2 entries parse.
  *  Line numbers are 1-based over NON-BLANK lines (kept identical to the previous
  *  parser and to the generated validator). `firstWins` keys on the FIRST
  *  JSON-parseable object line per wakeId even if it is schema-invalid, so the

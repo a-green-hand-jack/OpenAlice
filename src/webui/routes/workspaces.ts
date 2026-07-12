@@ -32,6 +32,7 @@ import { readWorkspaceMetadata, workspaceMetadataSchema, writeWorkspaceMetadata 
 import type { SessionRecord } from '../../workspaces/session-registry.js';
 import type { WorkspaceMeta } from '../../workspaces/workspace-registry.js';
 import { HeadlessCapacityError, resumeFromRecord, type SessionFactoryContext, type WorkspaceService } from '../../workspaces/service.js';
+import { StewardRuntimeRefreshError } from '../../workspaces/workspace-creator.js';
 import { isAgentRuntime, type WorkspaceAiCred } from '../../workspaces/cli-adapter.js';
 import { generatePetnameId } from '../../workspaces/petname-id.js';
 import { addCredential, readCredentials, readWorkspaceDefaultAgent, setCredentialLastModel, credentialWires, credentialWireShapeEnum, type Credential } from '../../core/config.js';
@@ -196,6 +197,16 @@ type StewardSessionSelection =
     readonly rotated?: boolean;
   }
   | { readonly ok: false; readonly status: number; readonly body: { error: string; message?: string } };
+
+class StewardWakeHttpError extends Error {
+  constructor(
+    readonly status: 400 | 409 | 500,
+    readonly body: Record<string, unknown>,
+  ) {
+    super(typeof body['message'] === 'string' ? body['message'] : String(body['error'] ?? 'steward wake failed'));
+    this.name = 'StewardWakeHttpError';
+  }
+}
 
 export function createWorkspaceRoutes(
   svc: WorkspaceService,
@@ -383,6 +394,7 @@ export function createWorkspaceRoutes(
     config: Record<string, unknown>,
     requestedAgent: string | undefined,
     initialWakePrompt?: string,
+    forceFreshRuntime = false,
   ): Promise<StewardSessionSelection> {
     const configuredSessionId = typeof config['sessionId'] === 'string' ? config['sessionId'] : null;
     const configuredAgent = typeof config['agent'] === 'string' ? config['agent'] : undefined;
@@ -394,7 +406,11 @@ export function createWorkspaceRoutes(
     const canUseConfigured = configuredSessionId !== null &&
       (requestedAgent === undefined || requestedAgent === configuredRecord?.agent || requestedAgent === configuredAgent);
 
-    if (configuredSessionId && canUseConfigured && svc.pool.get(configuredSessionId)) {
+    if (forceFreshRuntime && configuredSessionId && svc.pool.get(configuredSessionId)) {
+      svc.pool.disposeToken(configuredSessionId, 'steward_runtime_upgraded');
+    }
+
+    if (!forceFreshRuntime && configuredSessionId && canUseConfigured && svc.pool.get(configuredSessionId)) {
       // Issue #132: before reusing the running session, check whether its
       // context is over threshold / already overflowed. If so, dispose it and
       // spawn fresh (continuity comes from workspace files the Wake Loop
@@ -456,7 +472,7 @@ export function createWorkspaceRoutes(
         rotated: true,
       };
     }
-    if (configuredRecord && canUseConfigured) {
+    if (!forceFreshRuntime && configuredRecord && canUseConfigured) {
       return resumeStewardSession(meta, configuredRecord);
     }
     if (!meta.agents.includes(agent)) {
@@ -873,15 +889,6 @@ export function createWorkspaceRoutes(
       return c.json({ error: 'invalid_steward_config', message: (err as Error).message }, 500);
     }
 
-    // Issue #140 merge gate: refresh the workspace's launcher-owned runtime
-    // (validator + drafts dir) BEFORE creating/injecting the wake, so a persistent
-    // workspace predating the draft protocol handles the new instruction instead
-    // of timing out. On failure, refuse to create the wake with an actionable error.
-    const refreshed = await svc.refreshStewardRuntime(meta);
-    if (!refreshed.ok) {
-      return c.json({ error: 'runtime_refresh_failed', message: refreshed.message }, 500);
-    }
-
     const now = new Date();
     const wakeId = body.wakeId ?? `${now.toISOString()}:${body.reason}:${randomUUID()}`;
     const deadline = body.deadline ?? new Date(now.getTime() + (body.deadlineMs ?? 180_000)).toISOString();
@@ -928,6 +935,9 @@ export function createWorkspaceRoutes(
         const message = err instanceof Error ? err.message : String(err);
         if (message.includes('already exists')) {
           return c.json({ error: 'wake_exists', message }, 409);
+        }
+        if (err instanceof StewardRuntimeRefreshError) {
+          return c.json({ error: 'runtime_refresh_failed', message: err.detail }, 500);
         }
         return c.json({ error: 'machine_dispatch_failed', message }, 500);
       }
@@ -981,94 +991,160 @@ export function createWorkspaceRoutes(
       return c.json({ error: 'lock_failed', message: (err as Error).message }, 500);
     }
 
-    let record: StewardWakeRecord;
+    let createdRecord: StewardWakeRecord | null = null;
+    let completed: { readonly wake: StewardWakeRecord; readonly selected: Extract<StewardSessionSelection, { ok: true }> } | null = null;
+    let dispatchCommitted = false;
+    let committedSelection: Extract<StewardSessionSelection, { ok: true }> | null = null;
+    let bookkeepingWarning: string | undefined;
     try {
-      record = await wakeStore.create({
-        wakeId,
-        deadline,
-        envelope,
-        now: now.toISOString(),
-      });
-    } catch (err) {
-      const message = (err as Error).message;
-      if (lockAcquired) await lockStore.release(body.accountId, wakeId).catch(() => undefined);
-      return c.json({
-        error: message.includes('already exists') ? 'wake_exists' : 'wake_create_failed',
-        message,
-      }, message.includes('already exists') ? 409 : 500);
-    }
+      completed = await svc.withStewardRuntimeLease(meta, 'pty', async ({ forceFresh }) => {
+        let publishedSnapshot: Awaited<ReturnType<typeof svc.publishStewardSnapshot>>;
+        try {
+          publishedSnapshot = await svc.publishStewardSnapshot(meta, {
+            wakeId,
+            asOf: now.toISOString(),
+            envelope,
+          });
+        } catch (err) {
+          throw new StewardWakeHttpError(500, {
+            error: 'snapshot_create_failed',
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+        try {
+          createdRecord = await wakeStore.create({
+            wakeId,
+            deadline,
+            envelope: publishedSnapshot.envelope,
+            now: now.toISOString(),
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          throw new StewardWakeHttpError(message.includes('already exists') ? 409 : 500, {
+            error: message.includes('already exists') ? 'wake_exists' : 'wake_create_failed',
+            message,
+          });
+        }
 
-    let selected: StewardSessionSelection;
-    try {
-      selected = await ensureStewardSession(
-        meta,
-        config,
-        body.session?.agent,
-        formatStewardWakeMessage(record),
-      );
-    } catch (err) {
-      const cause = err instanceof Error ? err.message : String(err);
-      const message = `steward session preparation failed; wake was not injected: ${cause}`;
-      const completedAt = new Date().toISOString();
-      let failed: StewardWakeRecord;
-      try {
-        failed = await wakeStore.updateStatus(wakeId, 'error', {
-          now: completedAt,
-          completedAt,
-          error: message,
+        let selected: StewardSessionSelection;
+        try {
+          selected = await ensureStewardSession(
+            meta,
+            config,
+            body.session?.agent,
+            formatStewardWakeMessage(createdRecord),
+            forceFresh,
+          );
+        } catch (err) {
+          const cause = err instanceof Error ? err.message : String(err);
+          const message = `steward session preparation failed; wake was not injected: ${cause}`;
+          const completedAt = new Date().toISOString();
+          const failed = await wakeStore.updateStatus(wakeId, 'error', {
+            now: completedAt,
+            completedAt,
+            error: message,
+          });
+          throw new StewardWakeHttpError(500, {
+            error: 'session_prepare_failed',
+            message,
+            wake: failed,
+          });
+        }
+        if (!selected.ok) {
+          await wakeStore.updateStatus(wakeId, 'error', {
+            now: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+            error: selected.body.message ?? selected.body.error,
+          }).catch(() => undefined);
+          throw new StewardWakeHttpError(selected.status as 400 | 500, selected.body);
+        }
+
+        const injected = selected.injectedByInitialPrompt || await injectStewardWake({
+          pool: svc.pool,
+          sessionId: selected.sessionId,
+          record: createdRecord,
         });
-      } finally {
-        if (lockAcquired) await lockStore.release(body.accountId, wakeId).catch(() => undefined);
-      }
-      return c.json({ error: 'session_prepare_failed', message, wake: failed }, 500);
-    }
-    if (!selected.ok) {
-      await wakeStore.updateStatus(wakeId, 'error', {
-        now: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
-        error: selected.body.message ?? selected.body.error,
-      }).catch(() => undefined);
-      if (lockAcquired) await lockStore.release(body.accountId, wakeId).catch(() => undefined);
-      return c.json(selected.body, selected.status as 400 | 500);
-    }
+        if (!injected) {
+          // The wake never actually ran (the target session isn't live), so it
+          // is not ledger-backed. Preserve the existing `stuck` attribution.
+          const failed = await wakeStore.updateStatus(wakeId, 'stuck', {
+            now: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+            sessionId: selected.sessionId,
+            error: `session not running: ${selected.sessionId}`,
+          });
+          throw new StewardWakeHttpError(500, { error: 'inject_failed', wake: failed });
+        }
 
-    const injected = selected.injectedByInitialPrompt || await injectStewardWake({
-      pool: svc.pool,
-      sessionId: selected.sessionId,
-      record,
-    });
-    if (!injected) {
-      // The wake never actually ran (the target session isn't live), so it is
-      // NOT ledger-backed. Mark it `stuck` — the same status the supervisor's
-      // liveness check uses for "session not running" — rather than `error`, so
-      // ledger-integrity reconciliation (issue #134) never expects a decision
-      // entry for a wake that was never dispatched.
-      const failed = await wakeStore.updateStatus(wakeId, 'stuck', {
-        now: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
-        sessionId: selected.sessionId,
-        error: `session not running: ${selected.sessionId}`,
+        // Irreversible boundary: either the fresh PTY was seeded with this wake
+        // or the two-phase prompt injection completed. From here onward a
+        // bookkeeping failure must retain the account lock and live wake.
+        dispatchCommitted = true;
+        committedSelection = selected;
+        const injectedAt = new Date().toISOString();
+        const updated = await wakeStore.updateStatus(wakeId, 'injected', {
+          now: injectedAt,
+          injectedAt,
+          sessionId: selected.sessionId,
+        });
+        completed = { wake: updated, selected };
+        return completed;
       });
-      if (lockAcquired) await lockStore.release(body.accountId, wakeId).catch(() => undefined);
-      return c.json({ error: 'inject_failed', wake: failed }, 500);
+    } catch (err) {
+      if (completed) {
+        // Only the post-success exact-digest acknowledgement can fail after the
+        // callback publishes `completed`. Keep the live wake/lock and force the
+        // next wake fresh; do not claim the already-injected wake failed.
+        launcherLogger.warn('workspace.steward_runtime_fresh_ack_failed', {
+          id,
+          face: 'pty',
+          err: err instanceof Error ? err.message : String(err),
+        });
+      } else if (dispatchCommitted && committedSelection && createdRecord) {
+        bookkeepingWarning = err instanceof Error ? err.message : String(err);
+        launcherLogger.warn('workspace.steward_post_dispatch_bookkeeping_failed', {
+          id,
+          face: 'pty',
+          wakeId,
+          err: bookkeepingWarning,
+        });
+        const retained = await wakeStore.get(wakeId).catch(() => null);
+        completed = { wake: retained ?? createdRecord, selected: committedSelection };
+      } else {
+        if (lockAcquired) await lockStore.release(body.accountId, wakeId).catch(() => undefined);
+        if (err instanceof StewardWakeHttpError) {
+          return c.json(err.body, err.status);
+        }
+        if (err instanceof StewardRuntimeRefreshError) {
+          return c.json({ error: 'runtime_refresh_failed', message: err.detail }, 500);
+        }
+        if (createdRecord) {
+          await wakeStore.updateStatus(wakeId, 'error', {
+            now: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+            error: err instanceof Error ? err.message : String(err),
+          }).catch(() => undefined);
+        }
+        return c.json({
+          error: 'inject_failed',
+          message: err instanceof Error ? err.message : String(err),
+        }, 500);
+      }
     }
-
-    const injectedAt = new Date().toISOString();
-    const updated = await wakeStore.updateStatus(wakeId, 'injected', {
-      now: injectedAt,
-      injectedAt,
-      sessionId: selected.sessionId,
-    });
+    if (!completed) {
+      throw new Error(`steward PTY dispatch completed without a wake result: ${wakeId}`);
+    }
     const ledgerEntry = await ledgerStore.findByWakeId(wakeId).catch(() => null);
     return c.json({
-      wake: updated,
+      wake: completed.wake,
       ledgerEntry,
       session: {
-        sessionId: selected.sessionId,
-        agent: selected.agent,
-        reused: selected.reused,
-        resumed: selected.resumed,
+        sessionId: completed.selected.sessionId,
+        agent: completed.selected.agent,
+        reused: completed.selected.reused,
+        resumed: completed.selected.resumed,
       },
+      ...(bookkeepingWarning !== undefined ? { bookkeepingWarning } : {}),
     }, 202);
   });
 

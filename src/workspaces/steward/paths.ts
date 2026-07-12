@@ -14,6 +14,8 @@ export const STEWARD_FINALIZE_REL = `${STEWARD_ROOT_REL}/finalize`;
  *  its native Write/Edit tool; the generated validate-ledger.mjs is the ONLY
  *  supported writer of decisions.jsonl. Gitignored scratch. */
 export const STEWARD_DRAFTS_REL = `${STEWARD_ROOT_REL}/drafts`;
+/** Launcher-owned, immutable per-wake Information Snapshot M1 files. */
+export const STEWARD_SNAPSHOTS_REL = `${STEWARD_ROOT_REL}/snapshots`;
 /** Per-workspace machine control-face thread state (issue #146). ONE file per
  *  workspace (not per-wake) — a machine wake resumes the SAME native thread as
  *  the prior wake, so this id lets wake N+1 re-attach across Alice restarts.
@@ -86,6 +88,22 @@ export function stewardDraftFilename(wakeId: string): string {
 
 export function stewardDraftPath(workspaceDir: string, wakeId: string): string {
   return join(stewardDraftsDir(workspaceDir), stewardDraftFilename(wakeId));
+}
+
+export function stewardSnapshotsDir(workspaceDir: string): string {
+  return join(stewardRootPath(workspaceDir), 'snapshots');
+}
+
+export function stewardSnapshotFilename(wakeId: string): string {
+  return `${encodeURIComponent(wakeId)}.json`;
+}
+
+export function stewardSnapshotRelPath(wakeId: string): string {
+  return `${STEWARD_SNAPSHOTS_REL}/${stewardSnapshotFilename(wakeId)}`;
+}
+
+export function stewardSnapshotPath(workspaceDir: string, wakeId: string): string {
+  return join(stewardSnapshotsDir(workspaceDir), stewardSnapshotFilename(wakeId));
 }
 
 /** The single machine control-face thread record for a workspace (issue #146). */

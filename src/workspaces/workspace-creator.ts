@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { exec as gitExec } from 'dugite';
@@ -9,7 +10,11 @@ import { DEFAULT_AUTHZ_LEVEL } from '@traderalice/uta-protocol';
 import { readCredentials, readWorkspaceCredentialDefaults } from '@/core/config.js';
 
 import type { AdapterRegistry } from './cli-adapter.js';
-import { injectWorkspaceContext } from './context-injector.js';
+import {
+  injectWorkspaceContext,
+  refreshWorkspaceInstructions,
+  writeStewardContextManifest,
+} from './context-injector.js';
 import { injectWorkspaceCredentials } from './credential-injection.js';
 import type { Logger } from './logger.js';
 import { generatePetnameId } from './petname-id.js';
@@ -52,6 +57,51 @@ export type CreateResult =
       readonly stderr?: string;
       readonly exitCode?: number;
     };
+
+export type StewardRuntimeFace = 'pty' | 'machine';
+export type StewardRuntimeRefreshResult =
+  | {
+      readonly ok: true;
+      readonly desiredDigest: string;
+      readonly forceFreshPty: boolean;
+      readonly forceFreshMachine: boolean;
+    }
+  | {
+      readonly ok: true;
+      readonly desiredDigest?: never;
+      readonly forceFreshPty?: never;
+      readonly forceFreshMachine?: never;
+    }
+  | { readonly ok: false; readonly message: string };
+
+export interface StewardRuntimeLeaseContext {
+  /** Exact runtime/instruction generation protected by this lease. */
+  readonly desiredDigest: string;
+  /** This face has not yet acknowledged the protected generation. */
+  readonly forceFresh: boolean;
+}
+
+export class StewardRuntimeRefreshError extends Error {
+  constructor(public readonly detail: string) {
+    super(`steward runtime refresh failed: ${detail}`);
+    this.name = 'StewardRuntimeRefreshError';
+  }
+}
+
+const STEWARD_RUNTIME_STATE_PATH = '.alice/steward/runtime-state.json';
+const STEWARD_RUNTIME_STATE_VERSION = 1;
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
+
+interface StewardRuntimeState {
+  readonly version: typeof STEWARD_RUNTIME_STATE_VERSION;
+  readonly desiredDigest: string;
+  readonly acknowledged: Readonly<Record<StewardRuntimeFace, string | null>>;
+}
+
+interface RecoveredStewardRuntimeState {
+  readonly desiredDigest: string | null;
+  readonly acknowledged: Readonly<Record<StewardRuntimeFace, string | null>>;
+}
 
 export interface CreateWorkspaceOptions {
   readonly agentsRequested?: readonly string[];
@@ -104,6 +154,9 @@ function normalizeBlindAllowBarSources(sources: readonly string[]): readonly str
  * on success append the resulting WorkspaceMeta to the registry.
  */
 export class WorkspaceCreator {
+  private readonly stewardRuntimeRefreshes = new Map<string, Promise<StewardRuntimeRefreshResult>>();
+  private readonly stewardRuntimeTransitions = new Map<string, Promise<void>>();
+
   constructor(private readonly opts: CreatorOptions) {}
 
   async create(
@@ -300,19 +353,41 @@ export class WorkspaceCreator {
    * Idempotently refresh a steward workspace's launcher-owned runtime artifacts
    * (issue #140 merge gate): re-run the template's bootstrap script in
    * `--refresh-runtime` mode, which updates ONLY validate-ledger.mjs, the steward
-   * README, the runtime-protocol marker, the operational dirs, and git excludes
-   * via atomic same-dir replace. It never inits a repo and never touches user
+   * schema artifact and runtime directories, README/git-exclude launcher files,
+   * authoritative AGENTS.md/CLAUDE.md, and the launcher-owned context manifest.
+   * The current runtime/instruction digest is persisted with a per-face
+   * acknowledgement, so a fresh PTY session/machine thread can acknowledge the
+   * exact generation it loaded without a stale acknowledgement clearing a newer
+   * generation. It never inits a repo and never touches user
    * content (config/wakes/ledger/finalize/drafts). A no-op for non-steward
-   * workspaces. Both wake-dispatch paths (HTTP manual + schedule) call this
-   * BEFORE creating/injecting a wake, so an already-running persistent workspace
-   * that predates the draft protocol is upgraded in place rather than timing out
-   * on the new instruction. Returns an actionable error on failure so the caller
-   * can refuse to dispatch the wake.
+   * workspaces. Wake dispatch uses `withStewardRuntimeLease` after its account
+   * lock instead of consuming this method's cacheable result; this public refresh
+   * remains the standalone maintenance/coalescing surface. Returns an actionable
+   * error on failure.
    */
   async refreshStewardRuntime(
     meta: Pick<WorkspaceMeta, 'template' | 'dir'>,
-  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly message: string }> {
+  ): Promise<StewardRuntimeRefreshResult> {
     if (meta.template !== 'steward') return { ok: true };
+    const active = this.stewardRuntimeRefreshes.get(meta.dir);
+    if (active) return active;
+    const refresh = this.withStewardRuntimeTransition(
+      meta.dir,
+      () => this.refreshStewardRuntimeSerialized(meta),
+    );
+    this.stewardRuntimeRefreshes.set(meta.dir, refresh);
+    try {
+      return await refresh;
+    } finally {
+      if (this.stewardRuntimeRefreshes.get(meta.dir) === refresh) {
+        this.stewardRuntimeRefreshes.delete(meta.dir);
+      }
+    }
+  }
+
+  private async refreshStewardRuntimeSerialized(
+    meta: Pick<WorkspaceMeta, 'template' | 'dir'>,
+  ): Promise<StewardRuntimeRefreshResult> {
     const template = this.opts.templateRegistry.get('steward');
     if (!template) {
       return { ok: false, message: 'steward template is not registered; cannot refresh workspace runtime' };
@@ -336,8 +411,211 @@ export class WorkspaceCreator {
           : `steward runtime refresh exited with code ${result.exitCode}`;
       return { ok: false, message: reason ? `${headline}: ${reason.slice(-500)}` : headline };
     }
-    return { ok: true };
+    try {
+      await refreshWorkspaceInstructions({ template, dir: meta.dir });
+      await writeStewardContextManifest({ template, dir: meta.dir });
+      const desiredDigest = await computeStewardRuntimeDigest(meta.dir);
+      const current = await readStewardRuntimeState(meta.dir);
+      const state: StewardRuntimeState = {
+        version: STEWARD_RUNTIME_STATE_VERSION,
+        desiredDigest,
+        acknowledged: current.acknowledged,
+      };
+      await writeStewardRuntimeState(meta.dir, state);
+      return {
+        ok: true,
+        desiredDigest,
+        forceFreshPty: state.acknowledged.pty !== desiredDigest,
+        forceFreshMachine: state.acknowledged.machine !== desiredDigest,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        message: `steward launcher artifact refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
   }
+
+  async acknowledgeStewardRuntimeFresh(
+    meta: Pick<WorkspaceMeta, 'template' | 'dir'>,
+    face: StewardRuntimeFace,
+    desiredDigest: string,
+  ): Promise<boolean> {
+    if (meta.template !== 'steward') return true;
+    return this.withStewardRuntimeTransition(
+      meta.dir,
+      () => this.acknowledgeStewardRuntimeFreshSerialized(meta.dir, face, desiredDigest),
+    );
+  }
+
+  /**
+   * Hold the workspace runtime generation stable while a control face consumes
+   * it. The authoritative refresh happens only after the caller has acquired
+   * its account lock; every other refresh/ack queues behind this lease until
+   * session/thread start, wake injection/turn-start, and the exact-generation
+   * acknowledgement have completed. The callback must throw on an unsuccessful
+   * dispatch so a failed face is never acknowledged.
+   */
+  async withStewardRuntimeLease<T>(
+    meta: Pick<WorkspaceMeta, 'template' | 'dir'>,
+    face: StewardRuntimeFace,
+    operation: (runtime: StewardRuntimeLeaseContext) => Promise<T>,
+  ): Promise<T> {
+    if (meta.template !== 'steward') {
+      throw new Error('steward runtime lease requires a steward workspace');
+    }
+    return this.withStewardRuntimeTransition(meta.dir, async () => {
+      const refreshed = await this.refreshStewardRuntimeSerialized(meta);
+      if (!refreshed.ok) throw new StewardRuntimeRefreshError(refreshed.message);
+      if (refreshed.desiredDigest === undefined) {
+        throw new StewardRuntimeRefreshError('steward refresh returned no runtime generation');
+      }
+      const forceFresh = face === 'pty'
+        ? refreshed.forceFreshPty
+        : refreshed.forceFreshMachine;
+      const value = await operation({
+        desiredDigest: refreshed.desiredDigest,
+        forceFresh,
+      });
+      if (forceFresh) {
+        const acknowledged = await this.acknowledgeStewardRuntimeFreshSerialized(
+          meta.dir,
+          face,
+          refreshed.desiredDigest,
+        );
+        if (!acknowledged) {
+          throw new Error(
+            `steward runtime generation changed while ${face} lease was held`,
+          );
+        }
+      }
+      return value;
+    });
+  }
+
+  private async acknowledgeStewardRuntimeFreshSerialized(
+    workspaceDir: string,
+    face: StewardRuntimeFace,
+    desiredDigest: string,
+  ): Promise<boolean> {
+    const current = await readStewardRuntimeState(workspaceDir);
+    if (current.desiredDigest !== desiredDigest) return false;
+    await writeStewardRuntimeState(workspaceDir, {
+      version: STEWARD_RUNTIME_STATE_VERSION,
+      desiredDigest,
+      acknowledged: {
+        ...current.acknowledged,
+        [face]: desiredDigest,
+      },
+    });
+    return true;
+  }
+
+  private withStewardRuntimeTransition<T>(
+    workspaceDir: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.stewardRuntimeTransitions.get(workspaceDir) ?? Promise.resolve();
+    const result = previous.catch(() => undefined).then(operation);
+    const settled = result.then(() => undefined, () => undefined);
+    this.stewardRuntimeTransitions.set(workspaceDir, settled);
+    return result.finally(() => {
+      if (this.stewardRuntimeTransitions.get(workspaceDir) === settled) {
+        this.stewardRuntimeTransitions.delete(workspaceDir);
+      }
+    });
+  }
+}
+
+async function computeStewardRuntimeDigest(workspaceDir: string): Promise<string> {
+  const [runtimeRaw, agentsRaw, claudeRaw] = await Promise.all([
+    readFile(join(workspaceDir, '.alice/steward/runtime.json'), 'utf8'),
+    readFile(join(workspaceDir, 'AGENTS.md'), 'utf8'),
+    readFile(join(workspaceDir, 'CLAUDE.md'), 'utf8'),
+  ]);
+  const runtime = JSON.parse(runtimeRaw) as { protocol?: unknown };
+  if (!Number.isInteger(runtime.protocol)) {
+    throw new Error('.alice/steward/runtime.json has no integer protocol');
+  }
+  const digestInput = JSON.stringify({
+    protocol: runtime.protocol,
+    agentsSha256: sha256(agentsRaw),
+    claudeSha256: sha256(claudeRaw),
+  });
+  return sha256(digestInput);
+}
+
+async function readStewardRuntimeState(
+  workspaceDir: string,
+): Promise<RecoveredStewardRuntimeState> {
+  const empty: RecoveredStewardRuntimeState = {
+    desiredDigest: null,
+    acknowledged: { pty: null, machine: null },
+  };
+  try {
+    const parsed = JSON.parse(
+      await readFile(join(workspaceDir, STEWARD_RUNTIME_STATE_PATH), 'utf8'),
+    ) as unknown;
+    if (!isRecord(parsed) || parsed['version'] !== STEWARD_RUNTIME_STATE_VERSION) return empty;
+    const acknowledged = isRecord(parsed['acknowledged']) ? parsed['acknowledged'] : {};
+    return {
+      desiredDigest: normalizeDigest(parsed['desiredDigest']),
+      acknowledged: {
+        pty: normalizeDigest(acknowledged['pty']),
+        machine: normalizeDigest(acknowledged['machine']),
+      },
+    };
+  } catch {
+    return empty;
+  }
+}
+
+async function writeStewardRuntimeState(
+  workspaceDir: string,
+  state: StewardRuntimeState,
+): Promise<void> {
+  const statePath = join(workspaceDir, STEWARD_RUNTIME_STATE_PATH);
+  const stateDir = join(workspaceDir, '.alice/steward');
+  const tmpPath = `${statePath}.tmp-${process.pid}-${randomUUID()}`;
+  await mkdir(stateDir, { recursive: true });
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(tmpPath, 'wx');
+    await handle.writeFile(`${JSON.stringify(state, null, 2)}\n`, 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await rename(tmpPath, statePath);
+    await syncDirectory(stateDir);
+  } finally {
+    await handle?.close().catch(() => undefined);
+    await rm(tmpPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  try {
+    const handle = await open(path, 'r');
+    try {
+      await handle.sync().catch(() => undefined);
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    // Directory fsync is unavailable on some platforms.
+  }
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function normalizeDigest(value: unknown): string | null {
+  return typeof value === 'string' && SHA256_HEX_RE.test(value) ? value : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**

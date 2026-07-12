@@ -20,6 +20,10 @@ import { dataPath, defaultPath } from '@/core/paths.js';
 
 import { writeWorkspaceFile } from './file-service.js';
 import type { TemplateMeta } from './template-registry.js';
+import {
+  DECISION_LEDGER_SCHEMA_VERSION,
+  WAKE_SCHEMA_VERSION,
+} from './steward/types.js';
 
 /**
  * Skills teaching the `alice*` + `traderhub` CLIs — injected into every
@@ -45,20 +49,7 @@ export async function injectWorkspaceContext(opts: {
 }): Promise<void> {
   const { template, dir } = opts;
 
-  if (template.injectPersona) {
-    // One neutral instruction source (`<template>/instruction.md`), composed
-    // with the persona, then written byte-identically to BOTH CLAUDE.md (Claude
-    // Code's filename) and AGENTS.md (Codex's). The CLIs disagree on the
-    // filename; we don't pick a side — we copy to each at injection. A template
-    // that asks for persona injection but ships no instruction.md is a
-    // misconfiguration — let the readFile throw so the create fails loudly
-    // (matches the old `compose_persona_claude_md` exit 4).
-    const persona = await resolvePersona();
-    const instruction = await readFile(join(template.filesDir, 'instruction.md'), 'utf8');
-    const composed = persona !== null ? `${persona}\n\n---\n\n${instruction}` : instruction;
-    await writeWorkspaceFile(dir, 'CLAUDE.md', composed);
-    await writeWorkspaceFile(dir, 'AGENTS.md', composed);
-  }
+  await refreshWorkspaceInstructions({ template, dir });
 
   // Every workspace gets ALWAYS_SKILLS (generic launcher capabilities). Tool-
   // bearing templates additionally get the per-CLI playbooks (alice / alice-uta
@@ -93,6 +84,43 @@ export async function injectWorkspaceContext(opts: {
   }
 }
 
+/** Refresh the two launcher-owned developer-instruction faces from the current
+ * template + persona. Existing steward workspaces call this before every wake;
+ * the boolean lets the dispatcher rotate a persistent PTY/thread exactly once
+ * when the authoritative instruction bytes change. */
+export async function refreshWorkspaceInstructions(opts: {
+  readonly template: TemplateMeta;
+  readonly dir: string;
+}): Promise<{ readonly changed: boolean }> {
+  const { template, dir } = opts;
+  if (!template.injectPersona) return { changed: false };
+
+  // One neutral instruction source (`<template>/instruction.md`), composed
+  // with the persona, then written byte-identically to BOTH CLAUDE.md (Claude
+  // Code's filename) and AGENTS.md (Codex's). A missing instruction is a
+  // template error and fails loudly.
+  const persona = await resolvePersona();
+  const instruction = await readFile(join(template.filesDir, 'instruction.md'), 'utf8');
+  const composed = persona !== null ? `${persona}\n\n---\n\n${instruction}` : instruction;
+  let changed = false;
+  for (const relPath of ['CLAUDE.md', 'AGENTS.md'] as const) {
+    let current: string | null = null;
+    try {
+      current = await readFile(join(dir, relPath), 'utf8');
+    } catch (err) {
+      if (!isENOENT(err)) throw err;
+    }
+    if (current === composed) continue;
+    await writeWorkspaceFile(dir, relPath, composed);
+    changed = true;
+  }
+  return { changed };
+}
+
+function isENOENT(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
 /**
  * Live persona override (`data/brain/persona.md`) wins; else the shipped
  * default (`default/persona.default.md`); else none. Same precedence the
@@ -106,7 +134,7 @@ async function resolvePersona(): Promise<string | null> {
   return null;
 }
 
-async function writeStewardContextManifest(opts: {
+export async function writeStewardContextManifest(opts: {
   readonly template: TemplateMeta;
   readonly dir: string;
 }): Promise<void> {
@@ -119,8 +147,12 @@ async function writeStewardContextManifest(opts: {
     instructions: await existingFileRefs(dir, ['AGENTS.md', 'CLAUDE.md']),
     skills: await skillRefs(dir),
     schemas: {
-      wake: 1,
-      decisionLedger: 1,
+      wake: WAKE_SCHEMA_VERSION,
+      decisionLedger: DECISION_LEDGER_SCHEMA_VERSION,
+      decisionLedgerArtifact: await fileRef(
+        dir,
+        '.alice/steward/schemas/decision-ledger.v3.json',
+      ),
     },
   };
   await writeWorkspaceFile(

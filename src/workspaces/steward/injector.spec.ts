@@ -32,10 +32,17 @@ const record: StewardWakeRecord = {
   sessionId: null,
   controlFace: 'pty',
   envelope: {
+    version: 2,
     reason: 'scheduled_observe',
     accountId: 'mock-simulator-1',
     authzLevel: 'paper',
     expectedDecision: 'no_trade',
+    snapshotRef: {
+      snapshotId: 'snap:wake-1',
+      sha256: '0'.repeat(64),
+      path: '.alice/steward/snapshots/wake-1.json',
+      asOf: '2026-07-08T14:00:00.000Z',
+    },
   },
 };
 

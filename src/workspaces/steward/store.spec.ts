@@ -14,6 +14,7 @@ import {
   createStewardWakeStore,
   DECISION_LEDGER_SCHEMA_VERSION,
   DECISION_LEDGER_SCHEMA_VERSION_V1,
+  DECISION_LEDGER_SCHEMA_VERSION_V2,
   parseStewardDecisionLedgerEntry,
   parseStewardDecisionLedgerEntryLenient,
   StewardLedgerStore,
@@ -23,6 +24,7 @@ import {
   summarizeStewardCosts,
   WAKE_SCHEMA_VERSION,
   type StewardDecisionLedgerEntryV2,
+  type StewardDecisionLedgerEntryV3,
   type StewardWakeEnvelope,
 } from './index.js';
 
@@ -37,15 +39,22 @@ afterEach(async () => {
 });
 
 const envelope: StewardWakeEnvelope = {
+  version: 2,
   reason: 'scheduled_observe',
   accountId: 'mock-simulator-1',
   authzLevel: 'paper',
   expectedDecision: 'no_trade',
   marketContext: { symbols: ['AAPL'] },
   riskContext: { riskState: 'NORMAL', guards: [] },
+  snapshotRef: {
+    snapshotId: 'snap:test',
+    sha256: '0'.repeat(64),
+    path: '.alice/steward/snapshots/test.json',
+    asOf: '2026-07-08T14:00:00.000Z',
+  },
 };
 
-function ledgerEntry(over: Partial<StewardDecisionLedgerEntryV2> = {}): StewardDecisionLedgerEntryV2 {
+function ledgerEntry(over: Partial<StewardDecisionLedgerEntryV3> = {}): StewardDecisionLedgerEntryV3 {
   // Issue #139: the entry's `wake:` evidence self-reference must match its own
   // top-level wakeId, so derive it from the (possibly overridden) wakeId.
   const wakeId = over.wakeId ?? '2026-07-08T14:00:00Z:aapl-risk-check';
@@ -86,6 +95,19 @@ function ledgerEntry(over: Partial<StewardDecisionLedgerEntryV2> = {}): StewardD
       estimatedSlippageUsd: null,
       totalEstimatedCostUsd: null,
     },
+    intent: null,
+    thesisDispositions: [],
+    ...over,
+  };
+}
+
+function legacyV2Entry(over: Partial<StewardDecisionLedgerEntryV2> = {}): StewardDecisionLedgerEntryV2 {
+  const current = ledgerEntry(over.wakeId === undefined ? {} : { wakeId: over.wakeId });
+  const { intent: _intent, thesisDispositions: _dispositions, ...common } = current;
+  return {
+    ...common,
+    version: DECISION_LEDGER_SCHEMA_VERSION_V2,
+    decision: 'no_trade',
     ...over,
   };
 }
@@ -269,7 +291,7 @@ describe('StewardLedgerStore', () => {
 
     const missingCostField = ledgerEntry() as unknown as { cost: Record<string, unknown> };
     delete missingCostField.cost.totalEstimatedCostUsd;
-    await expect(store.append(missingCostField as unknown as StewardDecisionLedgerEntryV2)).rejects.toThrow();
+    await expect(store.append(missingCostField as unknown as StewardDecisionLedgerEntryV3)).rejects.toThrow();
   });
 
   it('coerces numeric-string cost fields to actual numbers (a smaller model\'s observed mistake)', async () => {
@@ -363,7 +385,7 @@ describe('StewardLedgerStore', () => {
     const store = createStewardLedgerStore(dir);
     const entry = ledgerEntry({
       wakeId: 'wake-executed',
-      decision: 'propose_trade',
+      decision: 'no_trade',
       pendingHash: null,
       actions: [
         {
@@ -386,7 +408,7 @@ describe('StewardLedgerStore', () => {
     const store = createStewardLedgerStore(dir);
     await expect(store.append(ledgerEntry({
       wakeId: 'wake-bad-pending',
-      decision: 'propose_trade',
+      decision: 'no_trade',
       // Provenance belongs in actions[].commitHash; pendingHash is strictly the
       // stage awaiting approval and MUST be null once anything executed.
       pendingHash: 'deadbeef',
@@ -406,7 +428,7 @@ describe('StewardLedgerStore', () => {
     const store = createStewardLedgerStore(dir);
     const appended = await store.append(ledgerEntry({
       wakeId: 'wake-awaiting',
-      decision: 'propose_trade',
+      decision: 'no_trade',
       pendingHash: 'abc12345',
       actions: [
         {
@@ -425,7 +447,7 @@ describe('StewardLedgerStore', () => {
     const store = createStewardLedgerStore(dir);
     await expect(store.append(ledgerEntry({
       wakeId: 'wake-denied-noviol',
-      decision: 'propose_trade',
+      decision: 'no_trade',
       pendingHash: null,
       actions: [
         {
@@ -460,13 +482,13 @@ describe('StewardLedgerStore', () => {
     // v2 write path: a free-text action string is not a typed action object.
     await expect(store.append(ledgerEntry({
       wakeId: 'wake-freetext',
-      actions: ['placed a market buy for 50 shares'] as unknown as StewardDecisionLedgerEntryV2['actions'],
+      actions: ['placed a market buy for 50 shares'] as unknown as StewardDecisionLedgerEntryV3['actions'],
     }))).rejects.toThrow();
 
     // v1 legacy history: the same free-text action array is still READABLE
     // (reads stay lenient), typed as legacy unknown[].
     const legacy = {
-      ...ledgerEntry({ wakeId: 'wake-legacy-v1' }),
+      ...legacyV2Entry({ wakeId: 'wake-legacy-v1' }),
       version: DECISION_LEDGER_SCHEMA_VERSION_V1,
       actions: ['free text is fine for v1 history'],
     };
@@ -490,7 +512,7 @@ describe('StewardLedgerStore', () => {
     await expect(store.append(ledgerEntry({
       wakeId: 'wake-real',
       completion: { reason: 'done', evidenceRefs: ['wake:wake-copied-from-prior', 'tool:risk'] },
-    }))).rejects.toThrow(/different wake|self-reference/);
+    }))).rejects.toThrow(/exactly one|contradictory wake/);
   });
 
   it('rejects an entry with no wake: self-reference at all', async () => {
@@ -498,29 +520,29 @@ describe('StewardLedgerStore', () => {
     await expect(store.append(ledgerEntry({
       wakeId: 'wake-noself',
       completion: { reason: 'done', evidenceRefs: ['tool:risk'] },
-    }))).rejects.toThrow(/self-reference/);
+    }))).rejects.toThrow(/exactly one/);
   });
 
   it('read-lenient / write-strict for the #139 self-reference (restores #125 semantics)', () => {
     // A pre-#139 v2 history line has no wake:<self> reference.
     const legacyV2MissingSelfRef = {
-      ...ledgerEntry({ wakeId: 'wake-legacy-v2' }),
+      ...legacyV2Entry({ wakeId: 'wake-legacy-v2' }),
       completion: { reason: 'done', evidenceRefs: ['tool:risk'] },
     };
     // STRICT write path rejects it (missing self-ref)...
-    expect(() => parseStewardDecisionLedgerEntry(legacyV2MissingSelfRef)).toThrow(/self-reference/);
+    expect(() => parseStewardDecisionLedgerEntry(legacyV2MissingSelfRef)).toThrow();
     // ...but the LENIENT read path still accepts it as a structural v2 entry, so
     // historical reads / cost aggregation don't silently drop it.
     const read = parseStewardDecisionLedgerEntryLenient(legacyV2MissingSelfRef);
     expect(read.wakeId).toBe('wake-legacy-v2');
-    expect(read.version).toBe(DECISION_LEDGER_SCHEMA_VERSION);
+    expect(read.version).toBe(DECISION_LEDGER_SCHEMA_VERSION_V2);
 
     // The v8matrix5 hybrid (evidence names a DIFFERENT wake) is rejected strict...
     const hybrid = {
-      ...ledgerEntry({ wakeId: 'wake-a' }),
+      ...legacyV2Entry({ wakeId: 'wake-a' }),
       completion: { reason: 'done', evidenceRefs: ['wake:wake-b', 'tool:risk'] },
     };
-    expect(() => parseStewardDecisionLedgerEntry(hybrid)).toThrow(/different wake/);
+    expect(() => parseStewardDecisionLedgerEntry(hybrid)).toThrow();
     // ...and still readable structurally (it's the validator/marker/active-wake
     // gate that blocks it from finalizing, not the reader).
     expect(parseStewardDecisionLedgerEntryLenient(hybrid).wakeId).toBe('wake-a');
@@ -529,11 +551,11 @@ describe('StewardLedgerStore', () => {
   it('surfaces a misfiled entry (evidence names another wake) as an identity mismatch in the index (read-lenient / write-strict)', async () => {
     const store = createStewardLedgerStore(dir);
     const misfiled = {
-      ...ledgerEntry({ wakeId: 'wake-typo-suffix' }),
+      ...legacyV2Entry({ wakeId: 'wake-typo-suffix' }),
       completion: { reason: 'done', evidenceRefs: ['wake:wake-actually-active', 'tool:risk'] },
     };
     // The STRICT write path rejects the contradictory self-reference (#139)...
-    await expect(store.append(misfiled as unknown as StewardDecisionLedgerEntryV2)).rejects.toThrow(/different wake/);
+    await expect(store.append(misfiled as unknown as StewardDecisionLedgerEntryV3)).rejects.toThrow();
 
     // ...but a raw line on disk still READS leniently (structural v2), so it
     // counts for cost/history — while identityMismatches flags it so the
@@ -558,7 +580,7 @@ describe('StewardLedgerStore', () => {
     const second = ledgerEntry({
       wakeId: 'wake-dup',
       at: '2026-07-08T14:05:00.000Z',
-      decision: 'propose_trade',
+      decision: 'blocked',
       thesis: 'a later append can never alter the recorded decision',
     });
 
@@ -905,11 +927,11 @@ describe('StewardSupervisor', () => {
     });
 
     const v1Entry = {
-      ...ledgerEntry({ wakeId: 'wake-v1', at: '2026-07-08T14:01:00.000Z' }),
+      ...legacyV2Entry({ wakeId: 'wake-v1', at: '2026-07-08T14:01:00.000Z' }),
       version: DECISION_LEDGER_SCHEMA_VERSION_V1,
       actions: ['legacy free-text action'],
     };
-    const v2Entry = ledgerEntry({
+    const v2Entry = legacyV2Entry({
       wakeId: 'wake-v2',
       at: '2026-07-08T14:01:05.000Z',
       accountId: 'mock-simulator-2',
@@ -926,11 +948,15 @@ describe('StewardSupervisor', () => {
       ],
     });
     // A later duplicate of wake-v1 that must NOT alter the recorded decision.
-    const v1Dup = ledgerEntry({
-      wakeId: 'wake-v1',
-      at: '2026-07-08T14:02:00.000Z',
-      decision: 'propose_trade',
-    });
+    const v1Dup = {
+      ...legacyV2Entry({
+        wakeId: 'wake-v1',
+        at: '2026-07-08T14:02:00.000Z',
+        decision: 'propose_trade',
+      }),
+      version: DECISION_LEDGER_SCHEMA_VERSION_V1,
+      actions: [],
+    };
 
     await mkdir(dirname(ledgerStore.path()), { recursive: true });
     await writeFile(
@@ -1102,7 +1128,7 @@ describe('StewardSupervisor ledger integrity (issue #134)', () => {
     // A SEMANTIC change (different thesis + decision) is a mutation.
     await writeFile(
       ledgerStore.path(),
-      `${JSON.stringify(ledgerEntry({ wakeId: 'wake-mut', thesis: 'rewritten thesis', decision: 'propose_trade' }))}\n`,
+      `${JSON.stringify(ledgerEntry({ wakeId: 'wake-mut', thesis: 'rewritten thesis', decision: 'blocked' }))}\n`,
       'utf8',
     );
     const mutated = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:05:00.000Z', isSessionRunning: () => true });
@@ -1293,7 +1319,7 @@ describe('StewardSupervisor finalize barrier (issue #136)', () => {
 
     // A #125-permitted in-place correction — but NOT re-validated: the marker
     // still points at the draft fingerprint.
-    const corrected = ledgerEntry({ wakeId: 'wake-correct', thesis: 'corrected thesis', decision: 'propose_trade' });
+    const corrected = ledgerEntry({ wakeId: 'wake-correct', thesis: 'corrected thesis', decision: 'blocked' });
     await writeFile(ledgerStore.path(), `${JSON.stringify(corrected)}\n`, 'utf8');
 
     const result = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:01:30.000Z', isSessionRunning: () => true });
@@ -1309,7 +1335,7 @@ describe('StewardSupervisor finalize barrier (issue #136)', () => {
     await ledgerStore.append(draft);
     await publishMarker('wake-recommit', draft);
 
-    const corrected = ledgerEntry({ wakeId: 'wake-recommit', thesis: 'corrected thesis', decision: 'propose_trade' });
+    const corrected = ledgerEntry({ wakeId: 'wake-recommit', thesis: 'corrected thesis', decision: 'blocked' });
     await writeFile(ledgerStore.path(), `${JSON.stringify(corrected)}\n`, 'utf8');
     // Re-run validation on the corrected line: marker is atomically replaced.
     await publishMarker('wake-recommit', corrected);
@@ -1333,7 +1359,7 @@ describe('StewardSupervisor finalize barrier (issue #136)', () => {
     // genuine #134 corruption, NOT a legal pre-terminal correction.
     await writeFile(
       ledgerStore.path(),
-      `${JSON.stringify(ledgerEntry({ wakeId: 'wake-post', thesis: 'rewritten after completion', decision: 'propose_trade' }))}\n`,
+      `${JSON.stringify(ledgerEntry({ wakeId: 'wake-post', thesis: 'rewritten after completion', decision: 'blocked' }))}\n`,
       'utf8',
     );
     const result = await createStewardSupervisor(dir).tick({ now: '2026-07-08T14:05:00.000Z', isSessionRunning: () => true });
@@ -1748,7 +1774,7 @@ describe('StewardSupervisor machine control face (issue #146)', () => {
 
     // A #125-permitted in-place correction — but NOT re-validated: the marker
     // still points at the draft fingerprint.
-    const corrected = ledgerEntry({ wakeId: 'wake-m', thesis: 'corrected thesis', decision: 'propose_trade' });
+    const corrected = ledgerEntry({ wakeId: 'wake-m', thesis: 'corrected thesis', decision: 'blocked' });
     await writeFile(ledgerStore.path(), `${JSON.stringify(corrected)}\n`, 'utf8');
 
     const result = await createStewardSupervisor(dir).tick({
