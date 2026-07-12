@@ -975,8 +975,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
         };
       }
       pool.disposeToken(configuredSessionId, 'steward_session_rotated');
-      const spawned = await spawnStewardScheduleSession(ws, agent, initialWakePrompt);
-      await writeStewardSessionConfig(ws, config, spawned.sessionId, spawned.agent);
+      const spawned = await spawnStewardScheduleSession(ws, agent, config, initialWakePrompt);
       await recordStewardRotation(ws.dir, {
         at: new Date().toISOString(),
         wsId: ws.id,
@@ -1003,14 +1002,14 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     if (!ws.agents.includes(agent)) {
       throw new Error(`workspace does not enable agent: ${agent}`);
     }
-    const spawned = await spawnStewardScheduleSession(ws, agent, initialWakePrompt);
-    await writeStewardSessionConfig(ws, config, spawned.sessionId, spawned.agent);
+    const spawned = await spawnStewardScheduleSession(ws, agent, config, initialWakePrompt);
     return spawned;
   }
 
   async function spawnStewardScheduleSession(
     ws: WorkspaceMeta,
     agentId: string,
+    stewardConfig: Record<string, unknown>,
     initialWakePrompt?: string,
   ): Promise<{
     sessionId: string;
@@ -1050,6 +1049,10 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     };
     await sessionRegistry.create(record);
     try {
+      // Persist the pointer before a seeded process can receive the wake. If
+      // persistence fails, the caller terminalizes the uninjected wake and
+      // releases its account lock without ever starting the agent.
+      await writeStewardSessionConfig(ws, stewardConfig, recordId, adapter.id);
       const session = pool.spawn(ws.id, {
         agentId: adapter.id,
         ...(initialWakePrompt !== undefined ? { initialPrompt: initialWakePrompt } : {}),

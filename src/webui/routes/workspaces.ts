@@ -235,6 +235,9 @@ export function createWorkspaceRoutes(
       readonly initialPrompt?: string;
       readonly credentialSlug?: string;
       readonly terminalTheme?: TerminalThemeVariant;
+      /** Steward uses this to persist its session pointer before a seeded
+       * process can receive the wake. Other interactive spawns omit it. */
+      readonly beforeSpawn?: (session: { readonly sessionId: string; readonly agent: string }) => Promise<void>;
     },
   ): Promise<SpawnSessionResult> {
     const id = meta.id;
@@ -296,6 +299,15 @@ export function createWorkspaceRoutes(
     } catch (err) {
       launcherLogger.error('session_registry.create_failed', { id, recordId, err });
       return { ok: false, status: 500, body: { error: 'registry_failed', message: (err as Error).message } };
+    }
+    if (opts.beforeSpawn) {
+      try {
+        await opts.beforeSpawn({ sessionId: recordId, agent: adapter.id });
+      } catch (err) {
+        await svc.sessionRegistry.remove(id, recordId).catch(() => undefined);
+        launcherLogger.error('workspace.session_preparation_failed', { id, recordId, err });
+        throw err;
+      }
     }
     try {
       const ctx: SessionFactoryContext = {
@@ -397,9 +409,10 @@ export function createWorkspaceRoutes(
       const spawned = await spawnInteractiveSession(meta, {
         agentId: agent,
         initialPrompt: initialWakePrompt,
+        beforeSpawn: ({ sessionId, agent: spawnedAgent }) =>
+          writeStewardSessionConfig(meta, config, sessionId, spawnedAgent),
       });
       if (!spawned.ok) return spawned;
-      await writeStewardSessionConfig(meta, config, spawned.session.sessionId, spawned.session.agent);
       await recordStewardRotation(meta.dir, {
         at: new Date().toISOString(),
         wsId: meta.id,
@@ -438,9 +451,13 @@ export function createWorkspaceRoutes(
         body: { error: 'agent_not_enabled', message: `workspace does not enable agent: ${agent}` },
       };
     }
-    const spawned = await spawnInteractiveSession(meta, { agentId: agent, initialPrompt: initialWakePrompt });
+    const spawned = await spawnInteractiveSession(meta, {
+      agentId: agent,
+      initialPrompt: initialWakePrompt,
+      beforeSpawn: ({ sessionId, agent: spawnedAgent }) =>
+        writeStewardSessionConfig(meta, config, sessionId, spawnedAgent),
+    });
     if (!spawned.ok) return spawned;
-    await writeStewardSessionConfig(meta, config, spawned.session.sessionId, spawned.session.agent);
     return {
       ok: true,
       sessionId: spawned.session.sessionId,
@@ -966,12 +983,30 @@ export function createWorkspaceRoutes(
       }, message.includes('already exists') ? 409 : 500);
     }
 
-    const selected = await ensureStewardSession(
-      meta,
-      config,
-      body.session?.agent,
-      formatStewardWakeMessage(record),
-    );
+    let selected: StewardSessionSelection;
+    try {
+      selected = await ensureStewardSession(
+        meta,
+        config,
+        body.session?.agent,
+        formatStewardWakeMessage(record),
+      );
+    } catch (err) {
+      const cause = err instanceof Error ? err.message : String(err);
+      const message = `steward session preparation failed; wake was not injected: ${cause}`;
+      const completedAt = new Date().toISOString();
+      let failed: StewardWakeRecord;
+      try {
+        failed = await wakeStore.updateStatus(wakeId, 'error', {
+          now: completedAt,
+          completedAt,
+          error: message,
+        });
+      } finally {
+        if (lockAcquired) await lockStore.release(body.accountId, wakeId).catch(() => undefined);
+      }
+      return c.json({ error: 'session_prepare_failed', message, wake: failed }, 500);
+    }
     if (!selected.ok) {
       await wakeStore.updateStatus(wakeId, 'error', {
         now: new Date().toISOString(),
