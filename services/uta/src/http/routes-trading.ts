@@ -8,7 +8,12 @@ import {
   type UnifiedTradingAccount,
 } from '../domain/trading/UnifiedTradingAccount.js'
 import { searchTradeableContracts } from '../domain/trading/contract-search.js'
-import { AUTHZ_LEVELS, type ApproverIdentity, type AssetClassHint } from '@traderalice/uta-protocol'
+import {
+  AUTHZ_LEVELS,
+  stewardAdmissionRequestSchema,
+  type ApproverIdentity,
+  type AssetClassHint,
+} from '@traderalice/uta-protocol'
 import { executeOneShotOrder, type OrderEntryPhase } from '../domain/trading/order-entry.js'
 import { projectOrderHistory, projectTradeHistory } from '../domain/trading/order-history.js'
 import {
@@ -590,6 +595,18 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
   })
 
   // ==================== Per-account wallet/git routes ====================
+
+  app.post('/uta/:id/steward/admission', async (c) => {
+    const id = c.req.param('id')
+    if (!ctx.utaManager.has(id)) return c.json({ error: 'Account not found' }, 404)
+    try {
+      const request = stewardAdmissionRequestSchema.parse(await c.req.json().catch(() => ({})))
+      return c.json(await ctx.utaManager.checkStewardAdmission(id, request))
+    } catch (err) {
+      if (err instanceof z.ZodError) return c.json({ error: err.message }, 400)
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
 
   app.get('/uta/:id/wallet/log', (c) => {
     const uta = ctx.utaManager.get(c.req.param('id'))

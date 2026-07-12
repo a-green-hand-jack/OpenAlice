@@ -9,6 +9,10 @@
 import type { GuardVerdict, Operation } from '../git/types.js'
 import type { IBroker } from '../brokers/types.js'
 import type { OperationGuard, GuardContext, GuardEvaluation } from './types.js'
+import {
+  resolveCanonicalOperationIdentity,
+  type CanonicalOperationIdentity,
+} from '../instrument-identity.js'
 
 /**
  * Internal proof that a result was produced before the broker dispatcher was
@@ -51,12 +55,37 @@ export function createGuardPipeline(
   if (guards.length === 0 && !onContext) return dispatcher
 
   return async (op: Operation): Promise<unknown> => {
-    const [positions, accountInfo] = await Promise.all([
+    const requiresCanonicalInstrumentIdentity = guards.some(
+      (guard) => guard.requiresCanonicalInstrumentIdentity === true,
+    )
+    const requiresModifyOrderIdentity = requiresCanonicalInstrumentIdentity
+      && op.action === 'modifyOrder'
+    const [positions, accountInfo, orders] = await Promise.all([
       account.getPositions(),
       account.getAccount(),
+      requiresModifyOrderIdentity ? account.getOrders([op.orderId]) : Promise.resolve(undefined),
     ])
 
-    const ctx: GuardContext = { operation: op, positions, account: accountInfo }
+    let resolved: CanonicalOperationIdentity = { operation: op }
+    let instrumentIdentityError: string | undefined
+    if (requiresCanonicalInstrumentIdentity) {
+      try {
+        resolved = resolveCanonicalOperationIdentity(account, op, orders)
+      } catch (error) {
+        instrumentIdentityError = error instanceof Error ? error.message : String(error)
+      }
+    }
+
+    const ctx: GuardContext = {
+      operation: resolved.operation,
+      positions,
+      account: accountInfo,
+      ...(orders ? { orders } : {}),
+      ...(resolved.canonicalInstrumentId
+        ? { canonicalInstrumentId: resolved.canonicalInstrumentId }
+        : {}),
+      ...(instrumentIdentityError ? { instrumentIdentityError } : {}),
+    }
     await onContext?.(ctx)
     const guardVerdicts: GuardVerdict[] = []
 
@@ -82,7 +111,7 @@ export function createGuardPipeline(
     }
 
     try {
-      return attachGuardVerdicts(await dispatcher(op), guardVerdicts)
+      return attachGuardVerdicts(await dispatcher(resolved.operation), guardVerdicts)
     } catch (error) {
       throw attachGuardVerdictsToError(error, guardVerdicts)
     }

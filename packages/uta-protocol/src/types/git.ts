@@ -215,6 +215,10 @@ export type PaperAutoPushSkipReason =
   | 'account_type_not_paper'
   | 'authz_below_paper'
   | 'risk_state_not_normal'
+  | 'risk_envelope_missing'
+  | 'risk_envelope_scope_unsupported'
+  | 'risk_envelope_revoked'
+  | 'envelope_version_changed'
   | 'paper_policy_denied'
   | 'push_in_flight'
 
@@ -245,6 +249,7 @@ export type PaperAutoPushResult =
       push: PushResult
       approver: ApproverIdentity
       effectiveAuthzLevel: AuthzLevel
+      envelopeVersion: number
     }
   | {
       status: 'skipped'
@@ -252,6 +257,7 @@ export type PaperAutoPushResult =
       pendingHash?: string
       accountType?: AuthzAccountType
       effectiveAuthzLevel?: AuthzLevel
+      envelopeVersion?: number
       risk?: RiskStateInfo
       policyViolations?: PaperDecisionPolicyViolation[]
     }

@@ -144,7 +144,7 @@ export class McpPlugin implements Plugin {
       const accounts = utas.map(accountAuthzSnapshotFromConfig)
       const authzLevel = resolveWorkspaceToolAuthzLevel({
         workspaceAuthzLevel: meta?.authzLevel,
-        accountMaxAuthzLevels: utas.map((u) => u.maxAuthzLevel),
+        accounts,
       })
       const scopedTools = workspaceToolCenter.build({
         workspaceId: wsId,

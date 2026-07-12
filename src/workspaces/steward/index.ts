@@ -16,3 +16,6 @@ export * from './session-config.js';
 export * from './snapshot.js';
 export * from './sizing.js';
 export * from './execution-record.js';
+export * from './evaluation-data-manifest.js';
+export * from './evaluation-harness.js';
+export * from './model-cost-scheduler.js';

@@ -40,6 +40,18 @@ const ACCOUNT = {
   presetConfig: { apiKey: 'plain-api-key', secret: 'plain-secret' },
 }
 
+const RISK_ENVELOPE = {
+  version: 1,
+  maxPositionPctOfEquity: 25,
+  maxSingleOrderPctOfEquity: 10,
+  maxDailyLossPct: 5,
+  maxDrawdownPct: 10,
+  scope: { kind: 'whitelist' as const, symbols: ['AAPL'] },
+  autonomyCeiling: 'paper' as const,
+  revoked: false,
+  revokedReason: null,
+}
+
 describe('UTA accounts at-rest sealing', () => {
   it('write → sealed envelope on disk (0600), read → original records', async () => {
     const { config, sealing } = await loadConfigModule()
@@ -96,5 +108,54 @@ describe('UTA accounts at-rest sealing', () => {
     expect(sealing.isSealedEnvelope(reseeded)).toBe(true)
     // A new key was minted by the reseed, so subsequent reads work again.
     expect(await config.readUTAsConfig()).toEqual([])
+  })
+
+  it('serializes concurrent deterministic revokes into one monotonic version', async () => {
+    const { config } = await loadConfigModule()
+    await config.writeUTAsConfig([{ ...ACCOUNT, riskEnvelope: RISK_ENVELOPE }] as never)
+
+    const results = await Promise.all(Array.from({ length: 128 }, (_, index) =>
+      config.revokeUTARiskEnvelope(ACCOUNT.id, `deterministic risk trigger ${index}`)))
+
+    expect(results.every((result) => result.version === 2 && result.revoked)).toBe(true)
+    expect(new Set(results.map((result) => result.revokedReason)).size).toBe(1)
+    expect((await config.readUTAsConfig())[0]?.riskEnvelope).toMatchObject({
+      version: 2,
+      revoked: true,
+      revokedReason: expect.stringContaining('deterministic risk trigger'),
+    })
+  })
+
+  it('does not lose concurrent envelope version mutations', async () => {
+    const { config } = await loadConfigModule()
+    await config.writeUTAsConfig([{ ...ACCOUNT, riskEnvelope: RISK_ENVELOPE }] as never)
+
+    await Promise.all(Array.from({ length: 64 }, () => config.mutateUTAsConfig((accounts) => {
+      const account = accounts[0]!
+      const envelope = account.riskEnvelope!
+      accounts[0] = {
+        ...account,
+        riskEnvelope: { ...envelope, version: envelope.version + 1 },
+      }
+      return accounts
+    })))
+
+    expect((await config.readUTAsConfig())[0]?.riskEnvelope?.version).toBe(65)
+  })
+
+  it('requires exact version advancement for human envelope edits while allowing human clear', async () => {
+    const { config } = await loadConfigModule()
+    expect(() => config.assertHumanRiskEnvelopeTransition(
+      RISK_ENVELOPE,
+      { ...RISK_ENVELOPE, maxPositionPctOfEquity: 20 },
+    )).toThrow(/version must advance exactly once/)
+    expect(() => config.assertHumanRiskEnvelopeTransition(
+      RISK_ENVELOPE,
+      { ...RISK_ENVELOPE, version: 3, maxPositionPctOfEquity: 20 },
+    )).toThrow(/version must advance exactly once/)
+    expect(() => config.assertHumanRiskEnvelopeTransition(
+      { ...RISK_ENVELOPE, version: 2, revoked: true, revokedReason: 'stop' },
+      { ...RISK_ENVELOPE, version: 3 },
+    )).not.toThrow()
   })
 })

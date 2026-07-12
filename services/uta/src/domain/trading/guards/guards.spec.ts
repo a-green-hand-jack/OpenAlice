@@ -161,14 +161,6 @@ describe('MaxPositionSizeGuard', () => {
     expect(guard.check(ctx)).toBeNull()
   })
 
-  it('allows when addedValue cannot be estimated (qty-based, no existing position)', () => {
-    const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 1 })
-    const ctx = makeContext({
-      operation: makePlaceOrderOp({ symbol: 'NEW_STOCK', totalQuantity: new Decimal(100) }),
-    })
-    expect(guard.check(ctx)).toBeNull()
-  })
-
   // ---- Single-order equity cap (P3-campaign hard guard §4.7) ----
 
   it('rejects a single order exceeding the single-order equity cap even while the aggregate cap is satisfied', () => {

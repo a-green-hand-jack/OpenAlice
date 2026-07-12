@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync } from 'node:fs'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Decimal from 'decimal.js'
@@ -14,6 +15,8 @@ import {
   resolvePaperAutoPushEligibility,
   tryAutoPushPaper,
 } from './paper-auto-push.js'
+import { withAccountsConfigLock } from '@/core/accounts-config-lock.js'
+import type { RiskEnvelopeAdmissionSource } from './risk-envelope.js'
 
 type CapturedEvent = {
   [K in UtaLifecycleEventType]: { type: K; payload: AgentEventMap[K] }
@@ -68,10 +71,50 @@ function stageAndCommitBuy(uta: UnifiedTradingAccount, message = 'paper auto-pus
   return uta.commit(message).hash
 }
 
+function stageAndCommitTwoBuys(uta: UnifiedTradingAccount): string {
+  stageBuy(uta, 'AAPL', '150')
+  stageBuy(uta, 'AAPL', '150')
+  return uta.commit('two-operation paper auto-push').hash
+}
+
+function stageBuy(uta: UnifiedTradingAccount, symbol: string, stopLoss: string): void {
+  uta.stagePlaceOrder({
+    aliceId: `mock-paper|${symbol}`,
+    action: 'BUY',
+    orderType: 'LMT',
+    totalQuantity: '1',
+    lmtPrice: symbol === 'AAPL' ? '155' : '100',
+    stopLoss: { price: stopLoss },
+  })
+}
+
+const PAPER_ENVELOPE = {
+    version: 3,
+    maxPositionPctOfEquity: 25,
+    maxSingleOrderPctOfEquity: 10,
+    maxDailyLossPct: 5,
+    maxDrawdownPct: 10,
+    scope: { kind: 'whitelist' as const, symbols: ['AAPL'] },
+    autonomyCeiling: 'paper' as const,
+    revoked: false,
+    revokedReason: null,
+}
+
 const PAPER_INPUT = {
   accountType: 'mock' as const,
   accountMaxAuthzLevel: 'paper' as const,
   effectiveAuthzLevel: 'paper' as const,
+  riskEnvelope: PAPER_ENVELOPE,
+  readAdmissionSource: async () => ({
+    riskEnvelope: PAPER_ENVELOPE,
+    accountMaxAuthzLevel: 'paper' as const,
+  }),
+  withLockedAdmissionSource: async <T>(
+    consume: (source: { riskEnvelope: unknown; accountMaxAuthzLevel: 'paper' }) => Promise<T>,
+  ) => consume({
+    riskEnvelope: PAPER_ENVELOPE,
+    accountMaxAuthzLevel: 'paper',
+  }),
   now: () => new Date('2026-07-06T00:00:00.000Z'),
 }
 
@@ -138,6 +181,7 @@ describe('paper auto-push', () => {
       for (const effectiveAuthzLevel of AUTHZ_LEVELS) {
         const result = await tryAutoPushPaper({
           uta,
+          ...PAPER_INPUT,
           accountType: 'live',
           accountMaxAuthzLevel,
           effectiveAuthzLevel,
@@ -509,15 +553,194 @@ describe('paper auto-push', () => {
     expect(restarted.status().pendingHash).toBe(hash)
   })
 
+  it.each([
+    ['missing', null],
+    ['partial', { version: 3 }],
+  ])('fails closed with risk_envelope_missing for %s input', async (_label, riskEnvelope) => {
+    const { uta, broker } = createUTA()
+    const hash = stageAndCommitBuy(uta)
+    const result = await tryAutoPushPaper({
+      uta,
+      ...PAPER_INPUT,
+      riskEnvelope,
+    })
+    expect(result).toMatchObject({
+      status: 'skipped',
+      reason: 'risk_envelope_missing',
+      pendingHash: hash,
+    })
+    expect(broker.callCount('placeOrder')).toBe(0)
+  })
+
+  it('rejects reserved asset_class scope distinctly and never dispatches', async () => {
+    const { uta, broker } = createUTA()
+    stageAndCommitBuy(uta)
+    const result = await tryAutoPushPaper({
+      uta,
+      ...PAPER_INPUT,
+      riskEnvelope: {
+        ...PAPER_ENVELOPE,
+        scope: { kind: 'asset_class', assetClasses: ['equity'] },
+      },
+    })
+    expect(result).toMatchObject({ status: 'skipped', reason: 'risk_envelope_scope_unsupported' })
+    expect(broker.callCount('placeOrder')).toBe(0)
+  })
+
+  it('rejects an already-revoked envelope before broker policy reads', async () => {
+    const { uta, broker } = createUTA()
+    stageAndCommitBuy(uta)
+    const result = await tryAutoPushPaper({
+      uta,
+      ...PAPER_INPUT,
+      riskEnvelope: {
+        ...PAPER_ENVELOPE,
+        version: 4,
+        revoked: true,
+        revokedReason: 'human emergency stop',
+      },
+    })
+    expect(result).toMatchObject({
+      status: 'skipped',
+      reason: 'risk_envelope_revoked',
+      envelopeVersion: 4,
+    })
+    expect(broker.callCount('placeOrder')).toBe(0)
+  })
+
+  it('re-reads the envelope under the dispatch lease and rejects concurrent version drift', async () => {
+    const { uta, broker } = createUTA()
+    stageAndCommitBuy(uta)
+    const changed = { ...PAPER_ENVELOPE, version: 4, maxPositionPctOfEquity: 20 }
+    const results = await Promise.all(Array.from({ length: 128 }, () => tryAutoPushPaper({
+      uta,
+      ...PAPER_INPUT,
+      readAdmissionSource: async () => ({
+        riskEnvelope: changed,
+        accountMaxAuthzLevel: 'paper',
+      }),
+    })))
+
+    expect(results.some((result) => result.status === 'skipped' && result.reason === 'envelope_version_changed')).toBe(true)
+    expect(results.every((result) => result.status === 'skipped')).toBe(true)
+    expect(broker.callCount('placeOrder')).toBe(0)
+    expect(uta.status().pendingHash).not.toBeNull()
+  })
+
+  it('linearizes a dispatch before revoke, then rejects every later operation after revoke persists', async () => {
+    const { uta, broker } = createUTA()
+    stageAndCommitTwoBuys(uta)
+    const root = mkdtempSync(join(tmpdir(), 'oa-envelope-dispatch-lock-'))
+    const sourcePath = join(root, 'source.json')
+    await mkdir(root, { recursive: true })
+    await writeFile(sourcePath, JSON.stringify({
+      riskEnvelope: PAPER_ENVELOPE,
+      accountMaxAuthzLevel: 'paper',
+    }), 'utf8')
+
+    let brokerEntered!: () => void
+    let releaseBroker!: () => void
+    let writerPersisted!: () => void
+    const firstBrokerEntered = new Promise<void>((resolve) => { brokerEntered = resolve })
+    const brokerReleased = new Promise<void>((resolve) => { releaseBroker = resolve })
+    const writerDone = new Promise<void>((resolve) => { writerPersisted = resolve })
+    const originalPlaceOrder = broker.placeOrder.bind(broker)
+    let placeCalls = 0
+    vi.spyOn(broker, 'placeOrder').mockImplementation(async (contract, order, tpsl) => {
+      placeCalls += 1
+      if (placeCalls === 1) {
+        brokerEntered()
+        await brokerReleased
+      }
+      return originalPlaceOrder(contract, order, tpsl)
+    })
+
+    let admissionCalls = 0
+    const withLockedAdmissionSource = async <T>(
+      consume: (source: RiskEnvelopeAdmissionSource) => Promise<T>,
+    ): Promise<T> => {
+      admissionCalls += 1
+      if (admissionCalls === 2) await writerDone
+      return withAccountsConfigLock(root, async () =>
+        consume(JSON.parse(await readFile(sourcePath, 'utf8')) as RiskEnvelopeAdmissionSource))
+    }
+
+    const autoPush = tryAutoPushPaper({
+      uta,
+      ...PAPER_INPUT,
+      withLockedAdmissionSource,
+    })
+    await firstBrokerEntered
+    const revoke = withAccountsConfigLock(root, async () => {
+      await writeFile(sourcePath, JSON.stringify({
+        riskEnvelope: {
+          ...PAPER_ENVELOPE,
+          version: 4,
+          revoked: true,
+          revokedReason: 'deterministic barrier',
+        },
+        accountMaxAuthzLevel: 'paper',
+      }), 'utf8')
+      writerPersisted()
+    })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    releaseBroker()
+
+    const [result] = await Promise.all([autoPush, revoke])
+
+    expect(result.status).toBe('pushed')
+    if (result.status === 'pushed') {
+      expect(result.push.submitted).toHaveLength(1)
+      expect(result.push.rejected).toHaveLength(1)
+      expect(result.push.rejected[0]?.error).toContain('envelope_version_changed')
+    }
+    expect(broker.callCount('placeOrder')).toBe(1)
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('makes a persisted revoke win before dispatch with zero subsequent broker calls', async () => {
+    const { uta, broker } = createUTA()
+    stageAndCommitTwoBuys(uta)
+    const root = mkdtempSync(join(tmpdir(), 'oa-envelope-revoke-first-'))
+    const sourcePath = join(root, 'source.json')
+    await writeFile(sourcePath, JSON.stringify({
+      riskEnvelope: {
+        ...PAPER_ENVELOPE,
+        version: 4,
+        revoked: true,
+        revokedReason: 'writer linearized first',
+      },
+      accountMaxAuthzLevel: 'paper',
+    }), 'utf8')
+
+    const result = await tryAutoPushPaper({
+      uta,
+      ...PAPER_INPUT,
+      // Deliberately stale preflight proves the per-operation locked boundary
+      // is authoritative even when an earlier observation was version 3.
+      readAdmissionSource: PAPER_INPUT.readAdmissionSource,
+      withLockedAdmissionSource: (consume) => withAccountsConfigLock(root, async () =>
+        consume(JSON.parse(await readFile(sourcePath, 'utf8')) as RiskEnvelopeAdmissionSource)),
+    })
+
+    expect(result.status).toBe('pushed')
+    if (result.status === 'pushed') {
+      expect(result.push.submitted).toHaveLength(0)
+      expect(result.push.rejected).toHaveLength(2)
+      expect(result.push.rejected.every((entry) => entry.error?.includes('envelope_version_changed'))).toBe(true)
+    }
+    expect(broker.callCount('placeOrder')).toBe(0)
+    await rm(root, { recursive: true, force: true })
+  })
+
   it('does not auto-push when the target account ceiling resolves to read_only', async () => {
     const { uta, broker } = createUTA()
     const hash = stageAndCommitBuy(uta)
 
     const result = await tryAutoPushPaper({
       uta,
-      accountType: 'mock',
+      ...PAPER_INPUT,
       accountMaxAuthzLevel: 'read_only',
-      effectiveAuthzLevel: 'paper',
     })
 
     expect(result).toMatchObject({
@@ -536,8 +759,8 @@ describe('paper auto-push', () => {
 
     const result = await tryAutoPushPaper({
       uta,
-      accountType: 'mock',
-      accountMaxAuthzLevel: 'paper',
+      ...PAPER_INPUT,
+      effectiveAuthzLevel: undefined,
     })
 
     expect(result).toMatchObject({ status: 'skipped', reason: 'authz_below_paper' })
