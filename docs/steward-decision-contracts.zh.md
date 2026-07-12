@@ -1,7 +1,7 @@
 # Steward 决策契约设计：Decision Intent / Information Snapshot / Risk Envelope
 
 > 版本：v0.2（2026-07-11）
-> 地位：**D1 设计稿，等待 maintainer 批准**（steward-plan v2.2 §5 D1 完成门）。
+> 地位：**D1 契约设计已由 maintainer 于 2026-07-11 通过 PR #157 批准**。
 > 本文只定义契约：schema、责任边界、失败语义、迁移影响。它**不授权任何 runtime 实现**；
 > 实现须按 [steward-plan.zh.md](steward-plan.zh.md) §5 另行授权（D2+）。
 > 从属于 [steward-plan.zh.md](steward-plan.zh.md)（方向与授权）与
