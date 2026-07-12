@@ -25,6 +25,11 @@ vi.mock('../../core/config.js', async () => {
     ...actual,
     readUTAsConfig: vi.fn(async () => utaStore),
     writeUTAsConfig: vi.fn(async (next: unknown[]) => { utaStore = [...next] }),
+    mutateUTAsConfig: vi.fn(async (mutate: (current: unknown[]) => unknown[] | Promise<unknown[]>) => {
+      const next = await mutate(structuredClone(utaStore))
+      utaStore = [...next]
+      return utaStore
+    }),
     wipeUTATradingData: vi.fn(async () => {}),
   }
 })

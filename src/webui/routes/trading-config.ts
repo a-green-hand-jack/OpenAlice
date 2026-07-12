@@ -2,8 +2,10 @@ import { Hono } from 'hono'
 import type { EngineContext } from '../../core/types.js'
 import type { ProducerHandle } from '../../core/producer.js'
 import {
-  readUTAsConfig, writeUTAsConfig,
+  readUTAsConfig, mutateUTAsConfig,
   utaConfigSchema, wipeUTATradingData,
+  assertHumanRiskEnvelopeTransition,
+  RiskEnvelopeConfigTransitionError,
 } from '../../core/config.js'
 import {
   normalizeAuthzLevel,
@@ -157,33 +159,47 @@ export function createTradingConfigRoutes(
         }
 
         const id = deriveUtaId(preset, presetConfig)
-        const accounts = await readUTAsConfig()
-        const existing = accounts.find((a) => a.id === id)
-        if (existing) {
-          return c.json({
-            error: 'A UTA already exists for this broker identity',
-            existing: {
+        const outcome: {
+          existing?: { id: string; label: string; presetId: string }
+          validated?: ReturnType<typeof utaConfigSchema.parse>
+        } = {}
+        await mutateUTAsConfig((accounts) => {
+          const existing = accounts.find((a) => a.id === id)
+          if (existing) {
+            outcome.existing = {
               id: existing.id,
               label: existing.label ?? existing.id,
               presetId: existing.presetId,
-            },
+            }
+            return accounts
+          }
+
+          const candidate = {
+            id,
+            label: typeof body.label === 'string' && body.label ? body.label : id,
+            presetId: preset.id,
+            enabled: body.enabled !== false,
+            guards: Array.isArray(body.guards) ? body.guards : [],
+            riskEnvelope: body.riskEnvelope ?? null,
+            presetConfig,
+            readOnly: body.readOnly === true,
+            asVendor: body.asVendor !== false,
+            ...(typeof body.maxAuthzLevel === 'string' ? { maxAuthzLevel: body.maxAuthzLevel } : {}),
+            ...(body.ephemeral === true ? { ephemeral: true as const } : {}),
+          }
+          const validated = utaConfigSchema.parse(candidate)
+          outcome.validated = validated
+          accounts.push(validated)
+          return accounts
+        })
+        if (outcome.existing) {
+          return c.json({
+            error: 'A UTA already exists for this broker identity',
+            existing: outcome.existing,
           }, 409)
         }
-
-        const candidate = {
-          id,
-          label: typeof body.label === 'string' && body.label ? body.label : id,
-          presetId: preset.id,
-          enabled: body.enabled !== false,
-          guards: Array.isArray(body.guards) ? body.guards : [],
-          presetConfig,
-          readOnly: body.readOnly === true,
-          asVendor: body.asVendor !== false,
-          ...(body.ephemeral === true ? { ephemeral: true as const } : {}),
-        }
-        const validated = utaConfigSchema.parse(candidate)
-        accounts.push(validated)
-        await writeUTAsConfig(accounts)
+        const validated = outcome.validated
+        if (!validated) throw new Error('UTA config create transaction produced no account')
         notifyUTAReload()
 
         // Echo masked — plaintext credentials never leave the server, and the
@@ -191,6 +207,9 @@ export function createTradingConfigRoutes(
         return c.json(maskSecrets({ ...validated }), 201)
       })
     } catch (err) {
+      if (err instanceof RiskEnvelopeConfigTransitionError) {
+        return c.json({ error: err.code, message: err.message }, 409)
+      }
       if (err instanceof Error && err.name === 'ZodError') {
         return c.json({ error: 'Validation failed', details: JSON.parse(err.message) }, 400)
       }
@@ -213,33 +232,57 @@ export function createTradingConfigRoutes(
           return c.json({ error: 'Body id must match URL id' }, 400)
         }
 
-        const accounts = await readUTAsConfig()
-        const existing = accounts.find((a) => a.id === id)
-        if (!existing) {
+        const outcome: {
+          notFound?: true
+          auditUnavailable?: true
+          validated?: ReturnType<typeof utaConfigSchema.parse>
+          from?: ReturnType<typeof normalizeAuthzLevel>
+          to?: ReturnType<typeof normalizeAuthzLevel>
+        } = {}
+        const authzProducer = opts?.authzProducer
+        await mutateUTAsConfig((accounts) => {
+          const existing = accounts.find((a) => a.id === id)
+          if (!existing) {
+            outcome.notFound = true
+            return accounts
+          }
+
+          // Restore masked credentials from existing config
+          unmaskSecrets(body, existing as unknown as Record<string, unknown>)
+
+          const validated = utaConfigSchema.parse(body)
+          assertHumanRiskEnvelopeTransition(existing.riskEnvelope, validated.riskEnvelope)
+          const from = normalizeAuthzLevel(existing.maxAuthzLevel)
+          const to = normalizeAuthzLevel(validated.maxAuthzLevel)
+          if (from !== to && !authzProducer) {
+            outcome.auditUnavailable = true
+            return accounts
+          }
+          const idx = accounts.findIndex((a) => a.id === id)
+          accounts[idx] = validated
+          outcome.validated = validated
+          outcome.from = from
+          outcome.to = to
+          return accounts
+        })
+        if (outcome.notFound) {
           return c.json({
             error: `UTA "${id}" not found. Use POST /uta to create a new account.`,
           }, 422)
         }
-
-        // Restore masked credentials from existing config
-        unmaskSecrets(body, existing as unknown as Record<string, unknown>)
-
-        const validated = utaConfigSchema.parse(body)
-        const from = normalizeAuthzLevel(existing.maxAuthzLevel)
-        const to = normalizeAuthzLevel(validated.maxAuthzLevel)
-        const authzProducer = opts?.authzProducer
-        if (from !== to && !authzProducer) {
+        if (outcome.auditUnavailable) {
           return c.json({ error: 'authz_audit_unavailable' }, 500)
         }
-        const idx = accounts.findIndex((a) => a.id === id)
-        accounts[idx] = validated
-        await writeUTAsConfig(accounts)
-        if (from !== to && authzProducer) {
+        const validated = outcome.validated
+        if (!validated || !outcome.from || !outcome.to) {
+          throw new Error('UTA config update transaction produced no account')
+        }
+        if (outcome.from !== outcome.to && authzProducer) {
           await authzProducer.emit('authz.level-changed', {
             scope: 'account',
             id,
-            from,
-            to,
+            from: outcome.from,
+            to: outcome.to,
             approver: await approverFromAliceRequest(c),
           })
         }
@@ -254,6 +297,9 @@ export function createTradingConfigRoutes(
         return c.json(maskSecrets({ ...validated }))
       })
     } catch (err) {
+      if (err instanceof RiskEnvelopeConfigTransitionError) {
+        return c.json({ error: err.code, message: err.message }, 409)
+      }
       if (err instanceof Error && err.name === 'ZodError') {
         return c.json({ error: 'Validation failed', details: JSON.parse(err.message) }, 400)
       }
@@ -265,13 +311,14 @@ export function createTradingConfigRoutes(
     try {
       return await withTradingConfigMutation(async () => {
         const id = c.req.param('id')
-        const accounts = await readUTAsConfig()
-        const target = accounts.find((a) => a.id === id)
+        let target: ReturnType<typeof utaConfigSchema.parse> | undefined
+        await mutateUTAsConfig((accounts) => {
+          target = accounts.find((a) => a.id === id)
+          return target ? accounts.filter((a) => a.id !== id) : accounts
+        })
         if (!target) {
           return c.json({ error: `Account "${id}" not found` }, 404)
         }
-        const filtered = accounts.filter((a) => a.id !== id)
-        await writeUTAsConfig(filtered)
         notifyUTAReload()
         // Ephemeral UTAs also have their persistent trading state wiped — the
         // whole point of `ephemeral: true` is that nothing about the test

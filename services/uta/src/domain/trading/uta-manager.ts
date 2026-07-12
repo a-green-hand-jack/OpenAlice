@@ -17,16 +17,29 @@ import {
   resolveAuthzAccountType,
   type AuthzLevel,
   type BrokerMutationContainmentClass,
+  type StewardAdmissionRequest,
+  type StewardAdmissionResponse,
 } from '@traderalice/uta-protocol'
 import { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
 import { loadGitState, createGitPersister } from './git-persistence.js'
-import { readUTAsConfig, type TradingMode, type UTAConfig } from '@/core/config.js'
+import {
+  readUTAsConfig,
+  withLockedUTAsConfig,
+  type TradingMode,
+  type UTAConfig,
+} from '@/core/config.js'
 import type { EventLog } from '@/core/event-log.js'
 import type { ToolCenter } from '@/core/tool-center.js'
 import type { ReconnectResult } from '@/core/types.js'
 import type { FxService } from './fx-service.js'
 import type { UtaEventSink } from './events.js'
 import { tryAutoPushPaper, type PaperAutoPushResult } from './paper-auto-push.js'
+import {
+  compileRiskEnvelopeGuards,
+  evaluateStewardAdmission,
+  resolveProductionRiskEnvelope,
+  type RiskEnvelopeAdmissionSource,
+} from './risk-envelope.js'
 import './contract-ext.js'
 
 // Manager-level shapes live in `@traderalice/uta-protocol` (the SDK
@@ -104,8 +117,15 @@ export class UTAManager {
   async initUTA(cfg: UTAConfig): Promise<UnifiedTradingAccount> {
     const broker = createBroker(cfg, { fxService: this.fxService })
     const savedState = await loadGitState(cfg.id)
+    const resolvedEnvelope = resolveProductionRiskEnvelope(cfg.riskEnvelope)
+    const envelopeGuards = resolvedEnvelope.ok
+      ? compileRiskEnvelopeGuards(resolvedEnvelope.envelope, broker)
+      : []
+    if (!resolvedEnvelope.ok && resolvedEnvelope.code === 'risk_envelope_scope_unsupported') {
+      console.warn(`[uta] ${cfg.id}: ${resolvedEnvelope.message}`)
+    }
     const uta = new UnifiedTradingAccount(broker, {
-      guards: cfg.guards,
+      guards: [...cfg.guards, ...envelopeGuards],
       keyless: cfg.keyless,
       readOnly: cfg.readOnly,
       ...resolveUtaRuntimePolicy(cfg, this.tradingMode),
@@ -215,6 +235,50 @@ export class UTAManager {
       }),
       accountMaxAuthzLevel: cfg.maxAuthzLevel,
       effectiveAuthzLevel: opts.effectiveAuthzLevel,
+      riskEnvelope: cfg.riskEnvelope,
+      readAdmissionSource: () => this.readAdmissionSource(utaId),
+      withLockedAdmissionSource: (consume) => this.withLockedAdmissionSource(utaId, consume),
+    })
+  }
+
+  /** Versioned production admission wire. This reads accounts.json on every
+   * call so a caller can capture a version and then recheck it immediately
+   * before a later dispatch without trusting the manager's startup cache. */
+  async checkStewardAdmission(
+    utaId: string,
+    request: StewardAdmissionRequest,
+  ): Promise<StewardAdmissionResponse> {
+    return evaluateStewardAdmission({
+      accountId: utaId,
+      source: await this.readAdmissionSource(utaId),
+      request,
+    })
+  }
+
+  private async readAdmissionSource(utaId: string): Promise<RiskEnvelopeAdmissionSource> {
+    try {
+      const fresh = (await readUTAsConfig()).find((account) => account.id === utaId)
+      return {
+        riskEnvelope: fresh?.riskEnvelope ?? null,
+        accountMaxAuthzLevel: fresh?.maxAuthzLevel ?? null,
+      }
+    } catch {
+      // Corrupt/partial config is deliberately indistinguishable from a
+      // missing envelope at the autonomous admission boundary.
+      return { riskEnvelope: null, accountMaxAuthzLevel: null }
+    }
+  }
+
+  private async withLockedAdmissionSource<T>(
+    utaId: string,
+    consume: (source: RiskEnvelopeAdmissionSource) => Promise<T>,
+  ): Promise<T> {
+    return withLockedUTAsConfig(async (accounts) => {
+      const fresh = accounts.find((account) => account.id === utaId)
+      return consume({
+        riskEnvelope: fresh?.riskEnvelope ?? null,
+        accountMaxAuthzLevel: fresh?.maxAuthzLevel ?? null,
+      })
     })
   }
 

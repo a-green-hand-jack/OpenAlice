@@ -8,6 +8,7 @@
  */
 
 import Decimal from 'decimal.js'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { Contract, Order, ContractDescription, ContractDetails, UNSET_DECIMAL, UNSET_INTEGER, UNSET_DOUBLE } from '@traderalice/ibkr'
 import { BrokerError, type IBroker, type AccountInfo, type Position, type OpenOrder, type PlaceOrderResult, type Quote, type MarketClock, type AccountCapabilities, type BrokerHealth, type BrokerHealthInfo, type UTAReach, type UTATier, type TpSlParams, type Bar, type BarParams, type ExpandContractFilters, type ContractExpansion, type SubAccountRef } from './brokers/types.js'
 
@@ -114,7 +115,16 @@ export interface UnifiedTradingAccountOptions {
 export interface UnifiedPushOptions {
   expectedHash?: string
   preflight?: (context: PushPreflightContext) => Promise<void>
+  /** Autonomous-only dispatch gate. It must hold its authorization source
+   * lock through `dispatch` so a persisted revoke/version update orders
+   * before or after this exact broker call. */
+  dispatchAdmission?: BrokerDispatchAdmission
 }
+
+export type BrokerDispatchAdmission = <T>(
+  operation: Operation,
+  dispatch: () => Promise<T>,
+) => Promise<T>
 
 export interface EmergencyCancelOrderResult {
   orderId: string
@@ -206,6 +216,7 @@ export class UnifiedTradingAccount {
   private readonly _riskStateEvaluator: RiskStateEvaluator
   private _lastRiskContext: Pick<GuardContext, 'positions' | 'account'> | null = null
   private _pushInFlightHash: string | null = null
+  private readonly _dispatchAdmission = new AsyncLocalStorage<BrokerDispatchAdmission>()
 
   // ---- Health tracking ----
   private static readonly DEGRADED_THRESHOLD = 3
@@ -326,18 +337,22 @@ export class UnifiedTradingAccount {
       } catch (error) {
         throw new LocalNoDispatchError(error instanceof Error ? error.message : String(error))
       }
-      switch (op.action) {
-        case 'placeOrder':
-          return broker.placeOrder(op.contract, op.order, op.tpsl)
-        case 'modifyOrder':
-          return broker.modifyOrder(op.orderId, op.changes)
-        case 'closePosition':
-          return broker.closePosition(op.contract, op.quantity)
-        case 'cancelOrder':
-          return broker.cancelOrder(op.orderId, op.orderCancel)
-        default:
-          throw new LocalNoDispatchError(`Unknown operation action: ${(op as { action: string }).action}`)
+      const dispatch = async (): Promise<unknown> => {
+        switch (op.action) {
+          case 'placeOrder':
+            return broker.placeOrder(op.contract, op.order, op.tpsl)
+          case 'modifyOrder':
+            return broker.modifyOrder(op.orderId, op.changes)
+          case 'closePosition':
+            return broker.closePosition(op.contract, op.quantity)
+          case 'cancelOrder':
+            return broker.cancelOrder(op.orderId, op.orderCancel)
+          default:
+            throw new LocalNoDispatchError(`Unknown operation action: ${(op as { action: string }).action}`)
+        }
       }
+      const admission = this._dispatchAdmission.getStore()
+      return admission ? admission(op, dispatch) : dispatch()
     }
     const guards = resolveGuards(options.guards ?? [], {
       accountId: broker.id,
@@ -1008,7 +1023,10 @@ export class UnifiedTradingAccount {
           }
         },
       }
-      const result = await this.git.push(approver, gitOptions)
+      const executePush = () => this.git.push(approver, gitOptions)
+      const result = options.dispatchAdmission
+        ? await this._dispatchAdmission.run(options.dispatchAdmission, executePush)
+        : await executePush()
       const committed = this.git.show(result.hash)
       const pushedOperations = committed?.operations ?? operations
       const pushedResults = committed?.results ?? [...result.submitted, ...result.rejected]

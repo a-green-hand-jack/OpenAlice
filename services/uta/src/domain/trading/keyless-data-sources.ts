@@ -27,6 +27,7 @@ export function buildKeylessDataUTAs(
       presetId: 'ccxt-custom',
       enabled: true,
       guards: [],
+      riskEnvelope: null,
       presetConfig: { exchange: ex },
       keyless: true,
       readOnly: true,

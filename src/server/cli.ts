@@ -131,7 +131,7 @@ export function registerCliRoutes(app: Hono, deps: CliGatewayDeps): void {
     const utas = await readUTAsConfig().catch(() => [])
     return resolveWorkspaceToolAuthzLevel({
       workspaceAuthzLevel: ws.authzLevel,
-      accountMaxAuthzLevels: utas.map((u) => u.maxAuthzLevel),
+      accounts: utas.map(accountAuthzSnapshotFromConfig),
     })
   }
 

@@ -1,12 +1,18 @@
+import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import { readFile, writeFile, mkdir, unlink, rm, rename, chmod } from 'fs/promises'
+import { readFile, writeFile, mkdir, unlink, rm, rename, chmod, open } from 'fs/promises'
 import { resolve, join, dirname } from 'path'
 import { homedir } from 'os'
-import { AUTHZ_LEVELS } from '@traderalice/uta-protocol'
+import {
+  AUTHZ_LEVELS,
+  riskEnvelopeSchema,
+  type RiskEnvelope,
+} from '@traderalice/uta-protocol'
 import { newsCollectorSchema } from '../domain/news/config.js'
 import { runMigrations } from '../migrations/runner.js'
 import { dataPath } from '@/core/paths.js'
 import { isSealedEnvelope, seal, unseal } from './sealing.js'
+import { withAccountsConfigLock } from './accounts-config-lock.js'
 
 const CONFIG_DIR = dataPath('config')
 
@@ -457,6 +463,9 @@ export const utaConfigSchema = z.object({
   presetId: z.string(),
   enabled: z.boolean().default(true),
   guards: z.array(guardConfigSchema).default([]),
+  /** Mandatory for autonomous execution. `null` is an explicit fail-closed
+   *  legacy/unconfigured state, never an unbounded envelope. */
+  riskEnvelope: riskEnvelopeSchema.nullable().default(null),
   /** User-filled form values, validated against the preset's own zodSchema. */
   presetConfig: z.record(z.string(), z.unknown()).default({}),
   /**
@@ -715,14 +724,38 @@ function migrateLegacyUTA(raw: Record<string, unknown>): Record<string, unknown>
 async function writeAccountsFile(validated: UTAConfig[]): Promise<void> {
   await mkdir(CONFIG_DIR, { recursive: true })
   const path = resolve(CONFIG_DIR, 'accounts.json')
-  await writeFile(path, JSON.stringify(await seal(validated), null, 2) + '\n', { mode: 0o600 })
+  const tmp = resolve(CONFIG_DIR, `.accounts.json.tmp-${process.pid}-${randomUUID()}`)
+  const content = JSON.stringify(await seal(validated), null, 2) + '\n'
+  const handle = await open(tmp, 'wx', 0o600)
+  try {
+    await handle.writeFile(content, 'utf8')
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+  try {
+    await rename(tmp, path)
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => undefined)
+    throw err
+  }
   await chmod(path, 0o600).catch(() => { /* noop — platform without chmod */ })
+  try {
+    const directory = await open(CONFIG_DIR, 'r')
+    try {
+      await directory.sync().catch(() => undefined)
+    } finally {
+      await directory.close()
+    }
+  } catch {
+    // Directory fsync is not portable; the sealed file itself is fsync'd.
+  }
 }
 
 // File name on disk stays `accounts.json` — internal-only, never
 // user-visible. Renaming would require another migration block; cost
 // outweighs benefit. The on-disk schema is the new UTA shape.
-export async function readUTAsConfig(): Promise<UTAConfig[]> {
+async function readUTAsConfigUnlocked(): Promise<UTAConfig[]> {
   let raw = await loadJsonFile('accounts.json')
   if (raw === undefined) {
     // Seed empty (sealed) file on first run — also materializes sealing.key
@@ -787,9 +820,100 @@ export async function readUTAsConfig(): Promise<UTAConfig[]> {
   return utasFileSchema.parse(raw)
 }
 
+export async function readUTAsConfig(): Promise<UTAConfig[]> {
+  return withAccountsConfigLock(CONFIG_DIR, readUTAsConfigUnlocked)
+}
+
+/** Hold the same cross-process lock used by accounts.json writers while a
+ * caller consumes an authoritative snapshot. The callback may deliberately
+ * include one broker mutation so revoke/version writes linearize on either
+ * side of that exact dispatch boundary. */
+export async function withLockedUTAsConfig<T>(
+  consume: (current: readonly UTAConfig[]) => Promise<T>,
+): Promise<T> {
+  return withAccountsConfigLock(CONFIG_DIR, async () =>
+    consume(structuredClone(await readUTAsConfigUnlocked())))
+}
+
 export async function writeUTAsConfig(utas: UTAConfig[]): Promise<void> {
   const validated = utasFileSchema.parse(utas)
-  await writeAccountsFile(validated)
+  await withAccountsConfigLock(CONFIG_DIR, () => writeAccountsFile(validated))
+}
+
+/** Cross-process serialized accounts.json transaction. All writers that must
+ * preserve a concurrent Risk Envelope revoke/version update use this path. */
+export async function mutateUTAsConfig(
+  mutate: (current: UTAConfig[]) => UTAConfig[] | Promise<UTAConfig[]>,
+): Promise<UTAConfig[]> {
+  return withAccountsConfigLock(CONFIG_DIR, async () => {
+    const current = await readUTAsConfigUnlocked()
+    const next = utasFileSchema.parse(await mutate(structuredClone(current)))
+    if (JSON.stringify(next) !== JSON.stringify(current)) await writeAccountsFile(next)
+    return next
+  })
+}
+
+export class RiskEnvelopeConfigTransitionError extends Error {
+  constructor(readonly code: 'risk_envelope_missing' | 'risk_envelope_version_invalid', message: string) {
+    super(message)
+    this.name = 'RiskEnvelopeConfigTransitionError'
+  }
+}
+
+/** Human config writes may grant, change, revoke, clear, or remove an
+ * envelope, but every mutation of an existing envelope advances exactly one
+ * version. The authenticated Settings route is the sole caller allowed to
+ * clear `revoked` back to false. */
+export function assertHumanRiskEnvelopeTransition(
+  current: RiskEnvelope | null,
+  next: RiskEnvelope | null,
+): void {
+  if (current === null || next === null) return
+  if (JSON.stringify(current) === JSON.stringify(next)) return
+  if (next.version !== current.version + 1) {
+    throw new RiskEnvelopeConfigTransitionError(
+      'risk_envelope_version_invalid',
+      `risk envelope version must advance exactly once (${current.version} -> ${current.version + 1})`,
+    )
+  }
+}
+
+/** Deterministic/UTA-side writer: it can only set the monotonic revoke bit.
+ * There is deliberately no matching programmatic clear function. */
+export async function revokeUTARiskEnvelope(
+  accountId: string,
+  reason: string,
+): Promise<RiskEnvelope> {
+  const normalizedReason = reason.trim()
+  if (!normalizedReason) throw new Error('risk envelope revoke requires a non-empty reason')
+
+  let revoked: RiskEnvelope | null = null
+  await mutateUTAsConfig((accounts) => {
+    const index = accounts.findIndex((account) => account.id === accountId)
+    if (index === -1 || accounts[index]?.riskEnvelope === null) {
+      throw new RiskEnvelopeConfigTransitionError(
+        'risk_envelope_missing',
+        `cannot revoke missing Risk Envelope for account "${accountId}"`,
+      )
+    }
+    const account = accounts[index]!
+    const current = riskEnvelopeSchema.parse(account.riskEnvelope)
+    if (current.revoked) {
+      revoked = current
+      return accounts
+    }
+    revoked = riskEnvelopeSchema.parse({
+      ...current,
+      version: current.version + 1,
+      revoked: true,
+      revokedReason: normalizedReason,
+    })
+    accounts[index] = { ...account, riskEnvelope: revoked }
+    return accounts
+  })
+
+  if (revoked === null) throw new Error(`risk envelope revoke did not resolve account "${accountId}"`)
+  return revoked
 }
 
 /**

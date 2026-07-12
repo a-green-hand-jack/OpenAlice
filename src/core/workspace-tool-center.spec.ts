@@ -348,10 +348,15 @@ describe('blind workspace market-data seal', () => {
 })
 
 describe('trading proposal per-account authz binding', () => {
+  const envelope = {
+    riskEnvelopeState: 'available' as const,
+    riskEnvelopeAutonomyCeiling: 'limited_autonomy' as const,
+    riskEnvelopeRevoked: false,
+  }
   const accounts = [
-    { id: 'mock-read', maxAuthzLevel: 'read_only' as const, authzAccountType: 'mock' as const },
-    { id: 'mock-paper', maxAuthzLevel: 'paper' as const, authzAccountType: 'mock' as const },
-    { id: 'alpaca-live', maxAuthzLevel: 'small_live' as const, authzAccountType: 'live' as const },
+    { id: 'mock-read', maxAuthzLevel: 'read_only' as const, authzAccountType: 'mock' as const, ...envelope },
+    { id: 'mock-paper', maxAuthzLevel: 'paper' as const, authzAccountType: 'mock' as const, ...envelope },
+    { id: 'alpaca-live', maxAuthzLevel: 'small_live' as const, authzAccountType: 'live' as const, ...envelope },
   ]
 
   it('refuses a paper workspace staging against a live account with a distinct account-type error', () => {

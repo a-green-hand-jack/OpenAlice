@@ -53,11 +53,25 @@ export function maxAuthzLevel(
 export function resolveEffectiveAuthzLevel(input: {
   readonly accountMaxAuthzLevel?: AuthzLevel | null
   readonly workspaceAuthzLevel?: AuthzLevel | null
+  /** Omit for non-Steward callers. Explicit null means the mandatory account
+   *  envelope is missing/invalid and therefore absorbs to read_only. */
+  readonly riskEnvelopeAutonomyCeiling?: AuthzLevel | null
+  readonly riskEnvelopeRevoked?: boolean
 }): AuthzLevel {
-  return minAuthzLevel(input.accountMaxAuthzLevel, input.workspaceAuthzLevel)
+  if (input.riskEnvelopeRevoked === true) return DEFAULT_AUTHZ_LEVEL
+  const accountAndWorkspace = minAuthzLevel(
+    input.accountMaxAuthzLevel,
+    input.workspaceAuthzLevel,
+  )
+  if (!Object.prototype.hasOwnProperty.call(input, 'riskEnvelopeAutonomyCeiling')) {
+    return accountAndWorkspace
+  }
+  return minAuthzLevel(accountAndWorkspace, input.riskEnvelopeAutonomyCeiling)
 }
 
-export function isPaperLikeAccountType(accountType: AuthzAccountType): boolean {
+export function isPaperLikeAccountType(
+  accountType: AuthzAccountType,
+): accountType is Extract<AuthzAccountType, 'paper' | 'mock'> {
   return accountType === 'paper' || accountType === 'mock'
 }
 

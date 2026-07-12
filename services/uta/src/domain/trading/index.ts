@@ -14,6 +14,13 @@ export type {
   SnapshotHooks,
 } from './uta-manager.js'
 
+export {
+  compileRiskEnvelopeGuards,
+  evaluateStewardAdmission,
+  resolveProductionRiskEnvelope,
+  RiskEnvelopeRuntimeError,
+} from './risk-envelope.js'
+
 // Brokers (types + implementations + factory)
 export type {
   IBroker,

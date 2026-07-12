@@ -1,5 +1,5 @@
 import type { Operation } from '../git/types.js'
-import type { Position, AccountInfo } from '../brokers/types.js'
+import type { Position, AccountInfo, OpenOrder } from '../brokers/types.js'
 import type { GuardMetrics } from '../git/types.js'
 import type { PortfolioGuardStateStore } from './portfolio-state.js'
 
@@ -8,6 +8,15 @@ export interface GuardContext {
   readonly operation: Operation
   readonly positions: readonly Position[]
   readonly account: Readonly<AccountInfo>
+  /** Loaded only when a strict guard needs to bind modifyOrder.orderId to an
+   * instrument. Ordinary/custom guard pipelines keep the previous read set. */
+  readonly orders?: readonly OpenOrder[]
+  /** Canonical account|nativeKey identity resolved through the same broker
+   * codec used for the eventual mutation dispatch. */
+  readonly canonicalInstrumentId?: string
+  /** Resolution failures are data, not exceptions: the strict envelope guard
+   * turns them into a typed local no-dispatch rejection. */
+  readonly instrumentIdentityError?: string
 }
 
 export interface GuardEvaluation {
@@ -18,6 +27,7 @@ export interface GuardEvaluation {
 /** A guard that can reject operations. Returns null to allow, or a rejection reason string. */
 export interface OperationGuard {
   readonly name: string
+  readonly requiresCanonicalInstrumentIdentity?: boolean
   check(ctx: GuardContext): Promise<string | null> | string | null
   evaluate?(ctx: GuardContext): Promise<GuardEvaluation> | GuardEvaluation
 }
