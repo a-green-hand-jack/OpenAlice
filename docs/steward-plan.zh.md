@@ -1,9 +1,10 @@
 # Steward 方向与实施计划
 
-> 版本：v2.3（2026-07-11）
+> 版本：v2.4（2026-07-12）
 >
-> 地位：**唯一活动路线与授权真源**。当前只授权 D0 文档与分支收口；不授权 runtime、
-> prompt、campaign、paper/live 或 broker mutation 行为变更。旧 v1.1 及 P2/P3 阶段计划已归档到
+> 地位：**唯一活动路线与授权真源**。Maintainer 已于 2026-07-12 冻结六项 G0 决定，并仅授予
+> `AUTH-CP-D2` + `AUTH-CP-D3` 用于 §5.1 的 Wave 0.5 测试型契约证明。D2/D3 生产实现、
+> prompt、campaign/model run、holdout、mock、paper/live 与 broker mutation 仍未授权。旧 v1.1 及 P2/P3 阶段计划已归档到
 > [archive/steward-2026-07/](archive/steward-2026-07/README.md)。
 >
 > 当前实现真源见 [trading-agent-architecture.zh.md](trading-agent-architecture.zh.md)，目标行为见
@@ -135,19 +136,55 @@ workspace 保留 PTY；无人值守默认翻转（缺省 controlFace ⇒ machine
 
 ## 5. 执行阶段
 
+### 5.1 当前授权：Wave 0.5 契约证明
+
+Maintainer 于 2026-07-12 批准以下六项 G0 决定：
+
+1. `confidence` 采用 `low | medium | high` 三档。
+2. Ledger v3 采用 portfolio-capable discriminated union，但 D5/D6 初始执行 admission
+   只接受 single-target；portfolio intent 在此之前只做 proposal/shadow 证据。
+3. Information Snapshot M2 的权威 tool receipt 由工具面产生，supervisor 只聚合与索引。
+4. 保护单按 broker capability 运行确定性选择规则；无法证明可保护时必须明确拒绝，
+   不得静默退化为裸仓。
+5. Risk Envelope 可复用共享 schema 工具，但不与 control-face loader 共用 warn-only
+   enforcement；UTA 必须独立 fail closed。
+6. Agent-authored Decision Ledger 保持 immutable；确定性 sizing/执行结果写入独立
+   Execution Record，以 intent fingerprint 关联对账。
+
+同日授予的 `AUTH-CP-D2` 与 `AUTH-CP-D3` **只**允许 Wave 0.5 产出测试专用的
+schema fixtures、golden vectors、evaluator examples、pure validators 和 tests。这两个 token
+不授权 D2 production runtime、D3 production harness/integration、prompt 变更、campaign/model
+run、holdout、mock autonomy、paper/live、broker/demo account 连接或任何 broker mutation。
+
+Wave 0.5 只有在以下证据齐全并经独立审查后才可标记完成：
+
+- 冻结 fixtures 能表达并验证上述六项 G0 决定；
+- paired one-shot 与 stateful episode 的输入等价规则可计算；
+- guard-independent `DecisionReferencePolicy` 的 golden trajectories 不读取实际 guard 结果；
+- data manifest validators 覆盖 source/as-of/timezone/calendar/adjustment/publication identity
+  与 overlap 失败语义；
+- 全部 proof tests 通过，diff 不连入生产 runtime/harness 或 prompt。
+
+如果证明需要改动生产 runtime/harness、prompt，或需要运行模型、campaign、broker/demo
+account 才能继续，立即停止并回到 maintainer 授权审查。Wave 0.5 完成不会自动进入 D2
+或 D3；审查通过后仍必须分别取得新的 `AUTH-D2` 与 `AUTH-D3`，其中任一授权都不
+隐含另一项或 D4+。
+
+### 5.2 阶段表
+
 | 阶段 | 目标                                                           | 当前授权               | 完成门                                                                                      |
 | ---- | -------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------- |
-| D0   | 统一方向、归档旧文档、收口遗留 branch                          | **已授权，当前阶段**   | canonical docs 无矛盾；旧 branch 进入 ancestry 且 runtime tree 零变化                       |
+| D0   | 统一方向、归档旧文档、收口遗留 branch                          | 已授权并完成         | canonical docs 无矛盾；旧 branch 进入 ancestry 且 runtime tree 零变化                       |
 | D1   | 设计 Decision Intent、Information Snapshot、Risk Envelope 契约，以及 wake 控制面迁移（app-server / agent-sdk，§4.4）设计 | 契约设计已批准（PR #157，2026-07-11）；控制面迁移已落地（§4.4）；**runtime 实现仍未授权** | schema、责任边界、失败语义、迁移影响经 maintainer 批准；控制面设计含协议版本 pin 与回退策略 |
-| D2   | 补齐 autonomous execution 的确定性安全前置                     | 未授权实现             | mandatory envelope、sizing、revoke/admission、外部 ledger commit point 的范围经独立安全审查 |
-| D3   | 建立三层 eval harness                                          | 未授权实现             | protocol/decision/execution 指标分离，guard containment 不计入策略得分                      |
+| D2   | 补齐 autonomous execution 的确定性安全前置                     | **仅 `AUTH-CP-D2` 测试型契约证明；production runtime 未授权** | mandatory envelope、sizing、revoke/admission、外部 ledger commit point 的范围经独立安全审查 |
+| D3   | 建立三层 eval harness                                          | **仅 `AUTH-CP-D3` 测试型契约证明；production harness/integration 未授权** | protocol/decision/execution 指标分离，guard containment 不计入策略得分                      |
 | D4   | Proposal-only 决策试点                                         | 未授权运行             | 多资产/事件化 as-of replay；只产 proposal，不 auto-push                                     |
 | D5   | 隔离 mock bounded autonomy                                     | 未授权运行             | 强制风险包络、重复执行幂等、撤权、对账与 recovery 全过                                      |
 | D6   | 真实 paper broker 候选                                         | 未授权                 | D0–D5 证据审查通过，另行批准 broker 与测试窗口                                              |
 | D7   | 小额 live 候选                                                 | **不在当前路线授权内** | 独立安全计划、法律/运营边界与用户显式授权                                                   |
 
-任何阶段都不能因为“前一阶段没有发现 issue”自动进入下一阶段。D2 以后涉及代码或运行的工作，
-必须重新取得 maintainer 明确授权。
+任何阶段都不能因为“前一阶段没有发现 issue”自动进入下一阶段。当前仅有 §5.1 界定的
+Wave 0.5 proof 实现权；任何超出该范围的代码或运行工作，必须重新取得 maintainer 明确授权。
 
 ## 6. D0 文档真源
 
@@ -197,6 +234,11 @@ workspace 保留 PTY；无人值守默认翻转（缺省 controlFace ⇒ machine
 
 ## 9. 变更记录
 
+- v2.4（2026-07-12）：maintainer 批准六项 G0 决定，并授予 `AUTH-CP-D2` +
+  `AUTH-CP-D3` 用于 Wave 0.5 测试型契约证明（issue #165）。授权只覆盖 schema
+  fixtures、golden vectors、evaluator examples、pure validators 和 tests；不授权 D2/D3
+  production runtime/harness、prompt、campaign/model run、holdout、mock、paper/live 或 broker
+  mutation。Proof 审查通过后仍须分别取得新的 `AUTH-D2` / `AUTH-D3`，不自动晋级。
 - v2.3（2026-07-11）：D1 契约设计交付并获 maintainer 批准
   （[steward-decision-contracts.zh.md](steward-decision-contracts.zh.md) v0.2，issue #156，
   PR #157）；该文档登记入 §6 真源表，职责为三契约 schema 与失败语义。D1 的设计部分
