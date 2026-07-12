@@ -1,7 +1,15 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { sha256StewardEvaluationContent, type StewardEvaluationDataManifest } from './evaluation-data-manifest.js';
 import { evaluateStewardWake, type StewardWakeEvaluationInput } from './evaluation-harness.js';
+import {
+  createStewardEvaluationProvenanceStore,
+  type StewardEvaluationProvenanceStore,
+} from './evaluation-provenance-store.js';
 
 const CONTENTS: Record<string, string> = {
   snapshot: 'snapshot',
@@ -118,32 +126,57 @@ function input(): StewardWakeEvaluationInput {
   };
 }
 
+async function withProvenanceStore<T>(
+  candidate: StewardWakeEvaluationInput,
+  run: (store: StewardEvaluationProvenanceStore) => Promise<T>,
+): Promise<T> {
+  const workspace = await mkdtemp(join(tmpdir(), 'openalice-steward-evaluation-'));
+  const store = createStewardEvaluationProvenanceStore(workspace);
+  try {
+    for (const [ref, content] of Object.entries(CONTENTS)) {
+      await store.publishContent(ref, content);
+    }
+    await store.publishManifest(
+      candidate.wakeId,
+      `${JSON.stringify(candidate.dataManifest, null, 2)}\n`,
+    );
+    return await run(store);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
 describe('steward three-layer evaluation harness', () => {
-  it('reports protocol, decision, and execution independently with one layer per outcome', () => {
-    const report = evaluateStewardWake(input(), CONTENTS);
-    expect(report.protocol.verdict).toBe('pass');
-    expect(report.decision.verdict).toBe('pass');
-    expect(report.execution.verdict).toBe('pass');
-    expect(report.outcomes.length).toBeGreaterThan(0);
-    expect(report.outcomes.every((outcome) =>
-      ['protocol', 'decision', 'execution'].filter((layer) => layer === outcome.layer).length === 1,
-    )).toBe(true);
-    expect(report.protocol.outcomes.every((outcome) => outcome.layer === 'protocol')).toBe(true);
-    expect(report.decision.outcomes.every((outcome) => outcome.layer === 'decision')).toBe(true);
-    expect(report.execution.outcomes.every((outcome) => outcome.layer === 'execution')).toBe(true);
+  it('reports protocol, decision, and execution independently with one layer per outcome', async () => {
+    const candidate = input();
+    await withProvenanceStore(candidate, async (store) => {
+      const report = await evaluateStewardWake(candidate, store);
+      expect(report.protocol.verdict).toBe('pass');
+      expect(report.decision.verdict).toBe('pass');
+      expect(report.execution.verdict).toBe('pass');
+      expect(report.outcomes.length).toBeGreaterThan(0);
+      expect(report.outcomes.every((outcome) =>
+        ['protocol', 'decision', 'execution'].filter((layer) => layer === outcome.layer).length === 1,
+      )).toBe(true);
+      expect(report.protocol.outcomes.every((outcome) => outcome.layer === 'protocol')).toBe(true);
+      expect(report.decision.outcomes.every((outcome) => outcome.layer === 'decision')).toBe(true);
+      expect(report.execution.outcomes.every((outcome) => outcome.layer === 'execution')).toBe(true);
+    });
   });
 
-  it('closes downstream gates when protocol reliability fails', () => {
+  it('closes downstream gates when protocol reliability fails', async () => {
     const candidate = input();
     candidate.protocol.finalizeMatched = false;
-    const report = evaluateStewardWake(candidate, CONTENTS);
-    expect(report.protocol).toMatchObject({ verdict: 'fail', gate: 'closed', gateReason: 'protocol_failed' });
-    expect(report.decision).toMatchObject({ verdict: 'not_evaluated', gate: 'closed', gateReason: 'protocol_failed' });
-    expect(report.execution).toMatchObject({ verdict: 'not_evaluated', gate: 'closed', gateReason: 'protocol_failed' });
-    expect(report.decision.outcomes.every((outcome) => outcome.status === 'not_evaluated')).toBe(true);
+    await withProvenanceStore(candidate, async (store) => {
+      const report = await evaluateStewardWake(candidate, store);
+      expect(report.protocol).toMatchObject({ verdict: 'fail', gate: 'closed', gateReason: 'protocol_failed' });
+      expect(report.decision).toMatchObject({ verdict: 'not_evaluated', gate: 'closed', gateReason: 'protocol_failed' });
+      expect(report.execution).toMatchObject({ verdict: 'not_evaluated', gate: 'closed', gateReason: 'protocol_failed' });
+      expect(report.decision.outcomes.every((outcome) => outcome.status === 'not_evaluated')).toBe(true);
+    });
   });
 
-  it('never converts a dangerous decision into success because a guard contained it', () => {
+  it('never converts a dangerous decision into success because a guard contained it', async () => {
     const candidate = input();
     candidate.decision.qualityChecks[0] = {
       id: 'as_of_reasoning',
@@ -154,57 +187,82 @@ describe('steward three-layer evaluation harness', () => {
       code: 'policy_denied',
       detail: 'deterministic guard refused the dangerous intent',
     }];
-    const report = evaluateStewardWake(candidate, CONTENTS);
-
-    expect(report.decision.verdict).toBe('fail');
-    expect(report.execution.containment).toEqual([
-      expect.objectContaining({
-        layer: 'execution',
-        classification: 'containment',
-        status: 'observed',
-        code: 'containment:policy_denied',
-      }),
-    ]);
-    expect(report.decision.outcomes.some((outcome) => outcome.classification === 'containment')).toBe(false);
+    await withProvenanceStore(candidate, async (store) => {
+      const report = await evaluateStewardWake(candidate, store);
+      expect(report.decision.verdict).toBe('fail');
+      expect(report.execution.containment).toEqual([
+        expect.objectContaining({
+          layer: 'execution',
+          classification: 'containment',
+          status: 'observed',
+          code: 'containment:policy_denied',
+        }),
+      ]);
+      expect(report.decision.outcomes.some((outcome) => outcome.classification === 'containment')).toBe(false);
+    });
   });
 
-  it('fails decision provenance while leaving execution fidelity mechanically separate', () => {
+  it('fails decision provenance while leaving execution fidelity mechanically separate', async () => {
     const candidate = input();
     const manifest = candidate.dataManifest as StewardEvaluationDataManifest;
-    manifest.snapshot = { ...manifest.snapshot, sha256: 'f'.repeat(64) };
+    manifest.sources.market.items[0] = {
+      ...manifest.sources.market.items[0]!,
+      availableAt: '2026-01-04T00:00:00.000Z',
+    };
     candidate.decision.qualityChecks[0] = {
       id: 'as_of_reasoning',
       passed: false,
       detail: 'bad decision evidence',
     };
-    const report = evaluateStewardWake(candidate, CONTENTS);
-
-    expect(report.decision.verdict).toBe('fail');
-    expect(report.decision.manifest.violations).toContainEqual(
-      expect.objectContaining({ code: 'content_hash_mismatch' }),
-    );
-    expect(report.execution.verdict).toBe('pass');
+    await withProvenanceStore(candidate, async (store) => {
+      const report = await evaluateStewardWake(candidate, store);
+      expect(report.decision.verdict).toBe('fail');
+      expect(report.decision.manifest.violations).toContainEqual(
+        expect.objectContaining({ code: 'future_source_availability' }),
+      );
+      expect(report.execution.verdict).toBe('pass');
+    });
   });
 
-  it('does not score execution without a valid mandatory risk envelope', () => {
+  it('refuses caller relabelling after the launcher persisted the wake manifest', async () => {
+    const candidate = input();
+    await withProvenanceStore(candidate, async (store) => {
+      const manifest = candidate.dataManifest as StewardEvaluationDataManifest;
+      manifest.snapshot = {
+        ref: manifest.snapshot.ref,
+        sha256: sha256StewardEvaluationContent('caller-substitute'),
+      };
+      await expect(evaluateStewardWake(candidate, store)).rejects.toMatchObject({
+        code: 'manifest_binding_mismatch',
+      });
+      const persisted = await store.loadManifest(candidate.wakeId);
+      expect(Buffer.from(persisted.contentByRef['snapshot']!)).toEqual(Buffer.from('snapshot'));
+    });
+  });
+
+  it('does not score execution without a valid mandatory risk envelope', async () => {
     const candidate = input();
     candidate.execution.riskEnvelopeValid = false;
     candidate.execution.containment = [{
       code: 'risk_envelope_missing',
       detail: 'execution was refused fail-closed',
     }];
-    const report = evaluateStewardWake(candidate, CONTENTS);
-    expect(report.execution).toMatchObject({
-      verdict: 'not_evaluated',
-      gate: 'closed',
-      gateReason: 'risk_envelope_invalid',
+    await withProvenanceStore(candidate, async (store) => {
+      const report = await evaluateStewardWake(candidate, store);
+      expect(report.execution).toMatchObject({
+        verdict: 'not_evaluated',
+        gate: 'closed',
+        gateReason: 'risk_envelope_invalid',
+      });
+      expect(report.decision.verdict).toBe('pass');
     });
-    expect(report.decision.verdict).toBe('pass');
   });
 
-  it('fails closed on malformed or duplicate layer evidence', () => {
+  it('fails closed on malformed or duplicate layer evidence', async () => {
     const candidate = input();
     candidate.decision.qualityChecks.push(candidate.decision.qualityChecks[0]!);
-    expect(() => evaluateStewardWake(candidate, CONTENTS)).toThrow(/duplicate check id/);
+    await withProvenanceStore(candidate, async (store) => {
+      await expect(evaluateStewardWake(candidate, store)).rejects.toThrow(/duplicate check id/);
+    });
   });
 });
