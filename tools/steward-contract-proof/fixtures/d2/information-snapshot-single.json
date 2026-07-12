@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "snapshotId": "snap:wake-v3-single",
+  "wakeId": "wake-v3-single",
+  "accountId": "mock-simulator-1",
+  "asOf": "2026-07-12T10:00:00.000Z",
+  "market": {
+    "provided": true,
+    "refs": [
+      {
+        "ref": "bar:asset-a:1d:through-2026-07-12",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "asOf": "2026-07-12T10:00:00.000Z",
+        "freshness": "delayed_15m"
+      }
+    ]
+  },
+  "portfolio": {
+    "provided": true,
+    "refs": [
+      {
+        "ref": "uta:account-info:mock-simulator-1",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "asOf": "2026-07-12T10:00:00.000Z"
+      }
+    ]
+  },
+  "risk": {
+    "provided": true,
+    "envelopeVersion": 3,
+    "refs": [
+      {
+        "ref": "uta:risk-state:mock-simulator-1",
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "asOf": "2026-07-12T10:00:00.000Z"
+      }
+    ]
+  },
+  "events": {
+    "provided": false,
+    "note": "No news, earnings, or macro event input was provided for this wake."
+  },
+  "history": {
+    "provided": true,
+    "openTheses": [
+      {
+        "wakeId": "wake-thesis-a",
+        "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "instrument": "mock-simulator-1/ASSET-A",
+        "expiresAt": "2026-07-20T10:00:00.000Z"
+      },
+      {
+        "wakeId": "wake-thesis-b",
+        "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "instrument": "mock-simulator-1/ASSET-B",
+        "expiresAt": "2026-07-11T10:00:00.000Z"
+      }
+    ],
+    "refs": [
+      {
+        "ref": "ledger:open-theses",
+        "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "asOf": "2026-07-12T10:00:00.000Z"
+      }
+    ]
+  }
+}

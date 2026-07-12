@@ -1,0 +1,114 @@
+{
+  "cases": [
+    {
+      "name": "future entry prefers STP when supported",
+      "capabilities": {
+        "market": true,
+        "stop": true,
+        "stopLimit": { "supported": true, "limitOffsetBps": 25 }
+      },
+      "request": {
+        "kind": "future_protective_entry",
+        "operationId": "operation:entry:asset-a",
+        "instrument": "mock-simulator-1/ASSET-A",
+        "entrySide": "BUY",
+        "triggerPrice": "94.2"
+      },
+      "expected": {
+        "kind": "selected",
+        "operationId": "operation:entry:asset-a",
+        "instrument": "mock-simulator-1/ASSET-A",
+        "exitSide": "SELL",
+        "orderType": "STP",
+        "triggerPrice": "94.2"
+      }
+    },
+    {
+      "name": "future entry uses STP_LMT only with deterministic offset capability",
+      "capabilities": {
+        "market": true,
+        "stop": false,
+        "stopLimit": { "supported": true, "limitOffsetBps": 25 }
+      },
+      "request": {
+        "kind": "future_protective_entry",
+        "operationId": "operation:entry:asset-a",
+        "instrument": "mock-simulator-1/ASSET-A",
+        "entrySide": "BUY",
+        "triggerPrice": "94.2"
+      },
+      "expected": {
+        "kind": "selected",
+        "operationId": "operation:entry:asset-a",
+        "instrument": "mock-simulator-1/ASSET-A",
+        "exitSide": "SELL",
+        "orderType": "STP_LMT",
+        "triggerPrice": "94.2",
+        "limitPrice": "93.9645",
+        "limitOffsetBps": 25
+      }
+    },
+    {
+      "name": "immediate reduce risk may use MKT",
+      "capabilities": {
+        "market": true,
+        "stop": false,
+        "stopLimit": { "supported": false }
+      },
+      "request": {
+        "kind": "immediate_reduce_risk",
+        "operationId": "operation:reduce:asset-a",
+        "instrument": "mock-simulator-1/ASSET-A",
+        "side": "SELL"
+      },
+      "expected": {
+        "kind": "selected",
+        "operationId": "operation:reduce:asset-a",
+        "instrument": "mock-simulator-1/ASSET-A",
+        "side": "SELL",
+        "orderType": "MKT"
+      }
+    },
+    {
+      "name": "unsupported future protection is rejected",
+      "capabilities": {
+        "market": true,
+        "stop": false,
+        "stopLimit": { "supported": false }
+      },
+      "request": {
+        "kind": "future_protective_entry",
+        "operationId": "operation:entry:asset-a",
+        "instrument": "mock-simulator-1/ASSET-A",
+        "entrySide": "BUY",
+        "triggerPrice": "94.2"
+      },
+      "expected": {
+        "kind": "rejected",
+        "operationId": "operation:entry:asset-a",
+        "instrument": "mock-simulator-1/ASSET-A",
+        "code": "protective_order_unsupported"
+      }
+    },
+    {
+      "name": "unsupported immediate reduction is rejected",
+      "capabilities": {
+        "market": false,
+        "stop": true,
+        "stopLimit": { "supported": false }
+      },
+      "request": {
+        "kind": "immediate_reduce_risk",
+        "operationId": "operation:reduce:asset-a",
+        "instrument": "mock-simulator-1/ASSET-A",
+        "side": "SELL"
+      },
+      "expected": {
+        "kind": "rejected",
+        "operationId": "operation:reduce:asset-a",
+        "instrument": "mock-simulator-1/ASSET-A",
+        "code": "market_reduce_risk_unsupported"
+      }
+    }
+  ]
+}

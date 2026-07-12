@@ -1,0 +1,18 @@
+{
+  "responseUtf8": "{\"risk\":\"NORMAL\",\"envelopeVersion\":3}",
+  "receipt": {
+    "version": 1,
+    "producer": "tool_surface",
+    "wakeId": "wake-v3-single",
+    "snapshotId": "snap:wake-v3-single",
+    "accountId": "mock-simulator-1",
+    "toolCallId": "tool-call:risk:001",
+    "toolName": "getAccountRisk",
+    "invokedAt": "2026-07-12T10:00:01.000Z",
+    "completedAt": "2026-07-12T10:00:01.250Z",
+    "response": {
+      "ref": "tool-response:tool-call:risk:001",
+      "sha256": "aba34f138dd9aad077eff92da4b34145ecfd1208402676fd63a4de0c9d69bcea"
+    }
+  }
+}

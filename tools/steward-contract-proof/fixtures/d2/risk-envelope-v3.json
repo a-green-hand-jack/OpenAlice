@@ -1,0 +1,14 @@
+{
+  "version": 3,
+  "maxPositionPctOfEquity": 25,
+  "maxSingleOrderPctOfEquity": 10,
+  "maxDailyLossPct": 5,
+  "maxDrawdownPct": 10,
+  "scope": {
+    "kind": "whitelist",
+    "symbols": ["mock-simulator-1/ASSET-A", "mock-simulator-1/ASSET-B"]
+  },
+  "autonomyCeiling": "paper",
+  "revoked": false,
+  "revokedReason": null
+}
