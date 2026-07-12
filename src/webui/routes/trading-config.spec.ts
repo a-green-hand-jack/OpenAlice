@@ -19,6 +19,11 @@ vi.mock('../../core/config.js', async () => {
     ...actual,
     readUTAsConfig: vi.fn(async () => utaStore),
     writeUTAsConfig: vi.fn(async (next: unknown[]) => { utaStore = [...next] }),
+    mutateUTAsConfig: vi.fn(async (mutate: (current: unknown[]) => unknown[] | Promise<unknown[]>) => {
+      const next = await mutate(structuredClone(utaStore))
+      utaStore = [...next]
+      return utaStore
+    }),
   }
 })
 
@@ -330,6 +335,55 @@ describe('PUT /uta/:id — edit-only', () => {
         },
       },
     }])
+  })
+
+  it('lets only the human config path clear revoke and enforces exact envelope versions', async () => {
+    const revokedEnvelope = {
+      version: 2,
+      maxPositionPctOfEquity: 25,
+      maxSingleOrderPctOfEquity: 10,
+      maxDailyLossPct: 5,
+      maxDrawdownPct: 10,
+      scope: { kind: 'whitelist', symbols: ['AAPL'] },
+      autonomyCeiling: 'paper',
+      revoked: true,
+      revokedReason: 'human stop',
+    }
+    const routes = makeRoutes()
+    const created = await req(routes, 'POST', '/uta', {
+      presetId: 'mock-simulator',
+      presetConfig: { cash: 1000 },
+      riskEnvelope: revokedEnvelope,
+    })
+    const account = created.body as Record<string, unknown> & { id: string }
+
+    const cleared = await req(routes, 'PUT', `/uta/${account.id}`, {
+      ...account,
+      riskEnvelope: {
+        ...revokedEnvelope,
+        version: 3,
+        revoked: false,
+        revokedReason: null,
+      },
+    })
+    expect(cleared.status).toBe(200)
+    expect((utaStore[0] as { riskEnvelope: { revoked: boolean; version: number } }).riskEnvelope)
+      .toMatchObject({ revoked: false, version: 3 })
+
+    const staleEdit = await req(routes, 'PUT', `/uta/${account.id}`, {
+      ...(cleared.body as Record<string, unknown>),
+      riskEnvelope: {
+        ...revokedEnvelope,
+        version: 3,
+        maxPositionPctOfEquity: 20,
+        revoked: false,
+        revokedReason: null,
+      },
+    })
+    expect(staleEdit.status).toBe(409)
+    expect(staleEdit.body).toMatchObject({ error: 'risk_envelope_version_invalid' })
+    expect((utaStore[0] as { riskEnvelope: { maxPositionPctOfEquity: number } }).riskEnvelope.maxPositionPctOfEquity)
+      .toBe(25)
   })
 })
 

@@ -7,6 +7,12 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+const atomicFile = vi.hoisted(() => ({
+  writeFile: vi.fn().mockResolvedValue(undefined),
+  sync: vi.fn().mockResolvedValue(undefined),
+  close: vi.fn().mockResolvedValue(undefined),
+}))
+
 // Mock fs/promises BEFORE importing config
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(),
@@ -16,6 +22,14 @@ vi.mock('fs/promises', () => ({
   rm: vi.fn().mockResolvedValue(undefined),
   rename: vi.fn().mockResolvedValue(undefined),
   chmod: vi.fn().mockResolvedValue(undefined),
+  open: vi.fn().mockResolvedValue(atomicFile),
+}))
+
+// Cross-process ownership is covered with real filesystem/process adversaries
+// in accounts-config-lock.spec.ts. These config unit tests mock fs/promises and
+// exercise only config parsing/serialization, so run the lock callback inline.
+vi.mock('./accounts-config-lock.js', () => ({
+  withAccountsConfigLock: async <T>(_configDir: string, fn: () => Promise<T>) => fn(),
 }))
 
 // Identity-mock the sealing layer: it's unit-tested in sealing.spec.ts (and
@@ -28,7 +42,7 @@ vi.mock('./sealing.js', () => ({
   unseal: async (v: unknown) => v,
 }))
 
-import { readFile, writeFile, mkdir } from 'fs/promises'
+import { readFile, writeFile, mkdir, open, rename } from 'fs/promises'
 import {
   readAIProviderConfig,
   readToolsConfig,
@@ -46,6 +60,8 @@ import {
 const mockReadFile = vi.mocked(readFile)
 const mockWriteFile = vi.mocked(writeFile)
 const mockMkdir = vi.mocked(mkdir)
+const mockOpen = vi.mocked(open)
+const mockRename = vi.mocked(rename)
 
 /** Simulate a file read that returns JSON content. */
 function fileReturns(content: unknown) {
@@ -213,7 +229,7 @@ describe('readUTAsConfig', () => {
     const accounts = await readUTAsConfig()
     expect(accounts).toEqual([])
     // Should seed empty accounts.json
-    expect(mockWriteFile).toHaveBeenCalledTimes(1)
+    expect(atomicFile.writeFile).toHaveBeenCalledTimes(1)
   })
 
   it('parses preset-shaped accounts from file', async () => {
@@ -246,7 +262,7 @@ describe('readUTAsConfig', () => {
     // Backup + rewritten accounts.json both written
     const writePaths = mockWriteFile.mock.calls.map((c) => c[0] as string)
     expect(writePaths.some((p) => p.endsWith('accounts.json.backup-pre-preset'))).toBe(true)
-    expect(writePaths.some((p) => p.endsWith('accounts.json'))).toBe(true)
+    expect(mockRename.mock.calls.some((call) => String(call[1]).endsWith('accounts.json'))).toBe(true)
   })
 
   it('migrates legacy alpaca + ibkr accounts', async () => {
@@ -272,12 +288,13 @@ describe('writeUTAsConfig', () => {
   it('writes validated accounts to accounts.json', async () => {
     await writeUTAsConfig([{
       id: 'acc-1', presetId: 'alpaca', enabled: true, guards: [],
+      riskEnvelope: null,
       presetConfig: { mode: 'paper', apiKey: 'k', apiSecret: 's' },
       keyless: false, readOnly: false, maxAuthzLevel: 'paper', asVendor: true, editable: true,
     }])
-    const filePath = mockWriteFile.mock.calls[0][0] as string
-    expect(filePath).toMatch(/accounts\.json$/)
-    const written = JSON.parse(mockWriteFile.mock.calls[0][1] as string) as Array<{ maxAuthzLevel?: string }>
+    const filePath = mockOpen.mock.calls[0][0] as string
+    expect(filePath).toMatch(/\.accounts\.json\.tmp-/)
+    const written = JSON.parse(atomicFile.writeFile.mock.calls[0][0] as string) as Array<{ maxAuthzLevel?: string }>
     expect(written[0]?.maxAuthzLevel).toBe('paper')
   })
 

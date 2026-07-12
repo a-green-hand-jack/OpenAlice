@@ -34,6 +34,7 @@ function policyConfig(presetId: string, presetConfig: Record<string, unknown>): 
     presetId,
     enabled: true,
     guards: [],
+    riskEnvelope: null,
     presetConfig,
     keyless: false,
     readOnly: false,

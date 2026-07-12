@@ -32,6 +32,7 @@ import {
   maxAuthzLevel,
   resolveAuthzAccountType,
   resolveEffectiveAuthzLevel,
+  riskEnvelopeSchema,
   type AuthzAccountType,
   type AuthzLevel,
 } from '@traderalice/uta-protocol'
@@ -116,9 +117,18 @@ function hasTradingAuthzRule(name: string): name is keyof typeof TRADING_TOOL_MI
 export function resolveWorkspaceToolAuthzLevel(input: {
   readonly workspaceAuthzLevel?: AuthzLevel | null
   readonly accountMaxAuthzLevels?: readonly (AuthzLevel | null | undefined)[]
+  readonly accounts?: readonly AccountAuthzSnapshot[]
 }): AuthzLevel {
+  const accountLevels = input.accounts
+    ? input.accounts.map((account) => resolveEffectiveAuthzLevel({
+        accountMaxAuthzLevel: account.maxAuthzLevel,
+        workspaceAuthzLevel: 'limited_autonomy',
+        riskEnvelopeAutonomyCeiling: account.riskEnvelopeAutonomyCeiling,
+        riskEnvelopeRevoked: account.riskEnvelopeRevoked,
+      }))
+    : input.accountMaxAuthzLevels ?? []
   return resolveEffectiveAuthzLevel({
-    accountMaxAuthzLevel: maxAuthzLevel(input.accountMaxAuthzLevels ?? []),
+    accountMaxAuthzLevel: maxAuthzLevel(accountLevels),
     workspaceAuthzLevel: input.workspaceAuthzLevel,
   })
 }
@@ -479,6 +489,9 @@ export interface AccountAuthzSnapshot {
   readonly id: string
   readonly maxAuthzLevel?: AuthzLevel | null
   readonly authzAccountType: AuthzAccountType
+  readonly riskEnvelopeState: 'available' | 'missing' | 'scope_unsupported' | 'revoked'
+  readonly riskEnvelopeAutonomyCeiling: AuthzLevel | null
+  readonly riskEnvelopeRevoked: boolean
 }
 
 export function accountAuthzSnapshotFromConfig(input: {
@@ -486,7 +499,19 @@ export function accountAuthzSnapshotFromConfig(input: {
   readonly presetId?: string
   readonly presetConfig?: Record<string, unknown> | null
   readonly maxAuthzLevel?: AuthzLevel | null
+  readonly riskEnvelope?: unknown
 }): AccountAuthzSnapshot {
+  const parsedEnvelope = riskEnvelopeSchema.safeParse(input.riskEnvelope)
+  const productionEnvelope = parsedEnvelope.success && parsedEnvelope.data.scope.kind === 'whitelist'
+    ? parsedEnvelope.data
+    : null
+  const riskEnvelopeState: AccountAuthzSnapshot['riskEnvelopeState'] = !parsedEnvelope.success
+    ? 'missing'
+    : parsedEnvelope.data.scope.kind !== 'whitelist'
+      ? 'scope_unsupported'
+      : parsedEnvelope.data.revoked
+        ? 'revoked'
+        : 'available'
   return {
     id: input.id,
     ...(input.maxAuthzLevel ? { maxAuthzLevel: input.maxAuthzLevel } : {}),
@@ -494,6 +519,9 @@ export function accountAuthzSnapshotFromConfig(input: {
       presetId: input.presetId,
       presetConfig: input.presetConfig ?? {},
     }),
+    riskEnvelopeState,
+    riskEnvelopeAutonomyCeiling: productionEnvelope?.autonomyCeiling ?? null,
+    riskEnvelopeRevoked: productionEnvelope?.revoked ?? false,
   }
 }
 
@@ -521,9 +549,22 @@ function resolveTradingProposalAuthz(
   const targets = resolveProposalTargetAccounts(name, args, opts.accounts)
   const effectiveByAccount: Record<string, AuthzLevel> = {}
   for (const account of targets) {
+    if (account.riskEnvelopeState !== 'available') {
+      const detail = account.riskEnvelopeState === 'missing'
+        ? 'the mandatory Risk Envelope is missing or partial'
+        : account.riskEnvelopeState === 'scope_unsupported'
+          ? 'Risk Envelope asset_class scope is unsupported by the v3 runtime; configure an explicit whitelist'
+          : 'the Risk Envelope is revoked'
+      return {
+        ok: false,
+        message: `Trading proposal refused for account "${account.id}": ${detail}.`,
+      }
+    }
     const effective = resolveEffectiveAuthzLevel({
       workspaceAuthzLevel: opts.workspaceAuthzLevel,
       accountMaxAuthzLevel: account.maxAuthzLevel,
+      riskEnvelopeAutonomyCeiling: account.riskEnvelopeAutonomyCeiling,
+      riskEnvelopeRevoked: account.riskEnvelopeRevoked,
     })
     effectiveByAccount[account.id] = effective
     if (AUTHZ_LEVEL_RANK[effective] < AUTHZ_LEVEL_RANK.paper) {
@@ -531,7 +572,7 @@ function resolveTradingProposalAuthz(
         ok: false,
         message:
           `Trading proposal refused for account "${account.id}": effective authzLevel is ${effective}; ` +
-          'stage/commit tools require at least paper after applying the workspace level and the account maxAuthzLevel.',
+          'stage/commit tools require at least paper after applying workspace, account, and Risk Envelope ceilings.',
       }
     }
     if (!isAuthzLevelAllowedForAccountType(effective, account.authzAccountType)) {

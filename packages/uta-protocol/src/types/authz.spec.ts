@@ -36,6 +36,25 @@ describe('authz level ordering', () => {
     })).toBe('small_live')
   })
 
+  it('applies the mandatory Risk Envelope ceiling and monotonic revoke', () => {
+    expect(resolveEffectiveAuthzLevel({
+      accountMaxAuthzLevel: 'limited_autonomy',
+      workspaceAuthzLevel: 'small_live',
+      riskEnvelopeAutonomyCeiling: 'paper',
+    })).toBe('paper')
+    expect(resolveEffectiveAuthzLevel({
+      accountMaxAuthzLevel: 'limited_autonomy',
+      workspaceAuthzLevel: 'limited_autonomy',
+      riskEnvelopeAutonomyCeiling: null,
+    })).toBe('read_only')
+    expect(resolveEffectiveAuthzLevel({
+      accountMaxAuthzLevel: 'limited_autonomy',
+      workspaceAuthzLevel: 'limited_autonomy',
+      riskEnvelopeAutonomyCeiling: 'limited_autonomy',
+      riskEnvelopeRevoked: true,
+    })).toBe('read_only')
+  })
+
   it('keeps the account-type gate expressible for paper/mock-only paper authz', () => {
     expect(isAuthzLevelAllowedForAccountType('paper', 'paper')).toBe(true)
     expect(isAuthzLevelAllowedForAccountType('paper', 'mock')).toBe(true)

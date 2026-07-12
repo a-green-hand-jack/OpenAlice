@@ -23,10 +23,12 @@ import { migration as migration_0008_disable_targetless_cron_jobs } from './0008
 import { migration as migration_0009_seal_broker_credentials } from './0009_seal_broker_credentials/index.js'
 import { migration as migration_0010_workspace_issues_to_markdown } from './0010_workspace_issues_to_markdown/index.js'
 import { migration as migration_0011_workspace_issue_assignee_defaults } from './0011_workspace_issue_assignee_defaults/index.js'
+import { migration as migration_0012_mandatory_risk_envelope } from './0012_mandatory_risk_envelope/index.js'
 
 export const REGISTRY: Migration[] = [
   migration_0008_disable_targetless_cron_jobs,
   migration_0009_seal_broker_credentials,
   migration_0010_workspace_issues_to_markdown,
   migration_0011_workspace_issue_assignee_defaults,
+  migration_0012_mandatory_risk_envelope,
 ]

@@ -43,6 +43,8 @@ import type {
   ExpandContractFilters,
   ContractExpansion,
   AuthzLevel,
+  StewardAdmissionRequest,
+  StewardAdmissionResponse,
 } from '@traderalice/uta-protocol'
 import type { Contract, ContractDescription, ContractDetails } from '@traderalice/ibkr'
 
@@ -225,6 +227,13 @@ export class UTAAccountSDK {
   }
 
   // ==================== Git/wallet state ====================
+
+  checkStewardAdmission(request: StewardAdmissionRequest): Promise<StewardAdmissionResponse> {
+    return this.client.post<StewardAdmissionResponse>(
+      `/api/trading/uta/${encodeURIComponent(this.id)}/steward/admission`,
+      request,
+    )
+  }
 
   log(options: { limit?: number; symbol?: string } = {}): Promise<CommitLogEntry[]> {
     return this.client

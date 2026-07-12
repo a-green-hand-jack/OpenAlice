@@ -1,10 +1,8 @@
 import Decimal from 'decimal.js'
 import { UNSET_DECIMAL } from '@traderalice/ibkr'
 import {
-  AUTHZ_LEVEL_RANK,
   DEFAULT_AUTHZ_LEVEL,
   isPaperLikeAccountType,
-  resolveEffectiveAuthzLevel,
   type ApproverIdentity,
   type AuthzAccountType,
   type AuthzLevel,
@@ -16,9 +14,15 @@ import {
   type Position,
   type PushResult,
   type RiskStateInfo,
+  STEWARD_ADMISSION_WIRE_VERSION,
 } from '@traderalice/uta-protocol'
 import type { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
+import { LocalNoDispatchError } from './guards/guard-pipeline.js'
 import { PendingApprovalChangedError } from './git/mutation-coordinator.js'
+import {
+  evaluateStewardAdmission,
+  type RiskEnvelopeAdmissionSource,
+} from './risk-envelope.js'
 
 // PaperAutoPushResult (+ its skip-reason / policy-violation constituents) is
 // declared in @traderalice/uta-protocol, not here: UTA's POST /wallet/commit
@@ -57,6 +61,15 @@ export interface PaperAutoPushInput {
    * direct/manual UTA commits do not get paper auto-push by accident.
    */
   effectiveAuthzLevel?: AuthzLevel | null
+  /** Startup-captured account envelope. Missing/partial is fail-closed. */
+  riskEnvelope: unknown
+  /** Authoritative persisted source re-read under the push preflight lease. */
+  readAdmissionSource: () => Promise<RiskEnvelopeAdmissionSource>
+  /** Same persisted source, but with its accounts-config lock held until the
+   * callback completes. Production uses this around each broker mutation. */
+  withLockedAdmissionSource: <T>(
+    consume: (source: RiskEnvelopeAdmissionSource) => Promise<T>,
+  ) => Promise<T>
   now?: () => Date
 }
 
@@ -65,6 +78,10 @@ interface PaperAutoPushEligibility {
   pendingHash: string
   accountType: PaperAutoPushAccountType
   effectiveAuthzLevel: AuthzLevel
+  envelopeVersion: number
+  workspaceAuthzLevel: AuthzLevel
+  readAdmissionSource: () => Promise<RiskEnvelopeAdmissionSource>
+  withLockedAdmissionSource: PaperAutoPushInput['withLockedAdmissionSource']
   now: () => Date
 }
 
@@ -130,11 +147,34 @@ export function resolvePaperAutoPushEligibility(
     }
   }
 
-  const effectiveAuthzLevel = resolveEffectiveAuthzLevel({
-    accountMaxAuthzLevel: input.accountMaxAuthzLevel,
-    workspaceAuthzLevel: input.effectiveAuthzLevel ?? DEFAULT_AUTHZ_LEVEL,
+  const workspaceAuthzLevel = input.effectiveAuthzLevel ?? DEFAULT_AUTHZ_LEVEL
+  const admission = evaluateStewardAdmission({
+    accountId: input.uta.id,
+    source: {
+      riskEnvelope: input.riskEnvelope,
+      accountMaxAuthzLevel: input.accountMaxAuthzLevel,
+    },
+    request: {
+      version: STEWARD_ADMISSION_WIRE_VERSION,
+      workspaceAuthzLevel,
+      minimumAuthzLevel: 'paper',
+    },
   })
-  if (AUTHZ_LEVEL_RANK[effectiveAuthzLevel] < AUTHZ_LEVEL_RANK.paper) {
+  if (admission.status === 'rejected') {
+    if (admission.code !== 'authz_below_required') {
+      return {
+        ok: false,
+        result: {
+          status: 'skipped',
+          reason: admission.code,
+          pendingHash,
+          accountType: input.accountType,
+          ...(admission.effectiveAuthzLevel ? { effectiveAuthzLevel: admission.effectiveAuthzLevel } : {}),
+          ...(admission.envelopeVersion ? { envelopeVersion: admission.envelopeVersion } : {}),
+        },
+      }
+    }
+    const effectiveAuthzLevel = admission.effectiveAuthzLevel ?? DEFAULT_AUTHZ_LEVEL
     return {
       ok: false,
       result: {
@@ -147,6 +187,8 @@ export function resolvePaperAutoPushEligibility(
     }
   }
 
+  const effectiveAuthzLevel = admission.effectiveAuthzLevel
+
   return {
     ok: true,
     eligibility: {
@@ -154,6 +196,10 @@ export function resolvePaperAutoPushEligibility(
       pendingHash,
       accountType: assertPaperAutoPushAccountType(input.accountType),
       effectiveAuthzLevel,
+      envelopeVersion: admission.envelopeVersion,
+      workspaceAuthzLevel,
+      readAdmissionSource: input.readAdmissionSource,
+      withLockedAdmissionSource: input.withLockedAdmissionSource,
       now: input.now ?? (() => new Date()),
     },
   }
@@ -227,6 +273,64 @@ async function executePaperAutoPush(
             policyViolations,
           })
         }
+
+        let freshSource: RiskEnvelopeAdmissionSource
+        try {
+          freshSource = await eligibility.readAdmissionSource()
+        } catch {
+          freshSource = { riskEnvelope: null, accountMaxAuthzLevel: null }
+        }
+        const admission = evaluateStewardAdmission({
+          accountId: eligibility.uta.id,
+          source: freshSource,
+          request: {
+            version: STEWARD_ADMISSION_WIRE_VERSION,
+            workspaceAuthzLevel: eligibility.workspaceAuthzLevel,
+            minimumAuthzLevel: 'paper',
+            expectedEnvelopeVersion: eligibility.envelopeVersion,
+          },
+        })
+        if (admission.status === 'rejected') {
+          throw new PaperAutoPushPreflightError({
+            status: 'skipped',
+            reason: admission.code === 'authz_below_required' ? 'authz_below_paper' : admission.code,
+            pendingHash: eligibility.pendingHash,
+            accountType: eligibility.accountType,
+            effectiveAuthzLevel: admission.effectiveAuthzLevel ?? DEFAULT_AUTHZ_LEVEL,
+            ...(admission.envelopeVersion ? { envelopeVersion: admission.envelopeVersion } : {}),
+            risk,
+          })
+        }
+      },
+      dispatchAdmission: async (_operation, dispatch) => {
+        let brokerCallStarted = false
+        try {
+          return await eligibility.withLockedAdmissionSource(async (freshSource) => {
+            const admission = evaluateStewardAdmission({
+              accountId: eligibility.uta.id,
+              source: freshSource,
+              request: {
+                version: STEWARD_ADMISSION_WIRE_VERSION,
+                workspaceAuthzLevel: eligibility.workspaceAuthzLevel,
+                minimumAuthzLevel: 'paper',
+                expectedEnvelopeVersion: eligibility.envelopeVersion,
+              },
+            })
+            if (admission.status === 'rejected') {
+              const reason = admission.code === 'authz_below_required'
+                ? 'authz_below_paper'
+                : admission.code
+              throw new LocalNoDispatchError(`[risk-envelope:${reason}] ${admission.message}`)
+            }
+            brokerCallStarted = true
+            return dispatch()
+          })
+        } catch (error) {
+          if (brokerCallStarted || error instanceof LocalNoDispatchError) throw error
+          throw new LocalNoDispatchError(
+            `[risk-envelope:risk_envelope_missing] Locked admission source failed: ${error instanceof Error ? error.message : String(error)}`,
+          )
+        }
       },
     })
     return {
@@ -235,6 +339,7 @@ async function executePaperAutoPush(
       push,
       approver,
       effectiveAuthzLevel: eligibility.effectiveAuthzLevel,
+      envelopeVersion: eligibility.envelopeVersion,
     }
   } catch (err) {
     if (err instanceof PaperAutoPushPreflightError) return err.result
