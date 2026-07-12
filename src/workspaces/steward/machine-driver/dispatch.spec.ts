@@ -33,9 +33,12 @@ import {
   createStewardLockStore,
   createStewardSupervisor,
   createStewardWakeStore,
+  publishStewardInformationSnapshot,
   StewardLockConflictError,
+  stewardSnapshotPath,
   stewardSupervisorLogPath,
   type StewardWakeEnvelope,
+  type StewardWakeEnvelopeInput,
 } from '../index.js';
 
 let dir: string;
@@ -48,7 +51,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-const envelope: StewardWakeEnvelope = {
+const envelopeInput: StewardWakeEnvelopeInput = {
   reason: 'scheduled_observe',
   accountId: 'mock-simulator-1',
   authzLevel: 'paper',
@@ -56,6 +59,19 @@ const envelope: StewardWakeEnvelope = {
   marketContext: { symbols: ['AAPL'] },
   riskContext: { riskState: 'NORMAL', guards: [] },
 };
+
+function boundEnvelope(wakeId: string): StewardWakeEnvelope {
+  return {
+    ...envelopeInput,
+    version: 2,
+    snapshotRef: {
+      snapshotId: `snap:${wakeId}`,
+      sha256: '0'.repeat(64),
+      path: `.alice/steward/snapshots/${encodeURIComponent(wakeId)}.json`,
+      asOf: NOW,
+    },
+  };
+}
 
 const COMPLETED: TurnOutcome = {
   turnId: 'turn-1',
@@ -152,7 +168,7 @@ function baseInput(driver: StewardMachineDriver, over: Partial<DispatchMachineWa
     driver,
     wakeStore: createStewardWakeStore(dir),
     threadStore: createMachineThreadStore(dir),
-    wake: { wakeId: 'wake-m', deadline: FUTURE_DEADLINE, envelope },
+    wake: { wakeId: 'wake-m', deadline: FUTURE_DEADLINE, envelope: boundEnvelope('wake-m') },
     now: NOW,
     logger: NOOP_LOGGER,
     ...over,
@@ -423,7 +439,7 @@ describe('dispatchMachineWake (issue #146, S3)', () => {
     await dispatchMachineWake(baseInput(driver));
     // Mirror the real dispatcher: the account lock is held for the wake's life.
     await createStewardLockStore(dir).acquire({
-      accountId: envelope.accountId,
+      accountId: envelopeInput.accountId,
       wakeId: 'wake-m',
       now: NOW,
       expiresAt: FUTURE_DEADLINE,
@@ -674,11 +690,11 @@ describe('machine-thread account identity guard (issue #155)', () => {
     await dispatchMachineWake(baseInput(driver));
 
     const stored = await createMachineThreadStore(dir).read();
-    expect(stored?.accountId).toBe(envelope.accountId);
+    expect(stored?.accountId).toBe(envelopeInput.accountId);
   });
 
   it('a stored thread owned by the SAME account resumes normally — no mismatch event', async () => {
-    await seedThread(envelope.accountId);
+    await seedThread(envelopeInput.accountId);
     const { driver, calls } = makeMockDriver({
       ensureThread: async (o) => ({ threadId: o.threadId ?? 'fresh', resumed: o.threadId !== undefined }),
     });
@@ -688,7 +704,7 @@ describe('machine-thread account identity guard (issue #155)', () => {
     expect(calls.ensureThread[0]?.threadId).toBe('thread-owned');
     expect((await readSupervisorEvents()).some((e) => e['type'] === 'machine_thread_account_mismatch')).toBe(false);
     const stored = await createMachineThreadStore(dir).read();
-    expect(stored?.accountId).toBe(envelope.accountId);
+    expect(stored?.accountId).toBe(envelopeInput.accountId);
   });
 
   it('a stored thread owned by a DIFFERENT account is NOT resumed — fresh thread + mismatch event, store adopts the current account', async () => {
@@ -706,14 +722,14 @@ describe('machine-thread account identity guard (issue #155)', () => {
 
     const stored = await createMachineThreadStore(dir).read();
     expect(stored?.threadId).toBe('thread-fresh-for-new-account');
-    expect(stored?.accountId).toBe(envelope.accountId);
+    expect(stored?.accountId).toBe(envelopeInput.accountId);
 
     const mismatch = (await readSupervisorEvents()).find((e) => e['type'] === 'machine_thread_account_mismatch');
     expect(mismatch).toMatchObject({
       wakeId: 'wake-m',
       priorThreadId: 'thread-owned',
       storedAccountId: 'some-other-account',
-      accountId: envelope.accountId,
+      accountId: envelopeInput.accountId,
     });
   });
 
@@ -731,7 +747,7 @@ describe('machine-thread account identity guard (issue #155)', () => {
 
     // Adopted on this write — the next wake for the same account now matches.
     const stored = await createMachineThreadStore(dir).read();
-    expect(stored?.accountId).toBe(envelope.accountId);
+    expect(stored?.accountId).toBe(envelopeInput.accountId);
     expect(stored?.threadId).toBe('thread-owned');
   });
 });
@@ -751,13 +767,15 @@ describe('dispatchStewardWakeControlFace — shared gate + factory seam (issue #
       lockStore: createStewardLockStore(dir),
       threadStore: createMachineThreadStore(dir),
       logger: NOOP_LOGGER,
+      publishSnapshot: (snapshotInput) => publishStewardInformationSnapshot(dir, snapshotInput),
       acquireDriver,
       rotateDriver: async (adapter) => acquireDriver(adapter),
+      withRuntimeLease: (operation) => operation({ forceFresh: false }),
       ...over,
     };
   }
   const input = (config: Record<string, unknown>): StewardWakeControlFaceInput => ({
-    config, requestedAgent: undefined, wakeId: 'wake-cf', deadline: FUTURE_DEADLINE, now: NOW, envelope,
+    config, requestedAgent: undefined, wakeId: 'wake-cf', deadline: FUTURE_DEADLINE, now: NOW, envelope: envelopeInput,
   });
 
   it("explicit 'pty' config: returns face:pty, never invokes the driver factory, no wake/lock side effects", async () => {
@@ -787,7 +805,131 @@ describe('dispatchStewardWakeControlFace — shared gate + factory seam (issue #
       expect(outcome.wake.status).toBe('injected');
       expect(outcome.wake.controlFace).toBe('machine');
       expect(outcome.threadId).toBe('thread-fresh');
+      expect(outcome.wake.envelope).toHaveProperty('snapshotRef.snapshotId', 'snap:wake-cf');
+      expect(JSON.parse(await readFile(stewardSnapshotPath(dir, 'wake-cf'), 'utf8')).wakeId).toBe('wake-cf');
     }
+  });
+
+  it('uses post-lock generation B when acknowledged A goes stale before shared machine dispatch', async () => {
+    await createMachineThreadStore(dir).write({
+      threadId: 'thread-stale-v2-instructions',
+      createdAt: '2026-07-01T00:00:00.000Z',
+      lastTurnAt: '2026-07-07T00:00:00.000Z',
+      accountId: envelopeInput.accountId,
+    });
+    const { driver, calls } = makeMockDriver({
+      ensureThread: async (options) => {
+        expect(options.threadId).toBeUndefined();
+        return { threadId: 'thread-fresh-v3-instructions', resumed: false };
+      },
+    });
+    const acquireDriver = vi.fn(() => driver);
+    const rotateDriver = vi.fn(async () => driver);
+    const outcome = await dispatchStewardWakeControlFace(
+      input({ controlFace: 'machine' }),
+      baseDeps(acquireDriver, {
+        rotateDriver,
+        withRuntimeLease: async (operation) => {
+          expect(await createStewardLockStore(dir).get(envelopeInput.accountId)).toMatchObject({
+            wakeId: 'wake-cf',
+          });
+          // A observed an acknowledged generation A pre-lock. The lease's
+          // authoritative refresh observes B and must clear the A thread.
+          return operation({ forceFresh: true });
+        },
+      }),
+    );
+
+    expect(outcome.face).toBe('machine');
+    expect(acquireDriver).not.toHaveBeenCalled();
+    expect(rotateDriver).toHaveBeenCalledWith(
+      codexAdapter,
+      { disposedThreadId: 'thread-stale-v2-instructions' },
+    );
+    expect(calls.ensureThread[0]?.threadId).toBeUndefined();
+    expect((await createMachineThreadStore(dir).read())?.threadId).toBe('thread-fresh-v3-instructions');
+  });
+
+  it('retains the live machine wake and account lock when injected-status persistence fails after turn-start', async () => {
+    const wakeStore = createStewardWakeStore(dir);
+    const updateStatus = wakeStore.updateStatus.bind(wakeStore);
+    vi.spyOn(wakeStore, 'updateStatus').mockImplementation(async (wakeId, status, patch) => {
+      if (status === 'injected') throw new Error('machine injected-status write failed');
+      return updateStatus(wakeId, status, patch);
+    });
+    const factory = vi.fn(() => makeMockDriver().driver);
+    const deps = baseDeps(factory, { wakeStore });
+
+    const outcome = await dispatchStewardWakeControlFace(
+      input({ controlFace: 'machine' }),
+      deps,
+    );
+
+    expect(outcome.face).toBe('machine');
+    if (outcome.face !== 'machine') throw new Error('machine face unexpectedly declined');
+    expect(outcome.wake).toMatchObject({
+      wakeId: 'wake-cf',
+      status: 'queued',
+      injectedAt: null,
+    });
+    expect(outcome.wake.completedAt).toBeUndefined();
+    expect(outcome.wake.error).toBeUndefined();
+    expect(await createStewardLockStore(dir).get(envelopeInput.accountId)).toMatchObject({
+      wakeId: 'wake-cf',
+    });
+
+    await expect(dispatchStewardWakeControlFace(
+      { ...input({ controlFace: 'machine' }), wakeId: 'wake-cf-committed-retry' },
+      deps,
+    )).rejects.toBeInstanceOf(StewardLockConflictError);
+    expect(await createStewardLockStore(dir).get(envelopeInput.accountId)).toMatchObject({
+      wakeId: 'wake-cf',
+    });
+  });
+
+  it('snapshot failure releases the lock before any driver, thread, or wake side effect', async () => {
+    const factory = vi.fn(() => makeMockDriver().driver);
+    const publishSnapshot = vi.fn(async () => { throw new Error('snapshot disk failed'); });
+
+    await expect(dispatchStewardWakeControlFace(
+      input({ controlFace: 'machine' }),
+      baseDeps(factory, { publishSnapshot }),
+    )).rejects.toThrow(/snapshot disk failed/);
+
+    expect(factory).not.toHaveBeenCalled();
+    expect(await createStewardWakeStore(dir).get('wake-cf')).toBeNull();
+    expect(await createMachineThreadStore(dir).read()).toBeNull();
+    await expect(createStewardLockStore(dir).acquire({
+      accountId: envelopeInput.accountId,
+      wakeId: 'wake-after-snapshot-failure',
+      now: NOW,
+      expiresAt: FUTURE_DEADLINE,
+    })).resolves.toBeTruthy();
+  });
+
+  it('keeps an immutable Snapshot when machine setup fails before wake creation, then retries the same wakeId', async () => {
+    const workingDriver = makeMockDriver().driver;
+    let failBeforeWake = true;
+    const factory = vi.fn(() => {
+      if (failBeforeWake) {
+        failBeforeWake = false;
+        throw new Error('driver construction failed before wake creation');
+      }
+      return workingDriver;
+    });
+    const machineInput = input({ controlFace: 'machine' });
+
+    await expect(dispatchStewardWakeControlFace(machineInput, baseDeps(factory)))
+      .rejects.toThrow(/driver construction failed/);
+    expect(await createStewardWakeStore(dir).get(machineInput.wakeId)).toBeNull();
+    expect(await createMachineThreadStore(dir).read()).toBeNull();
+    expect(await createStewardLockStore(dir).get(envelopeInput.accountId)).toBeNull();
+    const snapshotBytes = await readFile(stewardSnapshotPath(dir, machineInput.wakeId), 'utf8');
+
+    const retried = await dispatchStewardWakeControlFace(machineInput, baseDeps(factory));
+    expect(retried.face).toBe('machine');
+    expect(await createStewardWakeStore(dir).get(machineInput.wakeId)).toMatchObject({ status: 'injected' });
+    expect(await readFile(stewardSnapshotPath(dir, machineInput.wakeId), 'utf8')).toBe(snapshotBytes);
   });
 
   it('machine dispatch failure before injection releases the account lock and rethrows', async () => {
@@ -802,7 +944,7 @@ describe('dispatchStewardWakeControlFace — shared gate + factory seam (issue #
     // Lock released → the same account can be re-acquired for a new wake.
     await expect(
       createStewardLockStore(dir).acquire({
-        accountId: envelope.accountId, wakeId: 'wake-next', now: NOW, expiresAt: FUTURE_DEADLINE,
+        accountId: envelopeInput.accountId, wakeId: 'wake-next', now: NOW, expiresAt: FUTURE_DEADLINE,
       }),
     ).resolves.toBeTruthy();
   });
@@ -816,7 +958,7 @@ describe('dispatchStewardWakeControlFace — shared gate + factory seam (issue #
       wakeId,
       deadline: FUTURE_DEADLINE,
       now: NOW,
-      envelope,
+      envelope: envelopeInput,
     });
 
     // Mirrors the reported interleaving: a cron fire and a manual HTTP fire

@@ -52,6 +52,8 @@ export const LEDGER_SEMANTIC_KEYS = [
   'pendingHash',
   'invalidation',
   'cost',
+  'intent',
+  'thesisDispositions',
 ] as const;
 
 /** Recursively sort object keys so serialization is order-independent. Arrays

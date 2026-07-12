@@ -4,12 +4,13 @@
  * (no real spawn). Modeled on trading-config.spec's harness.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createWorkspaceRoutes } from './workspaces.js';
+import { StewardRuntimeRefreshError } from '../../workspaces/workspace-creator.js';
 import { HeadlessCapacityError, type WorkspaceService } from '../../workspaces/service.js';
 import { readWorkspaceMetadata } from '../../workspaces/workspace-metadata.js';
 import { createSession, _reset, revokeAllSessions } from '@/services/auth/session-store.js';
@@ -25,6 +26,7 @@ import {
   createStewardLockStore,
   createStewardWakeStore,
   DECISION_LEDGER_SCHEMA_VERSION,
+  publishStewardInformationSnapshot,
   STEWARD_WAKE_SUBMIT_DELAY_MS,
 } from '../../workspaces/steward/index.js';
 
@@ -180,7 +182,12 @@ async function postWake(app: any, path: string, body?: unknown) {
   return reqPromise;
 }
 
-function buildSteward(opts: { dir: string; inboxStore?: IInboxStore; dispatchStewardWakeControlFace?: any }) {
+function buildSteward(opts: {
+  dir: string;
+  inboxStore?: IInboxStore;
+  dispatchStewardWakeControlFace?: any;
+  publishStewardSnapshot?: any;
+}) {
   const meta = {
     id: 'ws-1',
     tag: 'steward-test',
@@ -252,6 +259,15 @@ function buildSteward(opts: { dir: string; inboxStore?: IInboxStore; dispatchSte
     adapters: { get: (id: string) => (id === 'codex' ? adapter : undefined) },
     resolveAdapter: () => adapter,
     refreshStewardRuntime: vi.fn(async () => ({ ok: true })),
+    acknowledgeStewardRuntimeFresh: vi.fn(async () => true),
+    withStewardRuntimeLease: vi.fn(async (_meta, _face, operation) => operation({
+      desiredDigest: '0'.repeat(64),
+      forceFresh: false,
+    })),
+    publishStewardSnapshot: opts.publishStewardSnapshot ?? vi.fn(
+      (_: unknown, input: Parameters<typeof publishStewardInformationSnapshot>[1]) =>
+        publishStewardInformationSnapshot(opts.dir, input),
+    ),
     // Issue #146 S4: the shared machine-face dispatch method. PTY wakes never
     // reach it (the route gates on `resolveStewardControlFace` first), so the
     // default is a spy that's simply present; the machine-face test injects one.
@@ -547,12 +563,114 @@ describe('steward wake API', () => {
     }
   });
 
-  it('refreshes the steward runtime before creating a wake, and refuses the wake when refresh fails (issue #140)', async () => {
+  it('uses the post-lock generation lease when B supersedes acknowledged A before HTTP PTY selection', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-runtime-'));
+    try {
+      await mkdir(join(dir, '.alice/steward'), { recursive: true });
+      await writeFile(
+        join(dir, '.alice/steward/config.json'),
+        `${JSON.stringify({ version: 1, controlFace: 'pty', agent: 'codex', sessionId: 'stale-v2-session' }, null, 2)}\n`,
+        'utf8',
+      );
+      const { app, svc, pool, live } = buildSteward({ dir });
+      live.set('stale-v2-session', { recordId: 'stale-v2-session' });
+      vi.mocked(svc.withStewardRuntimeLease).mockImplementationOnce(
+        async (_meta, face, operation) => {
+          expect(face).toBe('pty');
+          expect(await createStewardLockStore(dir).get('mock-simulator-1')).toMatchObject({
+            wakeId: 'wake-runtime-upgrade-pty',
+          });
+          return operation({ desiredDigest: 'b'.repeat(64), forceFresh: true });
+        },
+      );
+
+      const response = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-runtime-upgrade-pty',
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+
+      expect(response.status).toBe(202);
+      expect(response.body.session).toMatchObject({ reused: false, resumed: false });
+      expect(response.body.session.sessionId).not.toBe('stale-v2-session');
+      expect(pool.disposeToken).toHaveBeenCalledWith('stale-v2-session', 'steward_runtime_upgraded');
+      expect(pool.spawn).toHaveBeenCalledOnce();
+      expect(svc.withStewardRuntimeLease).toHaveBeenCalledOnce();
+      expect(svc.refreshStewardRuntime).not.toHaveBeenCalled();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('retains the live HTTP PTY wake and account lock when injected-status persistence fails after prompt injection', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-committed-'));
+    const accountId = 'mock-simulator-1';
+    const wakeId = 'wake-http-committed-bookkeeping-fail';
+    try {
+      await mkdir(join(dir, '.alice/steward'), { recursive: true });
+      await writeFile(
+        join(dir, '.alice/steward/config.json'),
+        JSON.stringify({ version: 1, controlFace: 'pty', agent: 'codex', sessionId: 'live-session-a' }),
+        'utf8',
+      );
+      const { app, pool, live } = buildSteward({ dir });
+      live.set('live-session-a', { recordId: 'live-session-a' });
+      const updateTmp = join(
+        dir,
+        '.alice/steward/wakes',
+        `${encodeURIComponent(wakeId)}.json.tmp`,
+      );
+      let writes = 0;
+      vi.mocked(pool.writeToSession).mockImplementation(() => {
+        writes += 1;
+        if (writes === 2) mkdirSync(updateTmp, { recursive: true });
+        return true;
+      });
+
+      const committed = await postWake(app, '/ws-1/steward/wakes', {
+        wakeId,
+        reason: 'scheduled_observe',
+        accountId,
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+
+      expect(committed.status).toBe(202);
+      expect(committed.body.bookkeepingWarning).toMatch(/EISDIR|directory/i);
+      const retainedWake = await createStewardWakeStore(dir).require(wakeId);
+      expect(retainedWake).toMatchObject({
+        wakeId,
+        status: 'queued',
+        injectedAt: null,
+      });
+      expect(retainedWake.completedAt).toBeUndefined();
+      expect(retainedWake.error).toBeUndefined();
+      expect(await createStewardLockStore(dir).get(accountId)).toMatchObject({ wakeId });
+
+      const retry = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-http-committed-retry',
+        reason: 'scheduled_observe',
+        accountId,
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      });
+      expect(retry.status).toBe(409);
+      expect(retry.body.error).toBe('account_locked');
+      expect(await createStewardLockStore(dir).get(accountId)).toMatchObject({ wakeId });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('takes the authoritative runtime lease after the account lock and refuses the wake when refresh fails', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
     try {
       const { app, svc } = buildSteward({ dir });
-      // Failure path: refresh reports an actionable error → no wake is created.
-      (svc.refreshStewardRuntime as any).mockResolvedValueOnce({ ok: false, message: 'validator write failed' });
+      vi.mocked(svc.withStewardRuntimeLease).mockRejectedValueOnce(
+        new StewardRuntimeRefreshError('validator write failed'),
+      );
       const failed = await post(app, '/ws-1/steward/wakes', {
         wakeId: 'wake-refresh-fail',
         reason: 'scheduled_observe',
@@ -566,8 +684,7 @@ describe('steward wake API', () => {
       // No wake record was written.
       expect(existsSync(join(dir, '.alice/steward/wakes/wake-refresh-fail.json'))).toBe(false);
 
-      // Success path: refresh is invoked with this workspace's meta before dispatch.
-      // Fresh spawn seeds via the initial prompt (no submit-gap timer), so plain post.
+      // Success path: the post-lock lease owns dispatch through injection.
       const ok = await post(app, '/ws-1/steward/wakes', {
         wakeId: 'wake-refresh-ok',
         reason: 'scheduled_observe',
@@ -576,7 +693,85 @@ describe('steward wake API', () => {
         expectedDecision: 'no_trade',
       });
       expect(ok.status).toBe(202);
-      expect(svc.refreshStewardRuntime).toHaveBeenCalledWith(expect.objectContaining({ id: 'ws-1', template: 'steward' }));
+      expect(ok.body.wake.envelope.snapshotRef.snapshotId).toBe('snap:wake-refresh-ok');
+      expect(JSON.parse(await readFile(join(dir, '.alice/steward/snapshots/wake-refresh-ok.json'), 'utf8')).wakeId).toBe('wake-refresh-ok');
+      expect(svc.withStewardRuntimeLease).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'ws-1', template: 'steward' }),
+        'pty',
+        expect.any(Function),
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails Snapshot M1 before PTY wake/session side effects and releases the account lock', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
+    const publishStewardSnapshot = vi.fn(async () => { throw new Error('snapshot publish failed'); });
+    try {
+      const { app, pool, sessionRegistry } = buildSteward({ dir, publishStewardSnapshot });
+      const failed = await post(app, '/ws-1/steward/wakes', {
+        wakeId: 'wake-snapshot-fail',
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+        session: { agent: 'codex' },
+      });
+
+      expect(failed.status).toBe(500);
+      expect(failed.body.error).toBe('snapshot_create_failed');
+      expect(await createStewardWakeStore(dir).get('wake-snapshot-fail')).toBeNull();
+      expect(await createStewardLockStore(dir).get('mock-simulator-1')).toBeNull();
+      expect(sessionRegistry.ensureLoaded).not.toHaveBeenCalled();
+      expect(pool.spawn).not.toHaveBeenCalled();
+      expect(existsSync(join(dir, '.alice/steward/snapshots/wake-snapshot-fail.json'))).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps an immutable Snapshot when PTY wake creation fails, then idempotently admits the same wakeId retry', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'workspace-route-steward-'));
+    const wakeId = 'wake-http-create-retry';
+    const blocker = join(dir, '.alice/steward/wakes', `${encodeURIComponent(wakeId)}.json.tmp`);
+    let blockFirstCreate = true;
+    const publishStewardSnapshot = vi.fn(async (
+      _meta: unknown,
+      input: Parameters<typeof publishStewardInformationSnapshot>[1],
+    ) => {
+      const published = await publishStewardInformationSnapshot(dir, input);
+      if (blockFirstCreate) {
+        blockFirstCreate = false;
+        await mkdir(blocker, { recursive: true });
+      }
+      return published;
+    });
+    try {
+      const { app, pool, sessionRegistry } = buildSteward({ dir, publishStewardSnapshot });
+      const body = {
+        wakeId,
+        reason: 'scheduled_observe',
+        accountId: 'mock-simulator-1',
+        authzLevel: 'paper',
+        expectedDecision: 'no_trade',
+      };
+      const failed = await post(app, '/ws-1/steward/wakes', body);
+      expect(failed.status).toBe(500);
+      expect(failed.body.error).toBe('wake_create_failed');
+      expect(await createStewardWakeStore(dir).get(wakeId)).toBeNull();
+      expect(await createStewardLockStore(dir).get(body.accountId)).toBeNull();
+      const snapshotPath = join(dir, '.alice/steward/snapshots', `${wakeId}.json`);
+      expect(existsSync(snapshotPath)).toBe(true);
+      const snapshotBeforeRetry = await readFile(snapshotPath, 'utf8');
+      expect(sessionRegistry.ensureLoaded).not.toHaveBeenCalled();
+      expect(pool.spawn).not.toHaveBeenCalled();
+
+      await rm(blocker, { recursive: true, force: true });
+      const retried = await post(app, '/ws-1/steward/wakes', body);
+      expect(retried.status).toBe(202);
+      expect(retried.body.wake).toMatchObject({ wakeId, status: 'injected' });
+      expect(await readFile(snapshotPath, 'utf8')).toBe(snapshotBeforeRetry);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -929,6 +1124,8 @@ describe('steward wake API', () => {
           estimatedSlippageUsd: null,
           totalEstimatedCostUsd: null,
         },
+        intent: null,
+        thesisDispositions: [],
       });
 
       const wake = await get(app, `/ws-1/steward/wakes/${encodeURIComponent('wake-ledger')}`);
@@ -1000,6 +1197,8 @@ describe('steward wake API', () => {
           estimatedSlippageUsd: 4,
           totalEstimatedCostUsd: null,
         },
+        intent: null,
+        thesisDispositions: [],
       });
 
       await publishFinalizeMarker(dir, 'wake-active');
@@ -1076,6 +1275,8 @@ describe('steward wake API', () => {
           estimatedSlippageUsd: null,
           totalEstimatedCostUsd: null,
         },
+        intent: null,
+        thesisDispositions: [],
       });
 
       await publishFinalizeMarker(dir, 'wake-done');

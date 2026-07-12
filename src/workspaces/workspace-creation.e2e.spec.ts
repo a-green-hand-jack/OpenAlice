@@ -208,6 +208,7 @@ describe('steward workspace create: scaffold → manifest → commit', () => {
       '.alice/steward/config.json',
       '.alice/steward/context-manifest.json',
       '.alice/steward/validate-ledger.mjs',
+      '.alice/steward/schemas/decision-ledger.v3.json',
       '.alice/steward/wakes/.gitkeep',
       '.alice/steward/ledger/decisions.jsonl',
       '.alice/steward/supervisor.jsonl',
@@ -231,14 +232,20 @@ describe('steward workspace create: scaffold → manifest → commit', () => {
       wrapperPrompt: { path: string; sha256: string };
       instructions: Array<{ path: string }>;
       skills: Array<{ name: string }>;
-      schemas: { wake: number; decisionLedger: number };
+      schemas: {
+        wake: number;
+        decisionLedger: number;
+        decisionLedgerArtifact: { path: string; sha256: string };
+      };
     };
     expect(manifest.template).toEqual({ name: 'steward', version: '0.1.0' });
     expect(manifest.coreAgent).toEqual({ id: 'codex', model: null });
     expect(manifest.wrapperPrompt.path).toBe('.alice/steward/README.md');
     expect(manifest.instructions.map((r) => r.path)).toEqual(['AGENTS.md', 'CLAUDE.md']);
     expect(manifest.skills.map((s) => s.name)).toContain('alice-uta');
-    expect(manifest.schemas).toEqual({ wake: 1, decisionLedger: 1 });
+    expect(manifest.schemas.wake).toBe(1);
+    expect(manifest.schemas.decisionLedger).toBe(3);
+    expect(manifest.schemas.decisionLedgerArtifact.path).toBe('.alice/steward/schemas/decision-ledger.v3.json');
 
     const excludes = await readFile(join(dir, '.git/info/exclude'), 'utf8');
     expect(excludes).toContain('.alice/steward/state.json');

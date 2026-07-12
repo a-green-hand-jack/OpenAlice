@@ -76,6 +76,11 @@ export const issueWhenSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('cron'), cron: z.string().min(1) }),
 ])
 
+const scheduledExpectedDecisionReadSchema = z.union([
+  stewardExpectedDecisionSchema,
+  z.literal('propose_trade'),
+]).transform((decision) => decision === 'propose_trade' ? 'propose_change' as const : decision)
+
 /**
  * The validated frontmatter of one issue. `id` and `body` are NOT here — `id`
  * comes from the filename, `body` from below the frontmatter (see IssueRecord).
@@ -98,7 +103,9 @@ export const issueFrontmatterSchema = z.object({
   /** Steward wake fields, required only when kind is steward-wake. */
   accountId: z.string().min(1).optional(),
   authzLevel: stewardAuthzLevelSchema.optional(),
-  expectedDecision: stewardExpectedDecisionSchema.optional(),
+  // Read-wide migration: pre-v3 scheduled files keep their raw bytes on disk,
+  // while dispatch sees the current in-memory vocabulary.
+  expectedDecision: scheduledExpectedDecisionReadSchema.optional(),
   wakeReason: stewardWakeReasonSchema.optional(),
   deadlineMs: z.number().int().positive().max(60 * 60 * 1000).optional(),
   marketContext: z.record(z.string(), z.unknown()).optional(),

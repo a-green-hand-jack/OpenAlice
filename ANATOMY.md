@@ -113,14 +113,16 @@ state, or ownership.
   Alice's audited workspace route), session records, scrollback, headless tasks,
   and workspace repos. Steward workspaces additionally carry their template-owned
   `.alice/steward/` context/ledger scaffold inside the workspace repo, including
-  per-wake `drafts/`, validator-owned `ledger/decisions.jsonl`, and matching
+  per-wake launcher-owned `snapshots/`, agent-authored `drafts/`,
+  validator-owned `ledger/decisions.jsonl`, versioned `schemas/`, and matching
   `finalize/` markers; Alice's
   steward file-store helpers under `src/workspaces/steward/` read/write that
   workspace-local source of truth, and the manual wake API writes
   `.alice/steward/wakes/*.json`, `.alice/steward/locks/*.json`,
   `.alice/steward/state.json`, and `.alice/steward/supervisor.jsonl` while
-  reading `.alice/steward/ledger/decisions.jsonl`. New decisions use strict v2
-  typed actions and strict-pending semantics; the agent writes only a draft,
+  reading `.alice/steward/ledger/decisions.jsonl`. New decisions use strict v3
+  Decision Intent + composite thesis dispositions while historical v1/v2 remain
+  read-only; the agent writes only a draft,
   `validate-ledger.mjs` is the supported atomic ledger writer and publishes the
   commit marker, and the supervisor retains receipts to detect later semantic
   deletion or mutation. This is corruption-evident inside one agent-writable

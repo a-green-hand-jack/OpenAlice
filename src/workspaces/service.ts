@@ -74,7 +74,12 @@ import { TranscriptWatcher } from './transcript-watcher.js';
 import { detectAgentBinary, runtimeInstallOverride, type AgentAvailability } from './agent-detect.js';
 import { generatePetnameId } from './petname-id.js';
 import { resolveLaunchCommand } from './win-command.js';
-import { WorkspaceCreator } from './workspace-creator.js';
+import {
+  WorkspaceCreator,
+  type StewardRuntimeFace,
+  type StewardRuntimeLeaseContext,
+  type StewardRuntimeRefreshResult,
+} from './workspace-creator.js';
 import { WorkspaceRegistry, type WorkspaceMeta } from './workspace-registry.js';
 import {
   appendSupervisorEvent,
@@ -83,13 +88,16 @@ import {
   evaluateStewardRotation,
   formatStewardWakeMessage,
   injectStewardWake,
+  publishStewardInformationSnapshot,
   prepareStewardSessionConfig,
   readStewardConfig,
   recordStewardRotation,
   StewardLockConflictError,
   StewardSupervisorScanner,
   type StewardSessionConfigPreparation,
-  type StewardWakeEnvelope,
+  type PublishStewardSnapshotInput,
+  type PublishStewardSnapshotResult,
+  type StewardWakeEnvelopeInput,
 } from './steward/index.js';
 import { CodexAppServerDriver } from './steward/machine-driver/codex-app-server-driver.js';
 import { MachineDriverRegistry } from './steward/machine-driver/driver-registry.js';
@@ -132,13 +140,26 @@ export interface WorkspaceService {
   resolveAdapter(meta: WorkspaceMeta, agentId?: string): CliAdapter;
   /**
    * Idempotently refresh a steward workspace's launcher-owned runtime artifacts
-   * (issue #140). No-op for non-steward workspaces. Both wake-dispatch paths call
-   * this before creating/injecting a wake so a persistent workspace predating the
-   * draft protocol is upgraded in place. Returns an actionable error on failure.
+   * (issue #140). No-op for non-steward workspaces. Wake paths use the post-lock
+   * generation lease below; this is the standalone maintenance surface.
    */
   refreshStewardRuntime(
     meta: Pick<WorkspaceMeta, 'template' | 'dir'>,
-  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly message: string }>;
+  ): Promise<StewardRuntimeRefreshResult>;
+  acknowledgeStewardRuntimeFresh(
+    meta: Pick<WorkspaceMeta, 'template' | 'dir'>,
+    face: StewardRuntimeFace,
+    desiredDigest: string,
+  ): Promise<boolean>;
+  withStewardRuntimeLease<T>(
+    meta: Pick<WorkspaceMeta, 'template' | 'dir'>,
+    face: StewardRuntimeFace,
+    operation: (runtime: StewardRuntimeLeaseContext) => Promise<T>,
+  ): Promise<T>;
+  publishStewardSnapshot(
+    meta: Pick<WorkspaceMeta, 'dir'>,
+    input: PublishStewardSnapshotInput,
+  ): Promise<PublishStewardSnapshotResult>;
   /**
    * Decide a steward wake's control face and, when it resolves to the MACHINE
    * (codex app-server) face, dispatch it through the shared driver registry +
@@ -147,11 +168,12 @@ export interface WorkspaceService {
    * historical PTY inline flow, which the caller owns byte-for-byte. The machine
    * branch owns its own wake-record creation (keyed off the native thread UUID),
    * account-lock lifecycle, thread rotation, and structured events, identical
-   * whether the cron scanner or the HTTP route drives it. The caller runs
-   * `refreshStewardRuntime` BEFORE this. Throws `StewardLockConflictError` on an
-   * account-lock conflict and a plain `Error` on a duplicate wake / dispatch
-   * failure (the machine branch has already released the lock + marked the wake
-   * `error` in the latter case).
+   * whether the cron scanner or the HTTP route drives it. Throws
+   * `StewardLockConflictError` on an account-lock conflict and a plain `Error`
+   * on a duplicate wake / dispatch failure (the machine branch has already
+   * released the lock + marked the wake `error` in the latter case). Its machine
+   * branch acquires the account lock, then holds the runtime-generation lease
+   * through turn-start and exact-digest acknowledgement.
    */
   dispatchStewardWakeControlFace(
     meta: WorkspaceMeta,
@@ -273,6 +295,13 @@ export interface CreateWorkspaceServiceOptions {
    * `StewardMachineDriver`, so no real `codex app-server` login is needed.
    */
   readonly machineDriverFactory?: (input: { ws: WorkspaceMeta; adapter: CliAdapter }) => StewardMachineDriver;
+  /** Test seam for pre-wake Snapshot M1 publication. Production always uses
+   * `publishStewardInformationSnapshot`; tests can force the narrow failure
+   * window between publication and wake-record creation. */
+  readonly stewardSnapshotPublisher?: (
+    workspaceDir: string,
+    input: PublishStewardSnapshotInput,
+  ) => Promise<PublishStewardSnapshotResult>;
 }
 
 /**
@@ -293,6 +322,7 @@ export function resumeFromRecord(
 
 export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions): Promise<WorkspaceService> {
   const config = loadConfig({ webPort: opts.webPort });
+  const publishSnapshot = opts.stewardSnapshotPublisher ?? publishStewardInformationSnapshot;
   const inboxStore = opts.inboxStore;
   const processLock = await acquireWorkspaceProcessLock(config.launcherRoot);
 
@@ -759,6 +789,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       lockStore: createStewardLockStore(ws.dir),
       threadStore: createMachineThreadStore(ws.dir),
       logger: launcherLogger,
+      publishSnapshot: (snapshotInput) => publishSnapshot(ws.dir, snapshotInput),
       acquireDriver: (adapter) =>
         // Issue #146 S5 (item 2): evict a memoized-but-DEAD driver (e.g. an
         // app-server that crashed) before reuse, so a wake never dispatches onto
@@ -779,6 +810,8 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
         await machineDriverRegistry.dispose(ws.id);
         return machineDriverRegistry.getOrCreate(ws.id, () => makeMachineDriver(ws, adapter));
       },
+      withRuntimeLease: (operation) =>
+        creator.withStewardRuntimeLease(ws, 'machine', operation),
     });
 
   const dispatchStewardWakeMethod = async (
@@ -787,18 +820,10 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
   ): Promise<{ wakeId: string }> => {
     const now = new Date(wake.nowMs).toISOString();
     const deadline = new Date(wake.nowMs + (wake.deadlineMs ?? 180_000)).toISOString();
-    // Issue #140 merge gate: bring a persistent workspace's launcher-owned runtime
-    // (validator, drafts dir) up to date BEFORE dispatching, so an older workspace
-    // handles the new draft-based wake instruction instead of timing out. Failure
-    // blocks dispatch with an actionable error.
-    const refreshed = await creator.refreshStewardRuntime(ws);
-    if (!refreshed.ok) {
-      throw new Error(`steward runtime refresh failed; not dispatching wake: ${refreshed.message}`);
-    }
     const config = await readStewardConfig(ws, {
       onWarn: (message, detail) => launcherLogger.warn(message, { id: ws.id, ...detail }),
     });
-    const envelope: StewardWakeEnvelope = {
+    const envelope: StewardWakeEnvelopeInput = {
       reason: wake.reason,
       accountId: wake.accountId,
       authzLevel: wake.authzLevel,
@@ -861,51 +886,77 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     }
 
     let created = false;
+    let completed = false;
+    let dispatchCommitted = false;
     try {
-      const record = await wakeStore.create({
-        wakeId: wake.wakeId,
-        deadline,
-        envelope,
-        now,
-      });
-      created = true;
-      const selected = await ensureStewardScheduleSession(
-        ws,
-        config,
-        wake.agent,
-        formatStewardWakeMessage(record),
-      );
-      const injected = selected.injectedByInitialPrompt || await injectStewardWake({
-        pool,
-        sessionId: selected.sessionId,
-        record,
-      });
-      if (!injected) {
-        const message = `session not running: ${selected.sessionId}`;
-        await wakeStore.updateStatus(wake.wakeId, 'error', {
-          now: new Date().toISOString(),
-          completedAt: new Date().toISOString(),
+      return await creator.withStewardRuntimeLease(ws, 'pty', async ({ forceFresh }) => {
+        const published = await publishSnapshot(ws.dir, {
+          wakeId: wake.wakeId,
+          asOf: now,
+          envelope,
+        });
+        const record = await wakeStore.create({
+          wakeId: wake.wakeId,
+          deadline,
+          envelope: published.envelope,
+          now,
+        });
+        created = true;
+        const selected = await ensureStewardScheduleSession(
+          ws,
+          config,
+          wake.agent,
+          formatStewardWakeMessage(record),
+          forceFresh,
+        );
+        const injected = selected.injectedByInitialPrompt || await injectStewardWake({
+          pool,
           sessionId: selected.sessionId,
-          error: message,
-        }).catch(() => undefined);
-        throw new Error(message);
-      }
-      const injectedAt = new Date().toISOString();
-      await wakeStore.updateStatus(wake.wakeId, 'injected', {
-        now: injectedAt,
-        injectedAt,
-        sessionId: selected.sessionId,
+          record,
+        });
+        if (!injected) {
+          const message = `session not running: ${selected.sessionId}`;
+          await wakeStore.updateStatus(wake.wakeId, 'error', {
+            now: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+            sessionId: selected.sessionId,
+            error: message,
+          }).catch(() => undefined);
+          throw new Error(message);
+        }
+        // Irreversible boundary: a seeded fresh PTY or completed two-phase
+        // injection is already executing the wake. Later bookkeeping failures
+        // retain the wake + account lock so no concurrent wake is admitted.
+        dispatchCommitted = true;
+        const injectedAt = new Date().toISOString();
+        await wakeStore.updateStatus(wake.wakeId, 'injected', {
+          now: injectedAt,
+          injectedAt,
+          sessionId: selected.sessionId,
+        });
+        launcherLogger.info('schedule.steward_wake_injected', {
+          wsId: ws.id,
+          issueId: wake.issueId,
+          wakeId: wake.wakeId,
+          sessionId: selected.sessionId,
+          reused: selected.reused,
+          resumed: selected.resumed,
+        });
+        completed = true;
+        return { wakeId: wake.wakeId };
       });
-      launcherLogger.info('schedule.steward_wake_injected', {
-        wsId: ws.id,
-        issueId: wake.issueId,
-        wakeId: wake.wakeId,
-        sessionId: selected.sessionId,
-        reused: selected.reused,
-        resumed: selected.resumed,
-      });
-      return { wakeId: wake.wakeId };
     } catch (err) {
+      if (completed || dispatchCommitted) {
+        launcherLogger.warn(completed
+          ? 'schedule.steward_runtime_fresh_ack_failed'
+          : 'schedule.steward_post_dispatch_bookkeeping_failed', {
+          wsId: ws.id,
+          face: 'pty',
+          wakeId: wake.wakeId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        return { wakeId: wake.wakeId };
+      }
       if (created) {
         await wakeStore.updateStatus(wake.wakeId, 'error', {
           now: new Date().toISOString(),
@@ -923,6 +974,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     config: Record<string, unknown>,
     requestedAgent: string | undefined,
     initialWakePrompt?: string,
+    forceFreshRuntime = false,
   ): Promise<{
     sessionId: string;
     agent: string;
@@ -941,7 +993,11 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     const canUseConfigured = configuredSessionId !== null &&
       (requestedAgent === undefined || requestedAgent === configuredRecord?.agent || requestedAgent === configuredAgent);
 
-    if (configuredSessionId && canUseConfigured && pool.get(configuredSessionId)) {
+    if (forceFreshRuntime && configuredSessionId && pool.get(configuredSessionId)) {
+      pool.disposeToken(configuredSessionId, 'steward_runtime_upgraded');
+    }
+
+    if (!forceFreshRuntime && configuredSessionId && canUseConfigured && pool.get(configuredSessionId)) {
       // Issue #132: rotate instead of reusing when the running session's
       // context is over threshold / already overflowed. Continuity is rebuilt
       // from workspace files by the Wake Loop, not carried over.
@@ -987,7 +1043,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       });
       return { ...spawned, rotated: true };
     }
-    if (configuredRecord && canUseConfigured) {
+    if (!forceFreshRuntime && configuredRecord && canUseConfigured) {
       return resumeStewardScheduleSession(ws, configuredRecord);
     }
     if (!ws.agents.includes(agent)) {
@@ -1562,6 +1618,11 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
     transcriptWatcher,
     resolveAdapter,
     refreshStewardRuntime: (meta) => creator.refreshStewardRuntime(meta),
+    acknowledgeStewardRuntimeFresh: (meta, face, desiredDigest) =>
+      creator.acknowledgeStewardRuntimeFresh(meta, face, desiredDigest),
+    withStewardRuntimeLease: (meta, face, operation) =>
+      creator.withStewardRuntimeLease(meta, face, operation),
+    publishStewardSnapshot: (meta, input) => publishSnapshot(meta.dir, input),
     dispatchStewardWakeControlFace: dispatchStewardWakeControlFaceMethod,
     dispatchStewardWake: dispatchStewardWakeMethod,
     publicMeta,

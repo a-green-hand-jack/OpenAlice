@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { stewardMachineThreadPath } from '../paths.js';
@@ -100,6 +100,13 @@ export class MachineThreadStore {
     await writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
     await rename(tmp, path);
     return state;
+  }
+
+  /** Forget the resumable thread handle before a launcher instruction/runtime
+   * protocol upgrade. The provider thread may still exist remotely, but no
+   * later wake can resume it with stale developer instructions. */
+  async clear(): Promise<void> {
+    await rm(this.path(), { force: true });
   }
 
   path(): string {

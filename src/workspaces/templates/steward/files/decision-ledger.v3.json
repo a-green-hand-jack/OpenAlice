@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openalice.local/schemas/steward/decision-ledger.v3.json",
+  "title": "OpenAlice Steward Decision Ledger v3",
+  "description": "Auxiliary structural output schema. .alice/steward/validate-ledger.mjs remains authoritative for cross-field, snapshot-binding, fingerprint, and composite thesis invariants.",
+  "x-openalice-role": "auxiliary-structural",
+  "x-openalice-authoritative-validator": ".alice/steward/validate-ledger.mjs",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version", "wakeId", "at", "accountId", "decision", "status",
+    "completion", "checklist", "thesis", "actions", "pendingHash",
+    "invalidation", "cost", "intent", "thesisDispositions"
+  ],
+  "properties": {
+    "version": { "const": 3 },
+    "wakeId": { "$ref": "#/$defs/nonEmpty" },
+    "at": { "type": "string", "format": "date-time" },
+    "accountId": { "$ref": "#/$defs/nonEmpty" },
+    "decision": { "enum": ["no_trade", "propose_change", "reduce_risk", "blocked"] },
+    "status": { "enum": ["done", "blocked", "error"] },
+    "context": {
+      "type": "object",
+      "required": ["manifestPath", "manifestSha256"],
+      "properties": {
+        "manifestPath": { "$ref": "#/$defs/nonEmpty" },
+        "manifestSha256": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "completion": {
+      "type": "object",
+      "required": ["reason", "evidenceRefs"],
+      "properties": {
+        "reason": { "$ref": "#/$defs/nonEmpty" },
+        "evidenceRefs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmpty" } }
+      }
+    },
+    "checklist": {
+      "type": "object",
+      "required": ["account", "positions", "orders", "risk", "market", "history"],
+      "properties": {
+        "account": { "$ref": "#/$defs/nonEmpty" },
+        "positions": { "$ref": "#/$defs/nonEmpty" },
+        "orders": { "$ref": "#/$defs/nonEmpty" },
+        "risk": { "$ref": "#/$defs/nonEmpty" },
+        "market": { "$ref": "#/$defs/nonEmpty" },
+        "history": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "thesis": { "type": "string" },
+    "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
+    "pendingHash": { "anyOf": [{ "$ref": "#/$defs/nonEmpty" }, { "type": "null" }] },
+    "invalidation": { "type": "string" },
+    "cost": {
+      "type": "object",
+      "required": [
+        "model", "inputTokens", "outputTokens", "modelCostUsd",
+        "allocatedServerCostUsd", "tradingFeesUsd", "estimatedSlippageUsd",
+        "totalEstimatedCostUsd"
+      ],
+      "properties": {
+        "model": { "type": ["string", "null"] },
+        "inputTokens": { "type": ["integer", "null"], "minimum": 0 },
+        "outputTokens": { "type": ["integer", "null"], "minimum": 0 },
+        "modelCostUsd": { "type": ["number", "null"], "minimum": 0 },
+        "allocatedServerCostUsd": { "type": ["number", "null"], "minimum": 0 },
+        "tradingFeesUsd": { "type": ["number", "null"], "minimum": 0 },
+        "estimatedSlippageUsd": { "type": ["number", "null"], "minimum": 0 },
+        "totalEstimatedCostUsd": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "intent": { "anyOf": [{ "$ref": "#/$defs/singleIntent" }, { "$ref": "#/$defs/portfolioIntent" }, { "type": "null" }] },
+    "thesisDispositions": { "type": "array", "items": { "$ref": "#/$defs/disposition" } }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["decision"],
+        "properties": { "decision": { "enum": ["propose_change", "reduce_risk"] } }
+      },
+      "then": {
+        "properties": {
+          "intent": {
+            "oneOf": [
+              { "$ref": "#/$defs/singleIntent" },
+              { "$ref": "#/$defs/portfolioIntent" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["decision"],
+        "properties": { "decision": { "enum": ["no_trade", "blocked"] } }
+      },
+      "then": { "properties": { "intent": { "type": "null" } } }
+    },
+    {
+      "if": {
+        "required": ["actions"],
+        "properties": {
+          "actions": {
+            "contains": {
+              "type": "object",
+              "required": ["outcome"],
+              "properties": { "outcome": { "const": "executed" } }
+            }
+          }
+        }
+      },
+      "then": { "properties": { "pendingHash": { "type": "null" } } }
+    }
+  ],
+  "$defs": {
+    "nonEmpty": { "type": "string", "minLength": 1 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "percentage": { "type": "number", "minimum": 0, "maximum": 100 },
+    "exposure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minPct", "maxPct"],
+      "properties": { "minPct": { "$ref": "#/$defs/percentage" }, "maxPct": { "$ref": "#/$defs/percentage" } }
+    },
+    "invalidation": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "value", "note"],
+          "properties": {
+            "kind": { "enum": ["price_below", "price_above"] },
+            "value": { "type": "string", "pattern": "^(?:[0-9]+|[0-9]+\\.[0-9]+|\\.[0-9]+)$" },
+            "note": { "$ref": "#/$defs/nonEmpty" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "note"],
+          "properties": { "kind": { "enum": ["time_expiry", "thesis"] }, "note": { "$ref": "#/$defs/nonEmpty" } }
+        }
+      ]
+    },
+    "target": {
+      "type": "object",
+      "required": ["direction", "instrument", "targetExposure", "invalidation"],
+      "properties": {
+        "direction": { "enum": ["long", "short", "flat"] },
+        "instrument": { "$ref": "#/$defs/nonEmpty" },
+        "targetExposure": { "$ref": "#/$defs/exposure" },
+        "invalidation": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/invalidation" } }
+      }
+    },
+    "intentCommon": {
+      "type": "object",
+      "required": ["confidence", "maxAcceptableLossPct", "timeHorizon", "evidence", "snapshotId", "snapshotSha256"],
+      "properties": {
+        "confidence": { "enum": ["low", "medium", "high"] },
+        "maxAcceptableLossPct": { "$ref": "#/$defs/percentage" },
+        "timeHorizon": {
+          "type": "object", "additionalProperties": false,
+          "required": ["unit", "value"],
+          "properties": { "unit": { "enum": ["hour", "day", "week", "month"] }, "value": { "type": "integer", "minimum": 1 } }
+        },
+        "evidence": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["ref", "note"],
+            "properties": { "ref": { "$ref": "#/$defs/nonEmpty" }, "note": { "$ref": "#/$defs/nonEmpty" } }
+          }
+        },
+        "snapshotId": { "type": "string", "pattern": "^snap:" },
+        "snapshotSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "singleIntent": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/intentCommon" },
+        { "$ref": "#/$defs/target" },
+        { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "single" } } }
+      ]
+    },
+    "portfolioIntent": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/intentCommon" },
+        {
+          "type": "object", "required": ["kind", "targets"],
+          "properties": {
+            "kind": { "const": "portfolio" },
+            "targets": {
+              "type": "array", "minItems": 2,
+              "items": { "allOf": [{ "$ref": "#/$defs/target" }], "unevaluatedProperties": false }
+            }
+          }
+        }
+      ]
+    },
+    "disposition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["wakeId", "instrument", "disposition", "note"],
+      "properties": {
+        "wakeId": { "$ref": "#/$defs/nonEmpty" },
+        "instrument": { "$ref": "#/$defs/nonEmpty" },
+        "disposition": { "enum": ["supersede", "invalidate", "expire", "keep"] },
+        "note": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": ["kind", "params", "outcome"],
+      "properties": {
+        "kind": { "enum": ["order_place", "order_commit", "order_modify", "order_cancel", "position_close", "git_reject"] },
+        "aliceId": { "$ref": "#/$defs/nonEmpty" },
+        "params": { "type": "object" },
+        "commitHash": { "type": ["string", "null"], "minLength": 1 },
+        "outcome": { "enum": ["executed", "awaiting_approval", "policy_denied", "failed"] },
+        "violations": { "type": "array" }
+      }
+    }
+  }
+}

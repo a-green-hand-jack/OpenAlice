@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -210,6 +210,30 @@ describe('ScheduleScanner', () => {
       nowMs: NOW,
     }))
     expect(markers.get('w1', 'steward-aapl')).toBe(NOW)
+  })
+
+  it('wide-reads legacy propose_trade frontmatter as propose_change without rewriting the issue file', async () => {
+    const ws = await makeWs('w1', [{
+      id: 'legacy-steward',
+      title: 'legacy steward observe',
+      when: { kind: 'every', every: '30m' },
+      kind: 'steward-wake',
+      accountId: 'mock-simulator-1',
+      authzLevel: 'paper',
+      expectedDecision: 'propose_trade',
+    }])
+    const path = join(ws.dir, '.alice/issues/legacy-steward.md')
+    const before = await readFile(path, 'utf8')
+    const dispatchStewardWake = vi.fn(async () => ({ wakeId: 'wake-legacy' }))
+    const { scanner } = scannerFor([ws], { dispatchStewardWake })
+
+    await scanner.scan()
+
+    expect(dispatchStewardWake).toHaveBeenCalledWith(ws, expect.objectContaining({
+      expectedDecision: 'propose_change',
+    }))
+    expect(await readFile(path, 'utf8')).toBe(before)
+    expect(before).toContain('expectedDecision: propose_trade')
   })
 
   it('falls back to title+body for the fire prompt when `what` is absent', async () => {

@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { dataPath, defaultPath } from '@/core/paths.js';
 
-import { injectWorkspaceContext } from './context-injector.js';
+import { injectWorkspaceContext, refreshWorkspaceInstructions } from './context-injector.js';
 import type { TemplateMeta } from './template-registry.js';
 
 // src/workspaces/ — this spec's directory.
@@ -91,6 +91,23 @@ describe('injectWorkspaceContext — persona', () => {
     expect(existsSync(join(dir, 'CLAUDE.md'))).toBe(false);
     expect(existsSync(join(dir, 'AGENTS.md'))).toBe(false);
   });
+
+  it('refreshes stale persistent-workspace instruction faces byte-identically and then becomes a no-op', async () => {
+    const template = makeTemplate({
+      name: 'steward',
+      injectPersona: true,
+      filesDir: STEWARD_FILES,
+      templateDir: STEWARD_DIR,
+    });
+    await writeFile(join(dir, 'AGENTS.md'), 'stale v2 instructions\n', 'utf8');
+    await writeFile(join(dir, 'CLAUDE.md'), 'stale v2 instructions\n', 'utf8');
+
+    await expect(refreshWorkspaceInstructions({ template, dir })).resolves.toEqual({ changed: true });
+    expect(await read('AGENTS.md')).toBe(await read('CLAUDE.md'));
+    expect(await read('AGENTS.md')).toContain('Decision Ledger Shape');
+    expect(await read('AGENTS.md')).toContain('"version": 3');
+    await expect(refreshWorkspaceInstructions({ template, dir })).resolves.toEqual({ changed: false });
+  });
 });
 
 describe('injectWorkspaceContext — skills', () => {
@@ -143,7 +160,9 @@ describe('injectWorkspaceContext — skills', () => {
 describe('injectWorkspaceContext — steward context manifest', () => {
   it('writes a manifest that versions steward wrapper, instructions, skills, and schemas', async () => {
     await mkdir(join(dir, '.alice', 'steward'), { recursive: true });
+    await mkdir(join(dir, '.alice', 'steward', 'schemas'), { recursive: true });
     await writeFile(join(dir, '.alice', 'steward', 'README.md'), '# Steward Wrapper\n');
+    await writeFile(join(dir, '.alice', 'steward', 'schemas', 'decision-ledger.v3.json'), '{"version":3}\n');
 
     await injectWorkspaceContext({
       template: makeTemplate({
@@ -166,7 +185,11 @@ describe('injectWorkspaceContext — steward context manifest', () => {
       wrapperPrompt: { path: string; sha256: string };
       instructions: Array<{ path: string; sha256: string }>;
       skills: Array<{ name: string; path: string; sha256: string }>;
-      schemas: { wake: number; decisionLedger: number };
+      schemas: {
+        wake: number;
+        decisionLedger: number;
+        decisionLedgerArtifact: { path: string; sha256: string };
+      };
     };
 
     expect(manifest.version).toBe(1);
@@ -193,6 +216,13 @@ describe('injectWorkspaceContext — steward context manifest', () => {
       path: '.agents/skills/alice-uta/SKILL.md',
       sha256: await sha256('.agents/skills/alice-uta/SKILL.md'),
     });
-    expect(manifest.schemas).toEqual({ wake: 1, decisionLedger: 1 });
+    expect(manifest.schemas).toEqual({
+      wake: 1,
+      decisionLedger: 3,
+      decisionLedgerArtifact: {
+        path: '.alice/steward/schemas/decision-ledger.v3.json',
+        sha256: await sha256('.alice/steward/schemas/decision-ledger.v3.json'),
+      },
+    });
   });
 });

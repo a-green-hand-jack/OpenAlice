@@ -13,3 +13,4 @@ export * from './config.js';
 export * from './supervisor-scanner.js';
 export * from './rotation.js';
 export * from './session-config.js';
+export * from './snapshot.js';

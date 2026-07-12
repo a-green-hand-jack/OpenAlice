@@ -24,7 +24,12 @@ import {
   type StewardRotationReason,
 } from '../rotation.js';
 import { appendSupervisorEvent } from '../supervisor.js';
-import type { StewardWakeEnvelope, StewardWakeRecord } from '../types.js';
+import type {
+  StewardWakeEnvelope,
+  StewardWakeEnvelopeInput,
+  StewardWakeRecord,
+} from '../types.js';
+import type { PublishStewardSnapshotResult } from '../snapshot.js';
 import type { StewardWakeStore } from '../wake-store.js';
 import { ClaudeAgentSdkDriver } from './claude-agent-sdk-driver.js';
 import { CodexAppServerDriver } from './codex-app-server-driver.js';
@@ -234,9 +239,15 @@ export interface DispatchMachineWakeInput {
   /**
    * Fired once the wake RECORD exists on disk (controlFace:'machine',
    * sessionId=threadId). Lets the caller mirror its PTY error/lock bookkeeping —
-   * a later throw marks the wake `error` + releases the lock.
+   * a later pre-dispatch throw marks the wake `error` + releases the lock.
    */
-  readonly onWakeCreated?: () => void;
+  readonly onWakeCreated?: (wake: StewardWakeRecord) => void;
+  /**
+   * Fired immediately after `turn/started` (or fast completion) crosses the
+   * irreversible dispatch boundary, before injected-status persistence. Any
+   * later bookkeeping failure must retain the live wake and account lock.
+   */
+  readonly onDispatchCommitted?: (result: DispatchMachineWakeCommit) => void;
   /**
    * The workspace's `.alice/steward/config.json` (issue #146 S4, item 5). Only
    * `sessionRotation.threshold` is read here, via the SAME `resolveRotationThreshold`
@@ -259,7 +270,7 @@ export interface DispatchMachineWakeInput {
   readonly startedTimeoutMs?: number;
 }
 
-export interface DispatchMachineWakeResult {
+export interface DispatchMachineWakeCommit {
   readonly threadId: string;
   readonly resumed: boolean;
   /**
@@ -267,6 +278,9 @@ export interface DispatchMachineWakeResult {
    * started and the store overwritten (S3 reset policy).
    */
   readonly threadReset: boolean;
+}
+
+export interface DispatchMachineWakeResult extends DispatchMachineWakeCommit {
   readonly injectedAt: string;
 }
 
@@ -328,7 +342,7 @@ export async function dispatchMachineWake(input: DispatchMachineWakeInput): Prom
     controlFace: 'machine',
     sessionId: resolved.threadId,
   });
-  input.onWakeCreated?.();
+  input.onWakeCreated?.(record);
 
   // (d)+(e) Fire the wake as ONE turn with the SAME body the PTY path injects (no
   // `\r`, no submit delay — those are PTY pathologies). Block only until
@@ -350,6 +364,11 @@ export async function dispatchMachineWake(input: DispatchMachineWakeInput): Prom
     ...(input.startedTimeoutMs !== undefined ? { startedTimeoutMs: input.startedTimeoutMs } : {}),
   });
 
+  input.onDispatchCommitted?.({
+    threadId: resolved.threadId,
+    resumed: resolved.resumed,
+    threadReset: resolved.reset,
+  });
   const injectedAt = new Date().toISOString();
   await wakeStore.updateStatus(wakeId, 'injected', {
     now: injectedAt,
@@ -723,9 +742,10 @@ function errText(err: unknown): string {
 // callbacks so this stays unit-testable with mock stores + a mock driver factory
 // while `service.ts` binds them to the live `MachineDriverRegistry` closure — the
 // "surface what the route needs through the service interface, not by exporting
-// globals" rule from the S3 review. The caller runs `refreshStewardRuntime`
-// BEFORE this; on a `{ face: 'pty' }` outcome the caller owns its own PTY inline
-// flow (byte-identical to pre-#146).
+// globals" rule from the S3 review. On a `{ face: 'pty' }` outcome the caller
+// owns its own PTY inline flow (byte-identical to pre-#146). The machine branch
+// acquires its account lock before entering the runtime-generation lease, so no
+// cached pre-lock refresh can authorize reuse of an obsolete thread.
 
 export interface StewardWakeControlFaceInput {
   /** The workspace's `.alice/steward/config.json` (already read by the caller). */
@@ -737,7 +757,7 @@ export interface StewardWakeControlFaceInput {
   readonly deadline: string;
   /** ISO dispatch instant. */
   readonly now: string;
-  readonly envelope: StewardWakeEnvelope;
+  readonly envelope: StewardWakeEnvelopeInput;
 }
 
 export type StewardWakeControlFaceOutcome =
@@ -767,6 +787,13 @@ export interface StewardWakeControlFaceDeps {
   readonly lockStore: StewardLockStore;
   readonly threadStore: MachineThreadStore;
   readonly logger: Logger;
+  /** Publishes Snapshot M1 after the account lock and before any driver/thread/wake
+   *  side effect. A rejection is therefore a clean pre-dispatch failure. */
+  readonly publishSnapshot: (input: {
+    readonly wakeId: string;
+    readonly asOf: string;
+    readonly envelope: StewardWakeEnvelopeInput;
+  }) => Promise<PublishStewardSnapshotResult>;
   /**
    * Get-or-create the workspace's machine driver (bound to the service's
    * `MachineDriverRegistry`). Called ONLY once the machine path commits — after
@@ -780,6 +807,15 @@ export interface StewardWakeControlFaceDeps {
    * `rotateThread` hook.
    */
   readonly rotateDriver: (adapter: CliAdapter, input: { readonly disposedThreadId: string }) => Promise<StewardMachineDriver>;
+  /**
+   * Final authoritative runtime refresh plus a generation lease. The service
+   * binds this to `WorkspaceCreator.withStewardRuntimeLease`; it is entered only
+   * after the account lock and auto-acknowledges the exact generation after the
+   * detached turn has started successfully.
+   */
+  readonly withRuntimeLease: <T>(
+    operation: (runtime: { readonly forceFresh: boolean }) => Promise<T>,
+  ) => Promise<T>;
   /** Test seam for the `turn/started` bounded wait (item 3). */
   readonly startedTimeoutMs?: number;
 }
@@ -816,38 +852,92 @@ export async function dispatchStewardWakeControlFace(
   }
 
   let created = false;
+  let createdRecord: StewardWakeRecord | null = null;
+  let dispatchCommitted: DispatchMachineWakeCommit | null = null;
+  let completedOutcome: Extract<StewardWakeControlFaceOutcome, { face: 'machine' }> | null = null;
   try {
-    // Driver construction happens HERE, only once dispatch is committed (S3
-    // MINOR-3): a duplicate-wakeId or lock conflict above never builds a driver.
-    const driver = deps.acquireDriver(adapter);
-    const result = await dispatchMachineWake({
-      workspaceDir: deps.workspaceDir,
-      wsId: deps.wsId,
-      cwd: deps.cwd,
-      driver,
-      provider: agentProvider(adapter.id),
-      wakeStore: deps.wakeStore,
-      threadStore: deps.threadStore,
-      wake: { wakeId: input.wakeId, deadline: input.deadline, envelope: input.envelope },
-      now: input.now,
-      logger: deps.logger,
-      config: input.config,
-      rotateThread: (rotInput) => deps.rotateDriver(adapter, rotInput),
-      ...(deps.startedTimeoutMs !== undefined ? { startedTimeoutMs: deps.startedTimeoutMs } : {}),
-      onWakeCreated: () => {
-        created = true;
-      },
+    return await deps.withRuntimeLease(async ({ forceFresh }) => {
+      const published = await deps.publishSnapshot({
+        wakeId: input.wakeId,
+        asOf: input.now,
+        envelope: input.envelope,
+      });
+      // Driver construction happens HERE, only once dispatch is committed (S3
+      // MINOR-3): a duplicate-wakeId or lock conflict above never builds a driver.
+      let driver: StewardMachineDriver;
+      if (forceFresh) {
+        const stale = await deps.threadStore.read();
+        await deps.threadStore.clear();
+        driver = await deps.rotateDriver(adapter, {
+          disposedThreadId: stale?.threadId ?? 'runtime-upgrade',
+        });
+      } else {
+        driver = deps.acquireDriver(adapter);
+      }
+      const result = await dispatchMachineWake({
+        workspaceDir: deps.workspaceDir,
+        wsId: deps.wsId,
+        cwd: deps.cwd,
+        driver,
+        provider: agentProvider(adapter.id),
+        wakeStore: deps.wakeStore,
+        threadStore: deps.threadStore,
+        wake: { wakeId: input.wakeId, deadline: input.deadline, envelope: published.envelope },
+        now: input.now,
+        logger: deps.logger,
+        config: input.config,
+        rotateThread: (rotInput) => deps.rotateDriver(adapter, rotInput),
+        ...(deps.startedTimeoutMs !== undefined ? { startedTimeoutMs: deps.startedTimeoutMs } : {}),
+        onWakeCreated: (wake) => {
+          created = true;
+          createdRecord = wake;
+        },
+        onDispatchCommitted: (committed) => {
+          dispatchCommitted = committed;
+        },
+      });
+      const wake = await deps.wakeStore.get(input.wakeId);
+      if (!wake) throw new Error(`machine wake vanished after dispatch: ${input.wakeId}`);
+      completedOutcome = {
+        face: 'machine' as const,
+        wake,
+        threadId: result.threadId,
+        resumed: result.resumed,
+        threadReset: result.threadReset,
+      };
+      return completedOutcome;
     });
-    const wake = await deps.wakeStore.get(input.wakeId);
-    if (!wake) throw new Error(`machine wake vanished after dispatch: ${input.wakeId}`);
-    return {
-      face: 'machine',
-      wake,
-      threadId: result.threadId,
-      resumed: result.resumed,
-      threadReset: result.threadReset,
-    };
   } catch (err) {
+    // The turn has already started and the wake is injected; only the
+    // post-success digest acknowledgement can fail after `completedOutcome` is
+    // assigned. Keep the wake + account lock live and force the next wake fresh
+    // rather than falsely terminalizing a running turn.
+    if (completedOutcome) {
+      deps.logger.warn('schedule.steward_runtime_fresh_ack_failed', {
+        wsId: deps.wsId,
+        face: 'machine',
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return completedOutcome;
+    }
+    const committed = dispatchCommitted as DispatchMachineWakeCommit | null;
+    const committedWake = createdRecord as StewardWakeRecord | null;
+    if (committed && committedWake) {
+      deps.logger.warn('schedule.steward_post_dispatch_bookkeeping_failed', {
+        wsId: deps.wsId,
+        face: 'machine',
+        wakeId: input.wakeId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      const retained = await deps.wakeStore.get(input.wakeId).catch(() => null);
+      return {
+        face: 'machine',
+        wake: retained ?? committedWake,
+        threadId: committed.threadId,
+        resumed: committed.resumed,
+        threadReset: committed.threadReset,
+      };
+    }
     if (created) {
       await deps.wakeStore
         .updateStatus(input.wakeId, 'error', {

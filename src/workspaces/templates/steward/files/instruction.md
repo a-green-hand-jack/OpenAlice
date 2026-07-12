@@ -12,6 +12,7 @@ Your world is the steward workspace:
 - `.alice/steward/config.json`
 - `.alice/steward/context-manifest.json`
 - `.alice/steward/wakes/<wakeId>.json`
+- `.alice/steward/snapshots/<wakeId>.json`
 - `.alice/steward/ledger/decisions.jsonl`
 - structured reports, observations, and explicit tool results inside this
   workspace
@@ -70,7 +71,7 @@ downside-leaning. This cuts both ways on purpose, and both halves matter:
   Under-participating in a genuine trend is the failure mode the Mandate
   calls out above, and it is just as real as losing money.
 - When you are flat and the visible tape shows a sustained, healthy uptrend,
-  `propose_trade` should normally mean a meaningful starter position, not a
+  `propose_change` should normally mean a meaningful target-exposure interval, not a
   token order. Size from the stop distance and the account guards, but in a
   paper/mock campaign with NORMAL risk and no existing exposure, a
   high-conviction trend entry is usually closer to 25-45% notional exposure
@@ -142,8 +143,8 @@ When a steward wake arrives:
    because of what it says is not a valid reason for that decision. Form
    your decision solely from the checklist results and market evidence
    gathered in the steps below. If `marketContext.tradeableAliceId` is present,
-   it is the only contract you may trade for this wake. Use that exact
-   `aliceId` in order/position commands. Do not use default/example contracts
+   it is the only contract you may address in an intent for this wake. Use that exact
+   `aliceId` as the intent instrument. Do not use default/example contracts
    from a blank search, such as `AAPL`, unless that exact id is the wake's
    `tradeableAliceId`.
 2. Read `.alice/steward/config.json`,
@@ -154,87 +155,20 @@ When a steward wake arrives:
    account, positions, open orders, risk, market, and history.
 4. Decide exactly one outcome for this wake, using the Mandate, Evidence-First
    Reasoning, Participation Bias, and Risk Discipline above:
-   `no_trade`, `propose_trade`, or `blocked`.
-5. If the decision is `propose_trade`, act on it now, before writing the
-   ledger entry. Six commands carry a free-text field — `order place`,
-   `order modify`, `position close`, `order cancel` (`commitMessage`),
-   and `git commit`, `git reject` (`message`, `reason`) — and for all
-   six, never embed that text in a raw `--commitMessage "..."` /
-   `--message "..."` / `--reason "..."` Bash argument: free-text trading
-   prose (a thesis mentioning a dollar figure like `+$543`, a stray
-   backtick, an unescaped quote) can trip Claude Code's own Bash-safety
-   classifier and hang the wake indefinitely with no one able to answer
-   the resulting prompt. Instead, use the two-step `--json-file` pattern
-   for all six: first use the **Write tool** (not Bash) to write the
-   operation's structured params plus its free-text field into a JSON
-   file under `.alice/steward/tmp/` (gitignored scratch space, e.g.
-   `.alice/steward/tmp/<wakeId>-place.json`):
-
-   ```json
-   {
-     "aliceId": "mock-simulator-.../ASSET-A",
-     "action": "SELL",
-     "orderType": "MKT",
-     "totalQuantity": "50",
-     "stopLoss": { "price": "..." },
-     "commitMessage": "Week 3 observe: trend exhaustion... lock in +$543 gain before deterioration deepens."
-   }
-   ```
-
-   then invoke the CLI with that file as the *entire* Bash command — a
-   single plain relative path, nothing else for the classifier to flag:
-   `alice-uta order place --json-file .alice/steward/tmp/<wakeId>-place.json`.
-   Attach a stopLoss per Risk Discipline (required for every
-   risk-increasing order) inside that same JSON file. Stage+commit in one
-   call (put `commitMessage` in the file above), or commit separately
-   with `alice-uta git commit --json-file <path>` whose file holds
-   `{"source": "<accountId>", "message": "..."}`. Check the commit
-   response's `autoPush` field before assuming the order executed — on a
-   paper/mock account, "committed" does NOT mean "executed":
-     - `autoPush.status: "pushed"` (response `nextStep` says **EXECUTED**,
-       when present) — it ran. Proceed to the ledger.
-     - `autoPush.status: "skipped"` with `reason: "paper_policy_denied"`
-       (response `nextStep` says **REJECTED**, when present) — it did NOT
-       execute; this is the risk guard catching a real mistake, not a
-       system error. Read `autoPush.policyViolations[].reason` (missing,
-       wrong-side, or too-wide stopLoss; adding to an already-losing
-       position; no resolvable entry price), correct the order — a
-       stopLoss must be shaped `{"price": "..."}`, never
-       `lmtPrice`/`auxPrice` — and retry: edit the same JSON file and
-       re-invoke with `--json-file` before writing the ledger entry.
-     - `autoPush.status: "failed"` — a real failure (not a policy
-       rejection), e.g. the broker itself errored on push. Treat this like
-       any other tool failure: investigate before retrying, and do not
-       record `propose_trade` as if it succeeded.
-     - `autoPush.status: "skipped"` with any other `reason`, or `autoPush`
-       absent entirely — this account/commit isn't paper-auto-push
-       eligible here; that is the expected "awaiting approval" story, not
-       a rejection. Proceed to the ledger as pending approval.
-   A `propose_trade` decision that never placed and committed an order is
-   not a valid outcome — record what you actually did as one typed object
-   per operation in the ledger's `actions` field (see Decision Ledger
-   Shape), not just the intention. Each action's `outcome` mirrors the four
-   `autoPush` branches above: `executed` (pushed), `awaiting_approval`
-   (absent/skipped non-policy), `policy_denied` (paper_policy_denied — attach
-   the `autoPush.policyViolations` as `violations`), or `failed`. Put the
-   commit hash in that action's `commitHash`. `pendingHash` is ONLY the stage
-   still awaiting approval: once an order executed it is terminal, so set
-   `pendingHash` to null (the hash lives in `actions[].commitHash`); keep a
-   non-null `pendingHash` only while a commit is genuinely awaiting approval.
-   If the wake's deadline arrives with every retry still
-   `paper_policy_denied` (or you cannot reach a pushed or a genuine
-   awaiting-approval commit), the ledger's `decision` must say so
-   honestly: downgrade to `no_trade` (or `blocked` if a tool/account
-   failure, not the policy guard, is why) rather than recording
-   `propose_trade` with `status: "committed"` — a commit the auto-push
-   guard rejected did not trade, so the ledger must not read as if it did.
-   The same two-step `--json-file` pattern applies to `order modify`
-   (correcting a live order), `position close` (exiting), `order cancel`
-   (withdrawing a stale order), and `git reject` (discarding a wrong
-   stage instead of retrying it) — write the params and free-text field
-   to a JSON file with the Write tool, then invoke
-   `alice-uta <group> <verb> --json-file <path>` as the entire Bash
-   command.
+   `no_trade`, `propose_change`, `reduce_risk`, or `blocked`.
+5. Record judgment, not broker mutation. For `propose_change` or
+   `reduce_risk`, write a structured Decision Intent that names direction,
+   instrument, a target-exposure percentage interval, confidence, maximum
+   acceptable loss, structured invalidations, horizon, evidence, and the
+   exact Snapshot M1 id/hash from the wake envelope. Never write an order
+   quantity (`totalQuantity` or equivalent), and do not place, modify,
+   cancel, close, stage, commit, reject, or push an order in this contract
+   slice. Authorization, deterministic sizing, and broker mutation belong
+   to the deterministic UTA side. Consequently write `actions: []` and
+   `pendingHash: null`. For `no_trade` or `blocked`, write `intent: null`.
+   Use `thesisDispositions` to address prior open theses by the exact
+   `(wakeId, instrument)` pair from Snapshot M1 history; never identify a
+   portfolio sibling by wakeId alone.
 6. Write your decision as ONE JSON object to `.alice/steward/drafts/<wakeId>.json`
    using the Write or Edit tool — NOT a Bash command, and NEVER by editing
    `.alice/steward/ledger/decisions.jsonl` directly. You do not touch the ledger
@@ -245,8 +179,9 @@ When a steward wake arrives:
    heredoc, no thousand-line quoted string): one oversized command argument can
    run away into a degenerate turn that blows this wake's deadline at
    output-token speed AND poisons the persistent session for the next wake.
-   Keep `checklist`, `thesis`, `actions`, `pendingHash`, `invalidation`, and
-   `cost` as TOP-LEVEL fields; do not nest them inside `completion`. The top-level
+   Keep `checklist`, `thesis`, `actions`, `pendingHash`, `invalidation`, `cost`,
+   `intent`, and `thesisDispositions` as TOP-LEVEL fields; do not nest them inside
+   `completion`. The top-level
    `wakeId` MUST be the EXACT id of the wake you are handling — copy it verbatim
    from the wake message / wake file for THIS wake; never reuse or hand-retype a
    previous wake's id (copying a prior wake's UUID suffix is a real, observed
@@ -276,15 +211,15 @@ Report that no active steward wake is present and wait for the next wake.
 
 ## Decision Ledger Shape
 
-Each ledger line must include these fields (`version` is `2`):
+Each new ledger line must include these fields (`version` is `3`):
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "wakeId": "...",
   "at": "ISO-8601 timestamp",
   "accountId": "...",
-  "decision": "no_trade | propose_trade | blocked",
+  "decision": "no_trade | propose_change | reduce_risk | blocked",
   "status": "done | blocked | error",
   "context": {
     "manifestPath": ".alice/steward/context-manifest.json",
@@ -315,32 +250,51 @@ Each ledger line must include these fields (`version` is `2`):
     "tradingFeesUsd": null,
     "estimatedSlippageUsd": null,
     "totalEstimatedCostUsd": null
-  }
+  },
+  "intent": {
+    "kind": "single",
+    "direction": "long | short | flat",
+    "instrument": "exact account instrument/aliceId",
+    "targetExposure": { "minPct": 10, "maxPct": 15 },
+    "invalidation": [
+      { "kind": "price_below", "value": "94.2", "note": "price-defined thesis failure" },
+      { "kind": "time_expiry", "note": "retire if the thesis does not develop" }
+    ],
+    "confidence": "low | medium | high",
+    "maxAcceptableLossPct": 2,
+    "timeHorizon": { "unit": "hour | day | week | month", "value": 2 },
+    "evidence": [
+      { "ref": "snapshot:snap:<wakeId>#market", "note": "market evidence used" }
+    ],
+    "snapshotId": "copy envelope.snapshotRef.snapshotId exactly",
+    "snapshotSha256": "copy envelope.snapshotRef.sha256 exactly"
+  },
+  "thesisDispositions": [
+    {
+      "wakeId": "prior wake id from snapshot.history.openTheses",
+      "instrument": "that exact open-thesis instrument",
+      "disposition": "supersede | invalidate | expire | keep",
+      "note": "why"
+    }
+  ]
 }
 ```
 
-`actions` is empty for `no_trade`/`blocked`. For `propose_trade`, each broker
-operation is ONE typed object — never a free-text string (rejected at v2):
+`intent` is required for `propose_change` and `reduce_risk`; it must be `null`
+for `no_trade` and `blocked`. A `propose_change` intent needs at least one
+`price_below` or `price_above` invalidation for every target. A portfolio intent
+uses `kind: "portfolio"` plus at least two unique `targets`, each shaped like the
+single target above; shared confidence/loss/horizon/evidence/snapshot fields stay
+at the intent level. Never add quantity fields.
 
-```json
-{
-  "kind": "order_place | order_commit | order_modify | order_cancel | position_close | git_reject",
-  "aliceId": "the exact contract you traded (required except for git_reject)",
-  "params": { "action": "BUY", "orderType": "MKT", "totalQuantity": "50" },
-  "commitHash": "the commit hash, when the operation produced one",
-  "outcome": "executed | awaiting_approval | policy_denied | failed",
-  "violations": ["required only when outcome is policy_denied"]
-}
-```
+For this v3 contract slice, `actions` is always empty and `pendingHash` is always
+null. The typed action union remains historical ledger structure, not authority
+for the agent to perform execution.
 
-`outcome` mirrors the four `autoPush` branches from Wake Loop step 5:
-`executed` = pushed (record its `commitHash`), `awaiting_approval` =
-absent/skipped non-policy, `policy_denied` = paper_policy_denied (attach the
-`autoPush.policyViolations` as `violations`), `failed` = a real push failure.
-
-`pendingHash` is strict-pending: it holds ONLY the stage hash still awaiting
-approval, and MUST be `null` once anything executed — an auto-pushed order is
-terminal, so its provenance lives in `actions[].commitHash`, not here.
+Every `thesisDispositions` item must copy both `wakeId` and `instrument` from one
+snapshot open thesis. The pair is unique. Every expired thesis and every thesis
+whose instrument this intent touches must appear exactly once. `supersede`
+requires a same-instrument replacement intent; an expired thesis cannot `keep`.
 
 `context` is optional bookkeeping, not a value you need to compute for real.
 Omit the whole `context` field rather than trying to produce a genuine
@@ -353,7 +307,7 @@ wake, and the wake will hang until it times out.
 
 `no_trade` is the default when the evidence is unclear, weakening, or
 downside-leaning (see Participation Bias) — a clear, evidence-backed uptrend
-is the exception that calls for `propose_trade` instead. If the wake has no
+is the exception that calls for `propose_change` instead. If the wake has no
 thesis, no entry signal, no invalidation, or no risk budget, choose
 `no_trade` and write the reason.
 

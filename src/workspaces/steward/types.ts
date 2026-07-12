@@ -2,10 +2,14 @@ import { AUTHZ_LEVELS } from '@traderalice/uta-protocol';
 import { z } from 'zod';
 
 export const WAKE_SCHEMA_VERSION = 1;
-/** Current decision-ledger entry version. v2 (issue #125) makes `actions` a
- *  strict discriminated union and `pendingHash` strict-pending (null once an
- *  action executed). Writes MUST be v2; reads stay lenient for v1 history. */
-export const DECISION_LEDGER_SCHEMA_VERSION = 2;
+export const WAKE_ENVELOPE_SCHEMA_VERSION = 2;
+export const INFORMATION_SNAPSHOT_SCHEMA_VERSION = 1;
+/** Current decision-ledger entry version. Writes MUST be v3; reads stay
+ *  lenient over the historical v1/v2 shapes. */
+export const DECISION_LEDGER_SCHEMA_VERSION = 3;
+/** Historical v2 ledger version. Retained only for lenient reads and pinned
+ *  raw-fingerprint compatibility; it is never accepted on the write path. */
+export const DECISION_LEDGER_SCHEMA_VERSION_V2 = 2;
 /** Legacy decision-ledger entry version, retained ONLY for the lenient read
  *  path over pre-#125 history — never written. v1 `actions` stay `unknown[]`. */
 export const DECISION_LEDGER_SCHEMA_VERSION_V1 = 1;
@@ -37,8 +41,9 @@ export const stewardWakeReasonSchema = z.enum([
 ]);
 export type StewardWakeReason = z.infer<typeof stewardWakeReasonSchema>;
 
-export const stewardExpectedDecisionSchema = z.enum(['no_trade', 'propose_trade', 'blocked']);
+export const stewardExpectedDecisionSchema = z.enum(['no_trade', 'propose_change', 'reduce_risk', 'blocked']);
 export type StewardExpectedDecision = z.infer<typeof stewardExpectedDecisionSchema>;
+const stewardLegacyDecisionSchema = z.enum(['no_trade', 'propose_trade', 'blocked']);
 
 export const stewardWakeStatusSchema = z.enum([
   'queued',
@@ -93,7 +98,8 @@ export const stewardConfigSchema = z.object({
 }).passthrough();
 export type StewardConfig = z.infer<typeof stewardConfigSchema>;
 
-export const stewardDecisionSchema = z.enum(['no_trade', 'propose_trade', 'blocked']);
+export const stewardDecisionV3Schema = z.enum(['no_trade', 'propose_change', 'reduce_risk', 'blocked']);
+export const stewardDecisionSchema = z.union([stewardDecisionV3Schema, stewardLegacyDecisionSchema]);
 export type StewardDecision = z.infer<typeof stewardDecisionSchema>;
 
 export const stewardLedgerStatusSchema = z.enum(['done', 'blocked', 'error']);
@@ -102,17 +108,58 @@ export type StewardLedgerStatus = z.infer<typeof stewardLedgerStatusSchema>;
 export const stewardAuthzLevelSchema = z.enum(AUTHZ_LEVELS);
 
 const jsonRecordSchema = z.record(z.string(), z.unknown());
+const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
+const nonEmptyStringSchema = z.string().trim().min(1);
+const isoTimestampSchema = z.iso.datetime({ offset: true });
 
-export const stewardWakeEnvelopeSchema = z.object({
+const stewardWakeEnvelopeCommonShape = {
   reason: stewardWakeReasonSchema,
   accountId: z.string().min(1),
   authzLevel: stewardAuthzLevelSchema,
-  expectedDecision: stewardExpectedDecisionSchema,
   marketContext: jsonRecordSchema.optional(),
   riskContext: jsonRecordSchema.optional(),
   humanRequest: z.string().optional(),
+};
+
+/** Deterministic dispatch input before Snapshot M1 is published. */
+export const stewardWakeEnvelopeInputSchema = z.object({
+  ...stewardWakeEnvelopeCommonShape,
+  expectedDecision: stewardExpectedDecisionSchema,
+}).passthrough();
+export type StewardWakeEnvelopeInput = z.infer<typeof stewardWakeEnvelopeInputSchema>;
+
+export const stewardInformationSnapshotBindingSchema = z.object({
+  snapshotId: z.string().startsWith('snap:'),
+  sha256: sha256Schema,
+  path: z.string().min(1),
+  asOf: isoTimestampSchema,
+}).strict();
+export type StewardInformationSnapshotBinding = z.infer<typeof stewardInformationSnapshotBindingSchema>;
+
+/** Current envelope written for every new wake. */
+export const stewardWakeEnvelopeSchema = z.object({
+  version: z.literal(WAKE_ENVELOPE_SCHEMA_VERSION),
+  ...stewardWakeEnvelopeCommonShape,
+  expectedDecision: stewardExpectedDecisionSchema,
+  snapshotRef: stewardInformationSnapshotBindingSchema,
 }).passthrough();
 export type StewardWakeEnvelope = z.infer<typeof stewardWakeEnvelopeSchema>;
+
+/** Historical pre-Snapshot envelope, read-only. */
+const stewardLegacyWakeEnvelopeSchema = z.object({
+  // Pre-Snapshot envelopes had neither field. Keeping them explicitly absent
+  // prevents a malformed v2 envelope from falling through this compatibility
+  // branch and being misread as valid legacy data.
+  version: z.never().optional(),
+  snapshotRef: z.never().optional(),
+  ...stewardWakeEnvelopeCommonShape,
+  expectedDecision: stewardLegacyDecisionSchema,
+}).passthrough();
+export const stewardWakeEnvelopeReadSchema = z.union([
+  stewardWakeEnvelopeSchema,
+  stewardLegacyWakeEnvelopeSchema,
+]);
+export type StewardWakeEnvelopeReadable = z.infer<typeof stewardWakeEnvelopeReadSchema>;
 
 // Terminal-outcome attribution (issue #132). The status enum stays STABLE (a
 // context-overflow timeout is still a `timeout` for every existing consumer —
@@ -220,7 +267,7 @@ export const stewardWakeRecordSchema = z.object({
   // every pre-#146 record on read, so absence always means the historical PTY
   // face — legacy data and existing wakes are bit-identical.
   controlFace: stewardControlFaceSchema.default('pty'),
-  envelope: stewardWakeEnvelopeSchema,
+  envelope: stewardWakeEnvelopeReadSchema,
   error: z.string().min(1).optional(),
   attribution: stewardWakeAttributionSchema.optional(),
   ledgerReceipt: stewardLedgerReceiptSchema.optional(),
@@ -295,6 +342,180 @@ export const stewardContextRefSchema = z.object({
 }).passthrough();
 export type StewardContextRef = z.infer<typeof stewardContextRefSchema>;
 
+// --- Decision Intent + Information Snapshot (v3 / M1) --------------------
+
+const percentageSchema = z.number().finite().min(0).max(100);
+const positiveDecimalStringSchema = z.string().refine(
+  (value) =>
+    /^(?:\d+|\d+\.\d+|\.\d+)$/.test(value)
+    && Number.isFinite(Number(value))
+    && Number(value) > 0,
+  { message: 'expected a finite positive decimal string' },
+);
+
+export const stewardTargetExposureSchema = z.object({
+  minPct: percentageSchema,
+  maxPct: percentageSchema,
+}).strict().superRefine((exposure, ctx) => {
+  if (exposure.minPct > exposure.maxPct) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['minPct'],
+      message: 'minPct must be less than or equal to maxPct',
+    });
+  }
+});
+
+export const stewardIntentInvalidationSchema = z.union([
+  z.object({
+    kind: z.enum(['price_below', 'price_above']),
+    value: positiveDecimalStringSchema,
+    note: nonEmptyStringSchema,
+  }).strict(),
+  z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('time_expiry'), note: nonEmptyStringSchema }).strict(),
+    z.object({ kind: z.literal('thesis'), note: nonEmptyStringSchema }).strict(),
+  ]),
+]);
+
+const intentTargetShape = {
+  direction: z.enum(['long', 'short', 'flat']),
+  instrument: nonEmptyStringSchema,
+  targetExposure: stewardTargetExposureSchema,
+  invalidation: z.array(stewardIntentInvalidationSchema).min(1),
+};
+const intentCommonShape = {
+  confidence: z.enum(['low', 'medium', 'high']),
+  maxAcceptableLossPct: percentageSchema,
+  timeHorizon: z.object({
+    unit: z.enum(['hour', 'day', 'week', 'month']),
+    value: z.number().int().positive(),
+  }).strict(),
+  evidence: z.array(z.object({
+    ref: nonEmptyStringSchema,
+    note: nonEmptyStringSchema,
+  }).strict()).min(1),
+  snapshotId: z.string().startsWith('snap:'),
+  snapshotSha256: sha256Schema,
+};
+
+export const stewardDecisionIntentSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('single'), ...intentTargetShape, ...intentCommonShape }).strict(),
+  z.object({
+    kind: z.literal('portfolio'),
+    targets: z.array(z.object(intentTargetShape).strict()).min(2),
+    ...intentCommonShape,
+  }).strict(),
+]).superRefine((intent, ctx) => {
+  if (intent.kind !== 'portfolio') return;
+  const seen = new Set<string>();
+  intent.targets.forEach((target, index) => {
+    if (seen.has(target.instrument)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['targets', index, 'instrument'],
+        message: 'portfolio target instruments must be unique',
+      });
+    }
+    seen.add(target.instrument);
+  });
+});
+export type StewardDecisionIntent = z.infer<typeof stewardDecisionIntentSchema>;
+
+export const stewardThesisDispositionSchema = z.object({
+  wakeId: nonEmptyStringSchema,
+  instrument: nonEmptyStringSchema,
+  disposition: z.enum(['supersede', 'invalidate', 'expire', 'keep']),
+  note: nonEmptyStringSchema,
+}).strict();
+export type StewardThesisDisposition = z.infer<typeof stewardThesisDispositionSchema>;
+
+export function stewardThesisIdentity(input: { readonly wakeId: string; readonly instrument: string }): string {
+  return JSON.stringify([input.wakeId, input.instrument]);
+}
+
+export const stewardSnapshotRefSchema = z.object({
+  ref: nonEmptyStringSchema,
+  sha256: sha256Schema,
+  asOf: isoTimestampSchema,
+  freshness: nonEmptyStringSchema.optional(),
+}).strict();
+
+const providedSnapshotRefsSchema = z.discriminatedUnion('provided', [
+  z.object({ provided: z.literal(true), refs: z.array(stewardSnapshotRefSchema).min(1) }).strict(),
+  z.object({ provided: z.literal(false), note: nonEmptyStringSchema }).strict(),
+]);
+
+const stewardSnapshotHistorySchema = z.discriminatedUnion('provided', [
+  z.object({
+    provided: z.literal(true),
+    openTheses: z.array(z.object({
+      wakeId: nonEmptyStringSchema,
+      fingerprint: sha256Schema,
+      instrument: nonEmptyStringSchema,
+      expiresAt: isoTimestampSchema,
+    }).strict()),
+    refs: z.array(stewardSnapshotRefSchema).min(1),
+  }).strict(),
+  z.object({ provided: z.literal(false), note: nonEmptyStringSchema }).strict(),
+]).superRefine((history, ctx) => {
+  if (!history.provided) return;
+  const addresses = new Set<string>();
+  const instruments = new Set<string>();
+  history.openTheses.forEach((thesis, index) => {
+    const address = stewardThesisIdentity(thesis);
+    if (addresses.has(address)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['openTheses', index],
+        message: `duplicate open thesis address: ${thesis.wakeId}:${thesis.instrument}`,
+      });
+    }
+    if (instruments.has(thesis.instrument)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['openTheses', index, 'instrument'],
+        message: `account-bound snapshot has more than one open thesis for instrument: ${thesis.instrument}`,
+      });
+    }
+    addresses.add(address);
+    instruments.add(thesis.instrument);
+  });
+});
+
+export const stewardInformationSnapshotSchema = z.object({
+  version: z.literal(INFORMATION_SNAPSHOT_SCHEMA_VERSION),
+  snapshotId: z.string().startsWith('snap:'),
+  wakeId: nonEmptyStringSchema,
+  accountId: nonEmptyStringSchema,
+  asOf: isoTimestampSchema,
+  market: providedSnapshotRefsSchema,
+  portfolio: providedSnapshotRefsSchema,
+  risk: z.discriminatedUnion('provided', [
+    z.object({
+      provided: z.literal(true),
+      envelopeVersion: z.number().int().positive(),
+      refs: z.array(stewardSnapshotRefSchema).min(1),
+    }).strict(),
+    z.object({
+      provided: z.literal(false),
+      envelopeVersion: z.null(),
+      note: nonEmptyStringSchema,
+    }).strict(),
+  ]),
+  events: providedSnapshotRefsSchema,
+  history: stewardSnapshotHistorySchema,
+}).strict().superRefine((snapshot, ctx) => {
+  if (snapshot.snapshotId !== `snap:${snapshot.wakeId}`) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['snapshotId'],
+      message: 'snapshotId must equal "snap:" + wakeId',
+    });
+  }
+});
+export type StewardInformationSnapshot = z.infer<typeof stewardInformationSnapshotSchema>;
+
 // --- Decision-ledger actions (v2, issue #125) ---------------------------
 //
 // `actions` was a free-form `unknown[]` in v1. v2 makes it a strict
@@ -306,7 +527,7 @@ export type StewardContextRef = z.infer<typeof stewardContextRefSchema>;
 //   awaiting_approval  -> autoPush absent / skipped non-policy (pending approval)
 //   policy_denied      -> autoPush.status "skipped" reason paper_policy_denied
 //   failed             -> autoPush.status "failed"  (broker/tool error)
-// Free-text action strings are rejected at v2.
+// Free-text action strings are rejected from v2 onward.
 
 export const stewardLedgerActionOutcomeSchema = z.enum([
   'executed',
@@ -378,15 +599,13 @@ export const stewardLedgerActionSchema = z.discriminatedUnion('kind', [
 });
 export type StewardLedgerAction = z.infer<typeof stewardLedgerActionSchema>;
 
-// --- Decision-ledger entry (v1 lenient read / v2 strict write) -----------
+// --- Decision-ledger entry (v1/v2 lenient read / v3 strict write) --------
 
-/** Fields common to v1 and v2 ledger entries. Only `version` and `actions`
- *  differ between the two schemas. */
-const decisionLedgerCommonShape = {
+const legacyDecisionLedgerCommonShape = {
   wakeId: z.string().min(1),
   at: z.string().min(1),
   accountId: z.string().min(1),
-  decision: stewardDecisionSchema,
+  decision: stewardLegacyDecisionSchema,
   status: stewardLedgerStatusSchema,
   context: stewardContextRefSchema.optional(),
   completion: stewardCompletionSchema,
@@ -408,12 +627,12 @@ const decisionLedgerCommonShape = {
  * enforce the issue #139 evidence self-reference, so a pre-#139 v2 history line
  * (written before that rule existed, with no `wake:<self>` ref) still READS as a
  * valid entry. Read-lenient / write-strict (issue #125): reconciliation, cost
- * aggregation, and history all go through this; the strict schema below is the
- * only shape ever WRITTEN.
+ * aggregation, and history all go through this. It is historical read-only now
+ * that v3 is the sole write shape.
  */
 export const stewardDecisionLedgerEntryV2StructuralSchema = z.object({
-  version: z.literal(DECISION_LEDGER_SCHEMA_VERSION),
-  ...decisionLedgerCommonShape,
+  version: z.literal(DECISION_LEDGER_SCHEMA_VERSION_V2),
+  ...legacyDecisionLedgerCommonShape,
   actions: z.array(stewardLedgerActionSchema),
 }).passthrough().superRefine((entry, ctx) => {
   const hasExecuted = entry.actions.some((action) => action.outcome === 'executed');
@@ -427,8 +646,7 @@ export const stewardDecisionLedgerEntryV2StructuralSchema = z.object({
 });
 
 /**
- * STRICT v2 entry — the ONLY shape ever WRITTEN (`ledgerStore.append`) and the
- * commit/terminal contract the generated validator mirrors. Adds the issue #139
+ * Historical strict-v2 shape retained for focused compatibility tests. Adds the issue #139
  * self-consistency rule on top of the structural schema: the entry must carry
  * exactly the `wake:<its own wakeId>` evidence self-reference and no `wake:`
  * reference to any OTHER id. The `wake:` namespace is reserved for this single
@@ -465,18 +683,105 @@ export type StewardDecisionLedgerEntryV2 = z.infer<typeof stewardDecisionLedgerE
  *  `unknown[]` (never re-typed, never written). */
 export const stewardDecisionLedgerEntryV1Schema = z.object({
   version: z.literal(DECISION_LEDGER_SCHEMA_VERSION_V1),
-  ...decisionLedgerCommonShape,
+  ...legacyDecisionLedgerCommonShape,
   actions: z.array(z.unknown()),
 }).passthrough();
 export type StewardDecisionLedgerEntryV1 = z.infer<typeof stewardDecisionLedgerEntryV1Schema>;
 
-/** LENIENT read schema (issue #125): STRUCTURAL v2 (no #139 self-ref
- *  requirement), or legacy v1 history. Version literals are mutually exclusive,
- *  so the union is unambiguous. The strict #139 self-reference rule is enforced
- *  on the WRITE path (`parseStewardDecisionLedgerEntry`) and by the generated
- *  validator + the active-wake finalize gate — a lenient-readable pre-#139 v2
- *  line still cannot finalize an active wake without a strict-validated marker. */
+/** Strict v3 entry: the only accepted new write shape. Snapshot file/hash and
+ *  thesis-coverage checks require workspace context and are enforced by the
+ *  generated validator immediately before its atomic commit. */
+export const stewardDecisionLedgerEntryV3Schema = z.object({
+  version: z.literal(DECISION_LEDGER_SCHEMA_VERSION),
+  wakeId: nonEmptyStringSchema,
+  at: isoTimestampSchema,
+  accountId: nonEmptyStringSchema,
+  decision: stewardDecisionV3Schema,
+  status: stewardLedgerStatusSchema,
+  context: stewardContextRefSchema.optional(),
+  completion: stewardCompletionSchema,
+  checklist: stewardChecklistSchema,
+  thesis: z.string(),
+  actions: z.array(stewardLedgerActionSchema),
+  pendingHash: nonEmptyStringSchema.nullable(),
+  invalidation: z.string(),
+  cost: stewardCostSchema,
+  intent: stewardDecisionIntentSchema.nullable(),
+  thesisDispositions: z.array(stewardThesisDispositionSchema),
+}).strict().superRefine((entry, ctx) => {
+  const dispositionIdentities = new Set<string>();
+  entry.thesisDispositions.forEach((disposition, index) => {
+    const identity = stewardThesisIdentity(disposition);
+    if (dispositionIdentities.has(identity)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['thesisDispositions', index],
+        message: `duplicate thesis disposition identity: ${disposition.wakeId}:${disposition.instrument}`,
+      });
+    }
+    dispositionIdentities.add(identity);
+  });
+
+  const hasExecuted = entry.actions.some((action) => action.outcome === 'executed');
+  if (hasExecuted && entry.pendingHash !== null) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['pendingHash'],
+      message: 'pendingHash must be null once an action has outcome "executed"',
+    });
+  }
+
+  const selfRef = `wake:${entry.wakeId}`;
+  const wakeRefs = entry.completion.evidenceRefs.filter((ref) => ref.startsWith('wake:'));
+  const selfRefCount = wakeRefs.filter((ref) => ref === selfRef).length;
+  if (selfRefCount !== 1) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['completion', 'evidenceRefs'],
+      message: `completion.evidenceRefs must contain exactly one ${selfRef}`,
+    });
+  }
+  const contradictory = [...new Set(wakeRefs.filter((ref) => ref !== selfRef))];
+  if (contradictory.length > 0) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['completion', 'evidenceRefs'],
+      message: `contradictory wake references: ${contradictory.join(', ')}`,
+    });
+  }
+
+  const requiresIntent = entry.decision === 'propose_change' || entry.decision === 'reduce_risk';
+  if (requiresIntent && entry.intent === null) {
+    ctx.addIssue({ code: 'custom', path: ['intent'], message: `${entry.decision} requires a non-null intent` });
+  }
+  if (!requiresIntent && entry.intent !== null) {
+    ctx.addIssue({ code: 'custom', path: ['intent'], message: `${entry.decision} requires intent to be null` });
+  }
+  if (entry.decision !== 'propose_change' || entry.intent === null) return;
+
+  const invalidationSets = entry.intent.kind === 'single'
+    ? [entry.intent.invalidation]
+    : entry.intent.targets.map((target) => target.invalidation);
+  invalidationSets.forEach((invalidations, index) => {
+    if (invalidations.some((item) => item.kind === 'price_below' || item.kind === 'price_above')) return;
+    ctx.addIssue({
+      code: 'custom',
+      path: entry.intent?.kind === 'portfolio'
+        ? ['intent', 'targets', index, 'invalidation']
+        : ['intent', 'invalidation'],
+      message: 'propose_change requires a price invalidation for every target',
+    });
+  });
+});
+export type StewardDecisionLedgerEntryV3 = z.infer<typeof stewardDecisionLedgerEntryV3Schema>;
+
+/** LENIENT read schema: strict current v3 plus historical structural v2 (without
+ *  the later #139 self-ref requirement) and v1. Version literals are mutually
+ *  exclusive. New writes still go through the strict-v3 parser and generated
+ *  validator; a lenient-readable historical line cannot finalize a current wake
+ *  without a strict-validated marker. */
 export const stewardDecisionLedgerEntrySchema = z.union([
+  stewardDecisionLedgerEntryV3Schema,
   stewardDecisionLedgerEntryV2StructuralSchema,
   stewardDecisionLedgerEntryV1Schema,
 ]);
@@ -503,13 +808,12 @@ export function parseStewardWakeRecord(value: unknown): StewardWakeRecord {
   return stewardWakeRecordSchema.parse(value);
 }
 
-/** STRICT v2 parse — the write path (append + validator). Rejects legacy v1
- *  shape and free-text actions. */
-export function parseStewardDecisionLedgerEntry(value: unknown): StewardDecisionLedgerEntryV2 {
-  return stewardDecisionLedgerEntryV2Schema.parse(value);
+/** STRICT v3 parse — the write path. Rejects legacy v1/v2 shapes. */
+export function parseStewardDecisionLedgerEntry(value: unknown): StewardDecisionLedgerEntryV3 {
+  return stewardDecisionLedgerEntryV3Schema.parse(value);
 }
 
-/** LENIENT parse — the read path. Accepts strict v2 AND legacy v1 history. */
+/** LENIENT parse — the read path. Accepts v3 and historical v1/v2 history. */
 export function parseStewardDecisionLedgerEntryLenient(value: unknown): StewardDecisionLedgerEntry {
   return stewardDecisionLedgerEntrySchema.parse(value);
 }
