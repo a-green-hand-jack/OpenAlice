@@ -1,9 +1,10 @@
 # Steward 决策契约设计：Decision Intent / Information Snapshot / Risk Envelope
 
-> 版本：v0.4（2026-07-12）
+> 版本：v0.5（2026-07-12）
 > 地位：**D1 契约设计 v0.2 已由 maintainer 于 2026-07-11 通过 PR #157 批准；v0.3 的
 > issue #181 身份修复、v0.4 的 issue #185 `asset_class` 生产边界均由 maintainer 于
-> 2026-07-12 单独裁决并授权**。
+> 2026-07-12 单独裁决并授权；v0.5 的 issue #186 pre-operation Execution Record 采用
+> maintainer option A**。
 > 本文只定义契约：schema、责任边界、失败语义、迁移影响。它**不授权任何 runtime 实现**；
 > 实现须按 [steward-plan.zh.md](steward-plan.zh.md) §5 另行授权（D2+）。
 > 从属于 [steward-plan.zh.md](steward-plan.zh.md)（方向与授权）与
@@ -335,9 +336,44 @@ aliceId（CCXT unified symbol、IBKR conId 等）。caller `symbol`/`localSymbol
   sizing 层仍作防御性检查，缺失时以 `no_priceable_invalidation` 拒绝（分层防御，
   不依赖上游校验）。
 - D4 proposal-only 阶段 SizingOutcome 只入库与呈现（Inbox），不 stage 到 UTA——此阶段
-  `propose_change` entry 的 `actions` 恒为空数组。D5 起才允许 stage + auto-push（各自
-  另行授权）；届时 SizingOutcome 与 ledger `actions` 的回写衔接是未决问题（§10.6），
-  D5 授权前必须裁决。
+  `propose_change` entry 的 `actions` 恒为空数组。D5 起才允许 stage + auto-push，且仍须
+  各自另行授权；本文与 issue #186 均不自动晋级 D3/D4/D5。
+- issue #186 采用 option A：production integration 只把 SizingOutcome 生成的确定性
+  `Operation` 交给 UTA-owned mutation capability，不接受 intent 中任何 agent-authored
+  quantity。integration 在首次 operation request 前先幂等发布一份独立、不可变的 **pre-operation Execution
+  Record**；该记录只保存确定性 sizing/admission 审计材料与 opaque UTA mutation
+  reference/idempotency key，不写回 agent 署名的 ledger entry。
+- Execution Record **不是执行结果或对账真相**：不得复制 venue outcome、order status、
+  mutation lifecycle、reconciliation 或其派生状态。UTA 独占 mutation lifecycle 与执行
+  结果；venue 是最终权威，真相顺序始终是 `venue > UTA > ledger`。
+- 每个 operation 只能通过一个 account/workspace-bound 的 UTA-owned mutation capability。
+  Alice 只可通过带 Guardian internal token 的 `UTAAccountSDK` 创建绑定 capability；SDK 从
+  launcher-owned workspace registry 的受信绑定读取 authz，并通过 internal-only header 交给
+  UTA。D2 mutation boundary 的 minimum 固定为 `paper`；request body 没有 authz/minimum
+  字段，调用方不能降低 minimum 或用自称更高的 workspace level 提权。Alice 侧独立调用
+  #185 admission check 不能替代这个边界。
+- 每个 UTA operation request 必须携带 Execution Record 中同一个 `accountId`、opaque mutation
+  reference、deterministic operation id、全部 expected sizing source versions，以及该 operation
+  的保护计划。绑定 capability、SizingOutcome、request body、UTA route 与 response 的账户身份
+  必须逐层一致；任一不一致在发布 Execution Record 或进入 fixture 前 fail closed。
+  `effect=increase` 必须恰有一个 matching protection；`effect=reduce` 必须没有 entry protection，
+  strict wire schema 在 UTA invocation 前再次强制该不变量。
+- 锁序固定为 `TradingGit/AccountMutationCoordinator account lease → accounts-config lock →
+  #185 admission → durable exact-match dedupe/payload-conflict →（仅新 invocation）fresh source
+  comparison → fixture invocation`，且 accounts-config lock 保持到 invocation 返回。反向取锁
+  不合法。#185 admission 对每次请求都执行；已经完成的同键同 payload 重试可直接返回
+  deduplicated acceptance，即使首次成功已推进 account/risk source version。只有新 invocation
+  才比较 account/risk/envelope/broker-capabilities 四个 fresh source versions；任一漂移即拒绝
+  当前 operation，且该 operation 不发生 invocation。source producer 缺失或不可读同样 fail
+  closed。
+- 外部幂等键为 `(utaMutationReference, operationId)`；canonical payload hash 覆盖 operation
+  与 protection。dedupe 进入 TradingGit/AccountMutationCoordinator 已有的持久 mutation
+  envelope + commit audit，不建 sidecar。相同键 + 相同 hash 返回 deduplicated acceptance；
+  相同键 + 不同 hash 拒绝。durable `dispatching` 后崩溃进入既有 recovery，永不自动重放。
+  invocation 后 HTTP acknowledgement 丢失时重试复用同一 pair，UTA 不得重复调用。
+- D2 concrete capability 的 operation producer 是 UTA manager 注入的 fixture；production 未
+  配置 producer 时 fail closed。本项不接实际 broker/demo/paper/live dispatch。这里也不声称
+  Alice→UTA 网络往返具有原子性；保证只覆盖上述 UTA-owned lease/lock 边界。
 - agent 可以在 thesis 中解释 sizing 偏好；sizing 层对其**只读不信**。
 
 ## 6. 责任边界总表
@@ -350,6 +386,8 @@ aliceId（CCXT unified symbol、IBKR conId 等）。caller `symbol`/`localSymbol
 | Envelope 配置 | 人（配置面/文件），migration 框架管理演进 | agent 禁改（行为契约 §8 既有禁令） |
 | Envelope→guard 编译 | UTA 装载时 | 执行期强制，LLM 不在信任链 |
 | Sizing | UTA / 独立确定性模块 | 数量的唯一来源 |
+| Pre-operation Execution Record | Steward 确定性 integration（幂等、不可变、独立于 decision ledger） | 只作 sizing/admission 审计并保存 opaque UTA reference；每个 UTA request 机械复用该 reference；不承载 mutation lifecycle、venue outcome 或 reconciliation |
+| Operation admission + invocation | account/workspace-bound UTA mutation capability | internal-token SDK binding + trusted workspace authz + fixed `paper` minimum；increase request 携带 matching protection；mutation lease 后取 config lock；TradingGit 持久幂等/recovery |
 | 执行与对账 | UTA（既有 mutation/durability 机制） | venue > UTA > ledger（不变量 6） |
 | 终态判定 | supervisor（既有 marker 协议，#136） | 不变 |
 
@@ -365,6 +403,12 @@ aliceId（CCXT unified symbol、IBKR conId 等）。caller `symbol`/`localSymbol
 | 账户无信封 | 提案照常入 ledger；执行路径 skip | `risk_envelope_missing`（containment 证据，不是策略失败） |
 | 目标区间与信封交集为空 | sizing `rejected` | `scope_violation` 等 code + violations |
 | 执行前信封版本变化 | 放弃执行 | `envelope_version_changed` |
+| UTA operation boundary 发现任一其他 sizing source version 变化 | 放弃当前 operation，零 invocation | `source_state_changed` + changed source keys |
+| UTA fixture/source producer 未配置或 source version 无法读取 | 放弃当前 operation，零 invocation | `mutation_capability_unavailable` / `source_state_invalid` |
+| capability / SizingOutcome / request / route 账户身份不一致 | 发布 Execution Record 或 fixture invocation 前拒绝 | `account_identity_mismatch`（HTTP route/body mismatch 为 400） |
+| 相同外部幂等键出现不同 operation/protection hash | 拒绝，不覆盖既有记录 | `idempotency_conflict` |
+| durable `dispatching`/`uncertain` 或 mutation state 无法确认 | fail closed，不重放 | `mutation_recovery_required`，沿用 TradingGit 人工恢复路径 |
+| UTA invocation 后 acknowledgement 丢失 | caller 以相同 `(utaMutationReference, operationId)` 重试；UTA 去重 | Execution Record 不写入或推断 mutation 结果 |
 | invalidation（price 类）盘中命中 | 确定性保护单/风控执行，**不唤醒 agent 不算 agent 功过** | UTA 事件 + 下次 wake 的 history 输入 |
 | open thesis 过期未处理 | validator 强制下次 wake 在 `thesisDispositions` 中显式处置 | 结构化 disposition + completion.reason 人读说明 |
 | guard/policy 拒绝 | 既有 `policy_denied` 语义不变 | 评测记 containment，不给决策加分（评测真源 §6） |
@@ -394,25 +438,52 @@ aliceId（CCXT unified symbol、IBKR conId 等）。caller `symbol`/`localSymbol
 | context-manifest | `schemas.decisionLedger` 改引用常量（修硬编码 bug，context-injector.ts:123）+ 记录 intent schema 工件 hash | |
 | wake envelope | v2：新增 `snapshotRef`；`expectedDecision` 枚举同步 | envelope 是 `.passthrough()`，加字段低风险 |
 | 账户配置（Alice `utaConfigSchema`，src/core/config.ts，与 `guards`/`maxAuthzLevel` 并列；Alice 编写、UTA 消费） | 新增 `riskEnvelope` 块 + `risk_envelope_missing` skip reason + 信封→guard 编译器 | **持久用户状态 → 必须走 src/migrations/ 框架** |
-| sizing 模块 | 新建（UTA 侧） | D2 授权后实现 |
+| sizing 模块 | 新建确定性 sizing core | D2 单独授权；agent quantity 不进入 operation |
+| sizing integration / Execution Record | 独立幂等发布 pre-operation record；每个 deterministic operation 连同 accountId、matching protection、同一 opaque reference 和 expected source versions 交给 internal-token SDK 绑定的 UTA capability | capability/outcome/request/route 账户必须一致；body 无 authz/minimum；UTA 固定 `paper` minimum；锁序为 mutation lease→config lock→admission→durable dedupe/conflict→仅新调用 source compare→fixture；TradingGit mutation envelope/commit audit 持久 dedupe + recovery；无 fixture producer时 fail closed；record 禁止复制执行结果、生命周期与对账状态 |
 | campaign harness / 报告 | 三栏呈现（protocol/decision/execution）；cell 账户强制信封 | 评测真源 §6/§9 已要求 |
 | machine driver | （可选）outputSchema/outputFormat 接线 | 辅助性质，可后置 |
 | steward-plan §6 真源表 | 本文获批后登记为"决策契约"真源（职责：三契约 schema 与失败语义；不承担：方向授权、实现细节） | 与批准动作同一 PR 处理 |
 
-## 10. 未决问题（不阻塞批准，实现前需逐条裁决）
+## 10. 未决问题与已裁决项
+
+1-5 仍是后续对应实现前的授权问题；第 6 项已由 maintainer 在 issue #186 裁决。
 
 1. `confidence` 三档是否够校准评测用，还是需要五档。
 2. `targetExposure` 是否需要支持组合级（多标的）表达，还是 D4 先限单标的。
 3. M2 工具回执的实现落点（工具面 vs supervisor 采样）。
 4. price 类 invalidation 编译为保护单时，MKT/STP/STP LMT 的选择规则。
 5. 信封配置面与 #153（controlFace 校验配置面）是否合并为一个受校验配置加载器。
-6. **SizingOutcome 与 ledger 的回写衔接**（D5 前必须裁决）：D4 阶段 `propose_change` 的
-   `actions` 恒空、SizingOutcome 只入 Inbox/评测报告；D5 起确定性层的 stage/执行结果
-   如何进入决策记录——写回 agent 署名的 entry 违背"validator 是唯一 writer"，另设执行
-   记录面则新增一层对账。两个方向都有代价，需要 maintainer 裁决。
+6. **已裁决（v0.5，maintainer option A）：SizingOutcome 与 ledger 的衔接。**
+   不回写 agent 署名的 decision entry；另设独立、不可变、幂等的 pre-operation Execution
+   Record，只记录确定性 sizing/admission 审计材料与 opaque UTA mutation reference。
+   Execution Record 不吸收 stage/dispatch 结果，不复制 UTA mutation lifecycle、venue
+   outcome 或 reconciliation。执行与对账仍由 UTA 独占，权威顺序为
+   `venue > UTA > ledger`。这项裁决只关闭记录边界问题，不构成 D3/D4/D5、scheduler 或
+   实际 dispatch 授权。
 
 ## 11. 变更记录
 
+- v0.5（2026-07-12）：记录 issue #186 maintainer option A：SizingOutcome 通过独立、
+  不可变、幂等的 pre-operation Execution Record 衔接审计面；record 保存确定性
+  sizing/admission 证据与 opaque UTA mutation reference，不回写 agent decision entry，
+  不复制 venue outcome、order status、UTA mutation lifecycle 或 reconciliation，保持
+  `venue > UTA > ledger`。production integration 仅接受 SizingOutcome 的确定性 operation；
+  每个 operation 只交给 account/workspace-bound UTA mutation capability。UTA 从受信绑定
+  读取 workspace authz、固定 `paper` minimum；body 没有可调 authz/minimum。increase request
+  必须携带 matching protection，reduce request 禁止 entry protection；request 身份新增 required
+  `accountId`，并在 capability/outcome/request/route/response 各边界机械核对。锁序固定为
+  TradingGit mutation lease→accounts-config lock；UTA 在持锁边界内先执行 #185 admission，再由
+  TradingGit mutation envelope/commit audit 持久去重/冲突检查 `(utaMutationReference,
+  operationId)`，仅新 invocation 才比较全部 fresh sizing source versions，payload hash 同时覆盖
+  operation + protection。已完成的同键同 payload lost-response 重试即使 source 已推进仍可去重；
+  跨独立 Node 进程、真实 `data/trading/<account>/commit.json` 的并发/崩溃测试证明该顺序与恢复。
+  相同键不同 hash 拒绝；durable dispatching/uncertain 沿既有 recovery 路径且不重放。
+  record 与所有 request 机械复用同一 opaque reference；acknowledgement 丢失时以同一 pair
+  重试，record 仍不复制 UTA lifecycle/result。D2 operation producer 仅为 manager-injected
+  fixture，production 缺失时 fail closed；不接实际 broker。本文不声称 Alice→UTA 往返原子，
+  只约束 UTA-owned lease/lock 边界。portfolio 保持 proposal-only，增加
+  exposure 的 operation 继续强制结构化保护单。本版不授权 D3/D4/D5、scheduler、实际
+  dispatch、prompt、campaign、paper 或 live 行为。
 - v0.4（2026-07-12）：记录 issue #185 maintainer option A：v3 contract 继续保留
   `asset_class` scope，但 production admission/guard 编译只接受 whitelist；asset-class
   输入以 `risk_envelope_scope_unsupported` 独立拒绝并保持零 dispatch，禁止静默当作 missing

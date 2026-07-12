@@ -1,5 +1,15 @@
 import Decimal from 'decimal.js';
 import { z } from 'zod';
+import {
+  compareStewardSizingSourceVersions,
+  stewardDeterministicOperationSchema,
+  stewardProtectiveEntryPlanSchema,
+  stewardSizingSourceVersionsSchema,
+  type StewardDeterministicOperation,
+  type StewardProtectiveEntryPlan,
+  type StewardSizingSourceVersions,
+  type StewardSourceVersionBarrierResult,
+} from '@traderalice/uta-protocol';
 
 import { canonicalIntentFingerprint } from './ledger-receipt.js';
 import { stewardDecisionIntentSchema, type StewardDecisionIntent } from './types.js';
@@ -116,28 +126,6 @@ const protectionRequestSchema = z.discriminatedUnion('kind', [
 ]);
 export type StewardProtectionRequest = z.infer<typeof protectionRequestSchema>;
 
-const protectiveEntryPlanSchema = z.discriminatedUnion('orderType', [
-  z.object({
-    kind: z.literal('selected'),
-    operationId: nonEmptyStringSchema,
-    instrument: nonEmptyStringSchema,
-    exitSide: z.enum(['BUY', 'SELL']),
-    orderType: z.literal('STP'),
-    triggerPrice: positiveDecimalSchema,
-  }).strict(),
-  z.object({
-    kind: z.literal('selected'),
-    operationId: nonEmptyStringSchema,
-    instrument: nonEmptyStringSchema,
-    exitSide: z.enum(['BUY', 'SELL']),
-    orderType: z.literal('STP_LMT'),
-    triggerPrice: positiveDecimalSchema,
-    limitPrice: positiveDecimalSchema,
-    limitOffsetBps: z.number().finite().positive().lt(10_000),
-  }).strict(),
-]);
-export type StewardProtectiveEntryPlan = z.infer<typeof protectiveEntryPlanSchema>;
-
 const marketReductionPlanSchema = z.object({
   kind: z.literal('selected'),
   operationId: nonEmptyStringSchema,
@@ -154,7 +142,7 @@ const protectionRejectionSchema = z.object({
 }).strict();
 
 export const stewardProtectionSelectionSchema = z.union([
-  protectiveEntryPlanSchema,
+  stewardProtectiveEntryPlanSchema,
   marketReductionPlanSchema,
   protectionRejectionSchema,
 ]);
@@ -222,23 +210,18 @@ export function selectStewardProtection(
   };
 }
 
-export const stewardSizingSourceVersionsSchema = z.object({
-  accountState: sourceVersionSchema,
-  riskState: sourceVersionSchema,
-  riskEnvelope: sourceVersionSchema.nullable(),
-  brokerCapabilities: sourceVersionSchema,
-}).strict();
-export type StewardSizingSourceVersions = z.infer<typeof stewardSizingSourceVersionsSchema>;
-
-const deterministicOperationSchema = z.object({
-  operationId: nonEmptyStringSchema,
-  kind: z.enum(['order_place', 'position_close']),
-  effect: z.enum(['increase', 'reduce']),
-  instrument: nonEmptyStringSchema,
-  side: z.enum(['BUY', 'SELL']),
-  totalQuantity: positiveDecimalSchema,
-}).strict();
-export type StewardDeterministicOperation = z.infer<typeof deterministicOperationSchema>;
+export {
+  compareStewardSizingSourceVersions,
+  stewardDeterministicOperationSchema,
+  stewardProtectiveEntryPlanSchema,
+  stewardSizingSourceVersionsSchema,
+};
+export type {
+  StewardDeterministicOperation,
+  StewardProtectiveEntryPlan,
+  StewardSizingSourceVersions,
+  StewardSourceVersionBarrierResult,
+};
 
 const sizingIdentityShape = {
   version: z.literal(STEWARD_SIZING_OUTCOME_SCHEMA_VERSION),
@@ -252,9 +235,9 @@ const sizingIdentityShape = {
 
 const executableSizingShape = {
   ...sizingIdentityShape,
-  operations: z.array(deterministicOperationSchema).min(1),
+  operations: z.array(stewardDeterministicOperationSchema).min(1),
   appliedCaps: z.array(nonEmptyStringSchema),
-  protections: z.array(protectiveEntryPlanSchema),
+  protections: z.array(stewardProtectiveEntryPlanSchema),
 };
 
 export const stewardSizingOutcomeSchema = z.discriminatedUnion('kind', [
@@ -696,38 +679,4 @@ function makeOperationId(wakeId: string, effect: 'increase' | 'reduce', ordinal:
 function toDecimalString(value: Decimal): string {
   const fixed = value.toFixed();
   return fixed === '-0' ? '0' : fixed;
-}
-
-export type StewardSourceVersionBarrierResult =
-  | { readonly ok: true }
-  | {
-      readonly ok: false;
-      readonly code: 'envelope_version_changed' | 'source_state_changed';
-      readonly changed: readonly (keyof StewardSizingSourceVersions)[];
-      readonly expected: StewardSizingSourceVersions;
-      readonly actual: StewardSizingSourceVersions;
-    };
-
-/** Pure pre-dispatch barrier. Final reread/admission wiring belongs to #185 and
- * must call this after obtaining a fresh normalized version projection. */
-export function compareStewardSizingSourceVersions(
-  expectedInput: unknown,
-  actualInput: unknown,
-): StewardSourceVersionBarrierResult {
-  const expected = stewardSizingSourceVersionsSchema.parse(expectedInput);
-  const actual = stewardSizingSourceVersionsSchema.parse(actualInput);
-  const keys = Object.keys(expected) as (keyof StewardSizingSourceVersions)[];
-  const changed = keys.filter((key) => !sameSourceVersion(expected[key], actual[key]));
-  if (changed.length === 0) return { ok: true };
-  return {
-    ok: false,
-    code: changed.includes('riskEnvelope') ? 'envelope_version_changed' : 'source_state_changed',
-    changed,
-    expected,
-    actual,
-  };
-}
-
-function sameSourceVersion(left: string | number | null, right: string | number | null): boolean {
-  return typeof left === typeof right && left === right;
 }

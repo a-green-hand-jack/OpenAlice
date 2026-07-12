@@ -314,6 +314,7 @@ export type MutationAttemptKind =
   | 'emergency_cancel'
   | 'flatten'
   | 'human_reject'
+  | 'steward_operation'
 
 /**
  * `dispatching` is never replayable after a restart. A restored coordinator
@@ -354,6 +355,13 @@ export interface MutationSuspendedApprovalV1 {
 export interface MutationAttemptContextV1 {
   reason?: string
   cancelOrders?: boolean
+  /** External idempotency identity for a D2 Steward operation. The payload
+   * fingerprint covers the canonical deterministic operation + protection. */
+  stewardMutation?: {
+    utaMutationReference: string
+    operationId: string
+    payloadFingerprint: string
+  }
 }
 
 export interface MutationAttemptV1 {

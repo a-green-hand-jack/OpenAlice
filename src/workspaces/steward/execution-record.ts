@@ -26,16 +26,11 @@ const executionRecordShape = {
   snapshotId: z.string().startsWith('snap:'),
   snapshotSha256: sha256Schema,
   intentFingerprint: sha256Schema,
+  /** Opaque idempotency/linkage key owned by UTA. This record never copies
+   * mutation lifecycle or venue outcomes back into the Steward workspace. */
+  utaMutationReference: nonEmptyStringSchema,
   sourceStateVersions: stewardSizingSourceVersionsSchema,
   sizingOutcome: stewardSizingOutcomeSchema,
-  // D2 core is deliberately pre-dispatch. Venue mutation and reconciliation
-  // widening belong to the later admission/dispatch lane.
-  venueOutcomes: z.tuple([]),
-  reconciliation: z.object({
-    status: z.literal('not_dispatched'),
-    note: z.literal('D2 deterministic core has not dispatched this proposal.'),
-  }).strict(),
-  uncertainty: z.null(),
   recordFingerprint: sha256Schema,
 };
 
@@ -79,6 +74,7 @@ export interface BuildStewardExecutionRecordInput {
     readonly snapshotId: string;
     readonly snapshotSha256: string;
   };
+  readonly utaMutationReference: string;
   readonly sizingOutcome: StewardSizingOutcome;
 }
 
@@ -118,14 +114,9 @@ export function buildStewardExecutionRecord(input: BuildStewardExecutionRecordIn
     snapshotId: input.snapshot.snapshotId,
     snapshotSha256: input.snapshot.snapshotSha256,
     intentFingerprint,
+    utaMutationReference: input.utaMutationReference,
     sourceStateVersions,
     sizingOutcome,
-    venueOutcomes: [] as [],
-    reconciliation: {
-      status: 'not_dispatched' as const,
-      note: 'D2 deterministic core has not dispatched this proposal.' as const,
-    },
-    uncertainty: null,
   };
   return stewardExecutionRecordSchema.parse({
     ...withoutFingerprint,

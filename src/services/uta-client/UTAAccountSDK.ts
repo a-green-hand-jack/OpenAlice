@@ -10,6 +10,14 @@
  * a follow-up commit before the SDK swap is wired into `main.ts`.
  */
 
+import {
+  AUTHZ_LEVELS,
+  UTA_STEWARD_WORKSPACE_AUTHZ_HEADER,
+  stewardUtaMutationRequestSchema,
+  stewardUtaMutationResponseSchema,
+  type StewardUtaMutationRequest,
+  type StewardUtaMutationResponse,
+} from '@traderalice/uta-protocol'
 import type {
   UTAClient,
   AccountInfo,
@@ -65,6 +73,48 @@ export interface UTAAccountSDKDeps {
   /** Dynamic product-mode guard. When present, venue-mutating broker writes
    *  are refused before they cross the UTA HTTP boundary. */
   readonlyMutationReason?: () => string | undefined
+}
+
+const STEWARD_MUTATION_BINDING_TOKEN = Symbol('openalice-steward-mutation-binding')
+
+/** Nominal account/workspace-bound production capability. The constructor's
+ * token is module-private, so Steward integration cannot accept an arbitrary
+ * object that merely has an invokeOperation method. */
+export class BoundUTAAccountStewardMutationCapability {
+  readonly #nominalBinding = STEWARD_MUTATION_BINDING_TOKEN
+
+  constructor(
+    token: typeof STEWARD_MUTATION_BINDING_TOKEN,
+    private readonly client: UTAClient,
+    readonly accountId: string,
+    private readonly readTrustedWorkspaceAuthzLevel: () => AuthzLevel,
+  ) {
+    if (token !== STEWARD_MUTATION_BINDING_TOKEN) {
+      throw new Error('Invalid Steward mutation capability binding')
+    }
+  }
+
+  async invokeOperation(requestInput: StewardUtaMutationRequest): Promise<StewardUtaMutationResponse> {
+    const request = stewardUtaMutationRequestSchema.parse(requestInput)
+    if (request.accountId !== this.accountId) {
+      throw new Error(
+        `Steward mutation account mismatch: capability=${this.accountId}, request=${request.accountId}`,
+      )
+    }
+    const workspaceAuthzLevel = this.readTrustedWorkspaceAuthzLevel()
+    if (!AUTHZ_LEVELS.includes(workspaceAuthzLevel)) {
+      throw new Error('Trusted workspace authorization source returned an invalid level')
+    }
+    const response = await this.client.request<StewardUtaMutationResponse>(
+      'POST',
+      `/api/trading/uta/${encodeURIComponent(this.accountId)}/steward/mutation`,
+      {
+        body: request,
+        headers: { [UTA_STEWARD_WORKSPACE_AUTHZ_HEADER]: workspaceAuthzLevel },
+      },
+    )
+    return stewardUtaMutationResponseSchema.parse(response)
+  }
 }
 
 /**
@@ -232,6 +282,17 @@ export class UTAAccountSDK {
     return this.client.post<StewardAdmissionResponse>(
       `/api/trading/uta/${encodeURIComponent(this.id)}/steward/admission`,
       request,
+    )
+  }
+
+  bindStewardMutationCapability(
+    readTrustedWorkspaceAuthzLevel: () => AuthzLevel,
+  ): BoundUTAAccountStewardMutationCapability {
+    return new BoundUTAAccountStewardMutationCapability(
+      STEWARD_MUTATION_BINDING_TOKEN,
+      this.client,
+      this.id,
+      readTrustedWorkspaceAuthzLevel,
     )
   }
 

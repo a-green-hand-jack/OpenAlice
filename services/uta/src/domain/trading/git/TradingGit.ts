@@ -13,6 +13,8 @@ import type {
   RejectOptions,
   ResolveMutationParams,
   PushOptions,
+  StewardMutationParams,
+  StewardMutationResult,
   SyntheticMutationParams,
   TradingGitConfig,
 } from './interfaces.js'
@@ -50,8 +52,16 @@ import { hasLocalNoDispatchProof } from '../guards/guard-pipeline.js'
 import {
   AccountMutationCoordinator,
   MutationRecoveryRequiredError,
+  MutationUnsupportedSchemaError,
   PendingApprovalChangedError,
 } from './mutation-coordinator.js'
+
+export class StewardMutationIdempotencyConflictError extends Error {
+  constructor(readonly utaMutationReference: string, readonly operationId: string) {
+    super('Steward mutation idempotency key conflicts with a different operation payload')
+    this.name = 'StewardMutationIdempotencyConflictError'
+  }
+}
 
 /** secTypes whose price does NOT track the underlying 1:1 — excluded from
  *  symbol-level price simulation (they share the underlying's symbol). */
@@ -75,6 +85,21 @@ function generateCommitHash(content: object): CommitHash {
     .update(JSON.stringify(content))
     .digest('hex')
   return hash.slice(0, 8)
+}
+
+function findStewardMutationAudit(
+  state: GitExportState,
+  utaMutationReference: string,
+  operationId: string,
+): NonNullable<NonNullable<GitCommit['mutationAudit']>['context']>['stewardMutation'] | undefined {
+  for (let index = state.commits.length - 1; index >= 0; index--) {
+    const identity = state.commits[index]?.mutationAudit?.context?.stewardMutation
+    if (
+      identity?.utaMutationReference === utaMutationReference
+      && identity.operationId === operationId
+    ) return identity
+  }
+  return undefined
 }
 
 function extractGuardVerdicts(value: unknown): GuardVerdict[] | undefined {
@@ -433,6 +458,101 @@ export class TradingGit implements ITradingGit {
         suspendedApproval,
       })
     })
+  }
+
+  async executeStewardMutation(params: StewardMutationParams): Promise<StewardMutationResult> {
+    if (!/^[0-9a-f]{64}$/.test(params.payloadFingerprint)) {
+      throw new Error('Steward mutation payload fingerprint must be SHA-256')
+    }
+    return this.mutationCoordinator.withLease({
+      hasLegacyPending: this.hasLegacyPending(),
+      operation: 'steward operation',
+    }, async () => params.boundary(async (freshState, beforeNewInvocation) => {
+      const durableState = freshState ?? this.buildExportState()
+      this.assertFreshStewardMutationState(durableState, params)
+      const prior = findStewardMutationAudit(
+        durableState,
+        params.request.utaMutationReference,
+        params.request.operation.operationId,
+      )
+      if (prior) {
+        if (prior.payloadFingerprint !== params.payloadFingerprint) {
+          throw new StewardMutationIdempotencyConflictError(
+            params.request.utaMutationReference,
+            params.request.operation.operationId,
+          )
+        }
+        return { deduplicated: true }
+      }
+
+      await beforeNewInvocation()
+
+      if (this.stagingArea.length > 0 || this.pendingMessage !== null || this.pendingHash !== null) {
+        throw new Error('Steward operation is blocked while another approval is staged or pending')
+      }
+
+      const hash = generateCommitHash({
+        kind: 'steward_operation',
+        utaMutationReference: params.request.utaMutationReference,
+        operationId: params.request.operation.operationId,
+        payloadFingerprint: params.payloadFingerprint,
+        parentHash: this.head,
+        timestamp: new Date().toISOString(),
+      })
+      const preparedOperation = TradingGit.cloneOperation(params.prepareOperation())
+      let attempt = this.createAttempt({
+        kind: 'steward_operation',
+        operations: [preparedOperation],
+        message: params.message,
+        hash,
+        approver: params.approver,
+        context: {
+          stewardMutation: {
+            utaMutationReference: params.request.utaMutationReference,
+            operationId: params.request.operation.operationId,
+            payloadFingerprint: params.payloadFingerprint,
+          },
+        },
+      })
+      this.persistAttempt(attempt, { clearLegacyApproval: false })
+      attempt = this.transitionAttemptOperation(attempt, 0, {
+        state: 'dispatching',
+        result: undefined,
+        evidence: { type: 'durable-before-steward-fixture-invocation' },
+        error: undefined,
+      }, { clearLegacyApproval: false })
+
+      const operation = attempt.operations[0].operation
+      let terminal: Pick<MutationOperationV1, 'state' | 'result' | 'evidence' | 'error'>
+      try {
+        const raw = await this.runBrokerDispatch(
+          attempt,
+          attempt.operations[0].operationId,
+          'steward_operation',
+          () => params.execute(TradingGit.cloneOperation(operation)),
+        )
+        terminal = this.classifyMutationOutcome(operation, raw)
+      } catch (error) {
+        terminal = this.classifyMutationError(operation, error)
+      }
+      attempt = this.transitionAttemptOperation(
+        attempt,
+        0,
+        terminal,
+        { clearLegacyApproval: false },
+      )
+      if (terminal.state === 'uncertain') {
+        throw new MutationRecoveryRequiredError(
+          attempt.attemptId,
+          `Steward operation acceptance is uncertain for mutation attempt ${attempt.attemptId}`,
+        )
+      }
+
+      this.finalizeAttempt(attempt, this.lastKnownGitState(), undefined, undefined, {
+        preserveLegacyApproval: true,
+      })
+      return { deduplicated: false }
+    }))
   }
 
   async resolveMutation(params: ResolveMutationParams): Promise<MutationResolveResult> {
@@ -1880,6 +2000,7 @@ export class TradingGit implements ITradingGit {
     attempt: MutationAttemptV1,
     index: number,
     transition: Pick<MutationOperationV1, 'state' | 'result' | 'evidence' | 'error'>,
+    options: { clearLegacyApproval?: boolean } = {},
   ): MutationAttemptV1 {
     const current = this.mutationCoordinator.getActiveAttempt()
     if (!current || current.attemptId !== attempt.attemptId) {
@@ -1887,7 +2008,7 @@ export class TradingGit implements ITradingGit {
     }
     const next = this.updateAttemptOperations(current, (entry) =>
       entry.index === index ? { ...entry, ...transition } : entry)
-    this.persistAttempt(next, { clearLegacyApproval: true })
+    this.persistAttempt(next, { clearLegacyApproval: options.clearLegacyApproval ?? true })
     return next
   }
 
@@ -2001,7 +2122,7 @@ export class TradingGit implements ITradingGit {
     stateAfter: GitState,
     approverOverride?: ApproverIdentity,
     resolution?: { action: ResolveMutationParams['action']; reason: string },
-    options: { stateAfterDegraded?: boolean } = {},
+    options: { stateAfterDegraded?: boolean; preserveLegacyApproval?: boolean } = {},
   ): void {
     const active = this.mutationCoordinator.getActiveAttempt()
     if (!active || active.attemptId !== attempt.attemptId) {
@@ -2060,10 +2181,12 @@ export class TradingGit implements ITradingGit {
       this.persistCandidate({
         commits,
         head: commit.hash,
-        stagingArea: [],
-        pendingMessage: null,
-        pendingHash: null,
         mutation: finalEnvelope,
+        ...(!options.preserveLegacyApproval ? {
+          stagingArea: [],
+          pendingMessage: null,
+          pendingHash: null,
+        } : {}),
       })
     } catch (error) {
       throw new MutationRecoveryRequiredError(
@@ -2075,11 +2198,44 @@ export class TradingGit implements ITradingGit {
 
     this.commits = commits
     this.head = commit.hash
-    this.stagingArea = []
-    this.pendingMessage = null
-    this.pendingHash = null
+    if (!options.preserveLegacyApproval) {
+      this.stagingArea = []
+      this.pendingMessage = null
+      this.pendingHash = null
+    }
     this.mutationCoordinator.replaceEnvelope(finalEnvelope)
-    this.legacyReviewRequired = false
+    if (!options.preserveLegacyApproval) this.legacyReviewRequired = false
+  }
+
+  private assertFreshStewardMutationState(
+    durableState: GitExportState,
+    params: StewardMutationParams,
+  ): void {
+    const envelope = durableState.mutation
+    if (envelope && envelope.schemaVersion !== MUTATION_SCHEMA_VERSION) {
+      throw new MutationUnsupportedSchemaError(envelope.schemaVersion)
+    }
+    const activeAttempt = envelope?.schemaVersion === MUTATION_SCHEMA_VERSION
+      ? envelope.activeAttempt
+      : undefined
+    if (activeAttempt && typeof activeAttempt === 'object' && 'attemptId' in activeAttempt) {
+      throw new MutationRecoveryRequiredError(
+        String(activeAttempt.attemptId),
+        'Durable account state contains an unresolved mutation attempt',
+      )
+    }
+    const prior = findStewardMutationAudit(
+      durableState,
+      params.request.utaMutationReference,
+      params.request.operation.operationId,
+    )
+    if (prior) return
+    if (durableState.head !== this.head || durableState.commits.length !== this.commits.length) {
+      throw new MutationRecoveryRequiredError(
+        'stale-uta-process',
+        'UTA process state is stale relative to durable account mutation state',
+      )
+    }
   }
 
   private static rehydrateMutationEnvelope(

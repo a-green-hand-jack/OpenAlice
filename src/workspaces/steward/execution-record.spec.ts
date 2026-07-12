@@ -26,6 +26,7 @@ const fingerprintGoldens = JSON.parse(readFileSync(
   join(here, '../../../tools/steward-contract-proof/fixtures/d2/fingerprint-goldens.json'),
   'utf8',
 )) as Record<string, string>;
+const UTA_MUTATION_REFERENCE = 'uta-mutation:wake-v3-single';
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -91,6 +92,7 @@ function executionRecord() {
       snapshotId: String(intent['snapshotId']),
       snapshotSha256: String(intent['snapshotSha256']),
     },
+    utaMutationReference: UTA_MUTATION_REFERENCE,
     sizingOutcome: sizingOutcome(intent),
   });
 }
@@ -112,8 +114,10 @@ describe('D2 deterministic Execution Record', () => {
     expect(record.recordId).toBe(`execution:wake-v3-single:${record.intentFingerprint}`);
     expect(record.snapshotId).toBe('snap:wake-v3-single');
     expect(record.sourceStateVersions).toEqual(record.sizingOutcome.sourceStateVersions);
-    expect(record.venueOutcomes).toEqual([]);
-    expect(record.reconciliation.status).toBe('not_dispatched');
+    expect(record.utaMutationReference).toBe(UTA_MUTATION_REFERENCE);
+    expect(record).not.toHaveProperty('venueOutcomes');
+    expect(record).not.toHaveProperty('reconciliation');
+    expect(record).not.toHaveProperty('uncertainty');
     expect(record.recordFingerprint).toBe(canonicalExecutionRecordFingerprint(record));
     expect(stewardExecutionRecordSchema.parse(record)).toEqual(record);
   });
@@ -130,6 +134,7 @@ describe('D2 deterministic Execution Record', () => {
         snapshotId: String(intent['snapshotId']),
         snapshotSha256: String(intent['snapshotSha256']),
       },
+      utaMutationReference: UTA_MUTATION_REFERENCE,
       sizingOutcome: outcome,
     })).toThrow(/intent_fingerprint_mismatch/);
 
@@ -141,6 +146,7 @@ describe('D2 deterministic Execution Record', () => {
         snapshotId: String(intent['snapshotId']),
         snapshotSha256: String(intent['snapshotSha256']),
       },
+      utaMutationReference: UTA_MUTATION_REFERENCE,
       sizingOutcome: outcome,
     })).toThrow(/wake_id_mismatch/);
   });
@@ -172,6 +178,7 @@ describe('D2 deterministic Execution Record', () => {
           snapshotId: String(cleanIntent['snapshotId']),
           snapshotSha256: String(cleanIntent['snapshotSha256']),
         },
+        utaMutationReference: UTA_MUTATION_REFERENCE,
         sizingOutcome: sizingOutcome(cleanIntent),
       });
       const hostile = buildStewardExecutionRecord({
@@ -182,6 +189,7 @@ describe('D2 deterministic Execution Record', () => {
           snapshotId: String(hostileIntent['snapshotId']),
           snapshotSha256: String(hostileIntent['snapshotSha256']),
         },
+        utaMutationReference: UTA_MUTATION_REFERENCE,
         sizingOutcome: sizingOutcome(hostileIntent),
       });
 
@@ -230,6 +238,7 @@ describe('D2 immutable Execution Record store', () => {
           snapshotId: original.snapshotId,
           snapshotSha256: original.snapshotSha256,
         },
+        utaMutationReference: original.utaMutationReference,
         sizingOutcome: parsedChangedOutcome,
       });
       expect(divergent.recordId).toBe(original.recordId);
@@ -251,6 +260,7 @@ describe('D2 immutable Execution Record store', () => {
         accountId: first.accountId,
         rawIntent: intent,
         snapshot: { snapshotId: first.snapshotId, snapshotSha256: first.snapshotSha256 },
+        utaMutationReference: first.utaMutationReference,
         sizingOutcome: stewardSizingOutcomeSchema.parse(changedOutcome),
       });
 

@@ -5,6 +5,7 @@
  * Also provides cross-UTA operations (aggregated equity, contract search).
  */
 
+import { createHash } from 'node:crypto'
 import Decimal from 'decimal.js'
 import type { Contract, ContractDescription, ContractDetails } from '@traderalice/ibkr'
 import type { AccountCapabilities, BrokerHealth, BrokerHealthInfo } from './brokers/types.js'
@@ -13,12 +14,24 @@ import { createCcxtProviderTools } from './brokers/ccxt/ccxt-tools.js'
 import { createBroker } from './brokers/factory.js'
 import {
   getBrokerPreset,
+  compareStewardSizingSourceVersions,
   resolveBrokerMutationContainmentClass,
   resolveAuthzAccountType,
+  STEWARD_ADMISSION_WIRE_VERSION,
+  STEWARD_UTA_MUTATION_BOUNDARY_VERSION,
+  STEWARD_UTA_MUTATION_MINIMUM_AUTHZ_LEVEL,
+  stewardSizingSourceVersionsSchema,
+  stewardUtaMutationRequestSchema,
+  type GitExportState,
+  type Operation,
   type AuthzLevel,
   type BrokerMutationContainmentClass,
   type StewardAdmissionRequest,
   type StewardAdmissionResponse,
+  type StewardSizingSourceVersions,
+  type StewardUtaMutationRequest,
+  type StewardUtaMutationRejectionCode,
+  type StewardUtaMutationResponse,
 } from '@traderalice/uta-protocol'
 import { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
 import { loadGitState, createGitPersister } from './git-persistence.js'
@@ -41,6 +54,12 @@ import {
   type RiskEnvelopeAdmissionSource,
 } from './risk-envelope.js'
 import './contract-ext.js'
+import { StewardMutationIdempotencyConflictError } from './git/TradingGit.js'
+import {
+  MutationBusyError,
+  MutationRecoveryRequiredError,
+  MutationUnsupportedSchemaError,
+} from './git/mutation-coordinator.js'
 
 // Manager-level shapes live in `@traderalice/uta-protocol` (the SDK
 // contract surface) — re-exported here for backwards compatibility with
@@ -55,7 +74,33 @@ export interface SnapshotHooks {
   onPostReject?: (utaId: string) => void | Promise<void>
 }
 
-interface UTAManagerDeps {
+export interface StewardMutationFixtureProducer {
+  /** Pure mapping used only to persist the fixture operation in TradingGit. */
+  createOperation(input: {
+    readonly accountId: string
+    readonly request: StewardUtaMutationRequest
+  }): Operation
+  readSourceVersions(input: {
+    readonly accountId: string
+    readonly request: StewardUtaMutationRequest
+  }): Promise<StewardSizingSourceVersions>
+  /** UTA owns the return value; it is normalized into TradingGit and never
+   * crosses the Steward mutation response. */
+  invokeOperation(input: {
+    readonly accountId: string
+    readonly request: StewardUtaMutationRequest
+    readonly operation: Operation
+  }): Promise<unknown>
+}
+
+export interface StewardMutationCriticalSection {
+  run<T>(
+    accountId: string,
+    consume: (source: RiskEnvelopeAdmissionSource) => Promise<T>,
+  ): Promise<T>
+}
+
+export interface UTAManagerDeps {
   eventLog?: EventLog
   toolCenter?: ToolCenter
   fxService?: FxService
@@ -63,11 +108,30 @@ interface UTAManagerDeps {
   /** Effective product-level mode resolved once by the UTA process. Lite
    * disables all mutation; readonly allows only verified isolation. */
   tradingMode?: TradingMode
+  /** D2-only fixture lane. Production boot deliberately leaves this absent. */
+  stewardMutationFixtureProducer?: StewardMutationFixtureProducer
+  /** Test-only ownership injection; production uses withLockedUTAsConfig. */
+  stewardMutationCriticalSection?: StewardMutationCriticalSection
+  /** Test-only durable-state reader; production rereads commit.json. */
+  stewardMutationDurableStateReader?: (accountId: string) => Promise<GitExportState | undefined>
 }
 
 export interface UtaRuntimePolicy {
   tradingMode: TradingMode
   containmentClass: BrokerMutationContainmentClass
+}
+
+class StewardMutationBoundaryRejection extends Error {
+  constructor(
+    readonly code: StewardUtaMutationRejectionCode,
+    readonly changed?: readonly (keyof StewardSizingSourceVersions)[],
+  ) {
+    super(code)
+    this.name = 'StewardMutationBoundaryRejection'
+    if (code === 'source_state_changed' && !changed?.length) {
+      throw new Error('source_state_changed requires at least one changed source version')
+    }
+  }
 }
 
 /** Pure config-to-runtime policy mapping used by UTAManager.initUTA. Keeping
@@ -94,6 +158,9 @@ export class UTAManager {
   private _snapshotHooks?: SnapshotHooks
   private fxService?: FxService
   private readonly tradingMode: TradingMode
+  private readonly stewardMutationFixtureProducer?: StewardMutationFixtureProducer
+  private readonly stewardMutationCriticalSection?: StewardMutationCriticalSection
+  private readonly stewardMutationDurableStateReader: (accountId: string) => Promise<GitExportState | undefined>
 
   constructor(deps?: UTAManagerDeps) {
     this.eventLog = deps?.eventLog
@@ -101,6 +168,9 @@ export class UTAManager {
     this.toolCenter = deps?.toolCenter
     this.fxService = deps?.fxService
     this.tradingMode = deps?.tradingMode ?? 'pro'
+    this.stewardMutationFixtureProducer = deps?.stewardMutationFixtureProducer
+    this.stewardMutationCriticalSection = deps?.stewardMutationCriticalSection
+    this.stewardMutationDurableStateReader = deps?.stewardMutationDurableStateReader ?? loadGitState
   }
 
   setSnapshotHooks(hooks: SnapshotHooks): void {
@@ -255,6 +325,116 @@ export class UTAManager {
     })
   }
 
+  /**
+   * Concrete D2 mutation boundary. TradingGit acquires the account mutation
+   * lease first; its boundary callback then acquires the accounts-config lock
+   * and keeps it through admission, durable external-key dedupe, any required
+   * source-version comparison, and fixture invocation. An exact completed
+   * duplicate returns before source comparison because the invocation is not
+   * new; admission still runs for every request.
+   */
+  async invokeStewardMutation(
+    utaId: string,
+    workspaceAuthzLevel: AuthzLevel,
+    requestInput: StewardUtaMutationRequest,
+  ): Promise<StewardUtaMutationResponse> {
+    const request = stewardUtaMutationRequestSchema.parse(requestInput)
+    const identity = stewardMutationResponseIdentity(utaId, request)
+    if (request.accountId !== utaId) {
+      return { ...identity, status: 'rejected', code: 'account_identity_mismatch' }
+    }
+    const uta = this.entries.get(utaId)
+    if (!uta || !this.stewardMutationFixtureProducer) {
+      return { ...identity, status: 'rejected', code: 'mutation_capability_unavailable' }
+    }
+    const producer = this.stewardMutationFixtureProducer
+    const payloadFingerprint = stewardMutationPayloadFingerprint(request)
+
+    try {
+      const result = await uta.executeStewardMutation({
+        request,
+        payloadFingerprint,
+        message: `Steward deterministic operation ${request.operation.operationId}`,
+        boundary: (transaction) => this.runStewardMutationCriticalSection(utaId, async (source) => {
+          const admission = evaluateStewardAdmission({
+            accountId: utaId,
+            source,
+            request: {
+              version: STEWARD_ADMISSION_WIRE_VERSION,
+              workspaceAuthzLevel,
+              minimumAuthzLevel: STEWARD_UTA_MUTATION_MINIMUM_AUTHZ_LEVEL,
+              expectedEnvelopeVersion: request.expectedSourceVersions.riskEnvelope,
+            },
+          })
+          if (admission.status === 'rejected') {
+            throw new StewardMutationBoundaryRejection(admission.code)
+          }
+
+          let durableState: GitExportState | undefined
+          try {
+            durableState = await this.stewardMutationDurableStateReader(utaId)
+          } catch {
+            throw new StewardMutationBoundaryRejection('mutation_recovery_required')
+          }
+          return transaction(durableState, async () => {
+            let actualVersions: StewardSizingSourceVersions
+            try {
+              actualVersions = stewardSizingSourceVersionsSchema.parse(
+                await producer.readSourceVersions({ accountId: utaId, request }),
+              )
+            } catch {
+              throw new StewardMutationBoundaryRejection('source_state_invalid')
+            }
+            const comparison = compareStewardSizingSourceVersions(
+              request.expectedSourceVersions,
+              actualVersions,
+            )
+            if (!comparison.ok) {
+              throw new StewardMutationBoundaryRejection(comparison.code, comparison.changed)
+            }
+          })
+        }),
+        prepareOperation: () => producer.createOperation({ accountId: utaId, request }),
+        execute: (operation) => producer.invokeOperation({ accountId: utaId, request, operation }),
+      })
+      return {
+        ...identity,
+        status: 'accepted',
+        deduplicated: result.deduplicated,
+      }
+    } catch (error) {
+      if (error instanceof StewardMutationBoundaryRejection) {
+        if (error.code === 'source_state_changed') {
+          return {
+            ...identity,
+            status: 'rejected',
+            code: error.code,
+            changed: [...(error.changed ?? [])],
+          }
+        }
+        return {
+          ...identity,
+          status: 'rejected',
+          code: error.code,
+          ...(error.changed?.length ? { changed: [...error.changed] } : {}),
+        }
+      }
+      if (error instanceof StewardMutationIdempotencyConflictError) {
+        return { ...identity, status: 'rejected', code: 'idempotency_conflict' }
+      }
+      if (error instanceof MutationBusyError) {
+        return { ...identity, status: 'rejected', code: 'mutation_busy' }
+      }
+      if (
+        error instanceof MutationRecoveryRequiredError
+        || error instanceof MutationUnsupportedSchemaError
+      ) {
+        return { ...identity, status: 'rejected', code: 'mutation_recovery_required' }
+      }
+      return { ...identity, status: 'rejected', code: 'mutation_recovery_required' }
+    }
+  }
+
   private async readAdmissionSource(utaId: string): Promise<RiskEnvelopeAdmissionSource> {
     try {
       const fresh = (await readUTAsConfig()).find((account) => account.id === utaId)
@@ -280,6 +460,15 @@ export class UTAManager {
         accountMaxAuthzLevel: fresh?.maxAuthzLevel ?? null,
       })
     })
+  }
+
+  private runStewardMutationCriticalSection<T>(
+    utaId: string,
+    consume: (source: RiskEnvelopeAdmissionSource) => Promise<T>,
+  ): Promise<T> {
+    return this.stewardMutationCriticalSection
+      ? this.stewardMutationCriticalSection.run(utaId, consume)
+      : this.withLockedAdmissionSource(utaId, consume)
   }
 
   // ==================== Lookups ====================
@@ -449,4 +638,35 @@ export class UTAManager {
     )
     this.entries.clear()
   }
+}
+
+function stewardMutationResponseIdentity(
+  accountId: string,
+  request: StewardUtaMutationRequest,
+) {
+  return {
+    version: STEWARD_UTA_MUTATION_BOUNDARY_VERSION,
+    accountId,
+    utaMutationReference: request.utaMutationReference,
+    operationId: request.operation.operationId,
+  } as const
+}
+
+function stewardMutationPayloadFingerprint(request: StewardUtaMutationRequest): string {
+  const payload = {
+    operation: request.operation,
+    ...('protection' in request ? { protection: request.protection } : {}),
+  }
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalizeJson(payload)))
+    .digest('hex')
+}
+
+function canonicalizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeJson)
+  if (value === null || typeof value !== 'object') return value
+  const source = value as Record<string, unknown>
+  return Object.fromEntries(
+    Object.keys(source).sort().map((key) => [key, canonicalizeJson(source[key])]),
+  )
 }
