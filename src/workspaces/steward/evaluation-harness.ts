@@ -5,6 +5,10 @@ import {
   type StewardEvaluationContent,
   type StewardEvaluationManifestValidation,
 } from './evaluation-data-manifest.js';
+import {
+  assertStoredManifestMatchesCandidate,
+  type StewardEvaluationProvenanceStore,
+} from './evaluation-provenance-store.js';
 
 export const STEWARD_WAKE_EVALUATION_INPUT_VERSION = 1;
 export const STEWARD_WAKE_EVALUATION_REPORT_VERSION = 1;
@@ -113,13 +117,26 @@ export interface StewardWakeEvaluationReport {
   readonly outcomes: readonly StewardEvaluationOutcome[];
 }
 
-export function evaluateStewardWake(
+/** Production evaluation entrypoint. The caller may declare the manifest in
+ * its input, but the exact per-wake manifest and all evidence bytes are loaded
+ * from launcher-owned disk state before the pure validators run. */
+export async function evaluateStewardWake(
   rawInput: unknown,
+  provenanceStore: StewardEvaluationProvenanceStore,
+): Promise<StewardWakeEvaluationReport> {
+  const input = stewardWakeEvaluationInputSchema.parse(rawInput);
+  const resolved = await provenanceStore.loadManifest(input.wakeId);
+  assertStoredManifestMatchesCandidate(resolved.manifest, input.dataManifest);
+  return evaluateResolvedStewardWake(input, resolved.manifest, resolved.contentByRef);
+}
+
+function evaluateResolvedStewardWake(
+  input: StewardWakeEvaluationInput,
+  dataManifest: unknown,
   contentByRef: Readonly<Record<string, StewardEvaluationContent>>,
 ): StewardWakeEvaluationReport {
-  const input = stewardWakeEvaluationInputSchema.parse(rawInput);
   const manifest = validateStewardEvaluationDataManifest(
-    input.dataManifest,
+    dataManifest,
     contentByRef,
     input.wakeId,
   );
