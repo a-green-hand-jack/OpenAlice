@@ -99,6 +99,7 @@ export const stewardEvaluationDataManifestSchema = z.object({
 
 export type StewardEvaluationDataManifest = z.infer<typeof stewardEvaluationDataManifestSchema>;
 export type StewardEvaluationContent = string | Uint8Array;
+export type StewardEvaluationContentIdentity = z.infer<typeof stewardEvaluationContentIdentitySchema>;
 
 export type StewardEvaluationManifestViolationCode =
   | 'manifest_shape_invalid'
@@ -386,6 +387,23 @@ export function validateStewardEvaluationManifestSet(
 
 export function sha256StewardEvaluationContent(value: StewardEvaluationContent): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+/** Enumerate every byte identity named by a strict manifest. Store-backed
+ * resolvers use this before invoking the pure chronology/split validators. */
+export function stewardEvaluationManifestContentIdentities(
+  input: unknown,
+): readonly StewardEvaluationContentIdentity[] {
+  const manifest = stewardEvaluationDataManifestSchema.parse(input);
+  return [
+    manifest.snapshot,
+    manifest.dataset.content,
+    manifest.sampling.plan,
+    manifest.universe.source,
+    ...SOURCE_CATEGORIES.flatMap((category) => manifest.sources[category].items),
+    ...manifest.publications,
+    ...manifest.corporateActions,
+  ].map(({ ref, sha256 }) => ({ ref, sha256 }));
 }
 
 function validateContentIdentity(

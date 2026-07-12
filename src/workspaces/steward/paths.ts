@@ -19,6 +19,9 @@ export const STEWARD_SNAPSHOTS_REL = `${STEWARD_ROOT_REL}/snapshots`;
 /** Deterministic sizing audit records. These are launcher-owned, immutable,
  * and created lazily by the D2 core writer. */
 export const STEWARD_EXECUTION_RECORDS_REL = `${STEWARD_ROOT_REL}/execution-records`;
+/** Launcher-owned, content-addressed evidence and immutable per-wake
+ * evaluation manifests. Created lazily by the D3 provenance store. */
+export const STEWARD_EVALUATION_PROVENANCE_REL = `${STEWARD_ROOT_REL}/evaluation-provenance`;
 /** Per-workspace machine control-face thread state (issue #146). ONE file per
  *  workspace (not per-wake) — a machine wake resumes the SAME native thread as
  *  the prior wake, so this id lets wake N+1 re-attach across Alice restarts.
@@ -119,6 +122,10 @@ export function stewardExecutionRecordFilename(recordId: string): string {
 
 export function stewardExecutionRecordPath(workspaceDir: string, recordId: string): string {
   return join(stewardExecutionRecordsDir(workspaceDir), stewardExecutionRecordFilename(recordId));
+}
+
+export function stewardEvaluationProvenanceDir(workspaceDir: string): string {
+  return join(stewardRootPath(workspaceDir), 'evaluation-provenance');
 }
 
 /** The single machine control-face thread record for a workspace (issue #146). */

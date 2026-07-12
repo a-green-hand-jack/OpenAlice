@@ -18,5 +18,6 @@ export * from './sizing.js';
 export * from './execution-record.js';
 export * from './sizing-integration.js';
 export * from './evaluation-data-manifest.js';
+export * from './evaluation-provenance-store.js';
 export * from './evaluation-harness.js';
 export * from './model-cost-scheduler.js';
