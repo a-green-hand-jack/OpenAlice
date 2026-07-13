@@ -16,8 +16,10 @@ import {
   D4_ENGINEERING_SHAKEDOWN_MODEL_TURN_COUNT,
   D4SmokeCapabilityAuditLedger,
   D4EngineeringShakedownError,
+  D4EngineeringShakedownFailureError,
   assertD4ActualModelIds,
   assertD4CandidateVisibleBytes,
+  assertD4EngineeringShakedownFailureNonInferential,
   assertD4EngineeringShakedownNonInferential,
   classifyD4SmokeShimAttempt,
   captureD4SmokeIsolatedPreflightQuota,
@@ -43,6 +45,7 @@ import {
   validateD4SmokeExecutionPlan,
   validateD4SmokeQuotaEvidence,
   type D4EngineeringShakedownQuotaEvidence,
+  type D4EngineeringShakedownFailure,
   type D4EngineeringShakedownResult,
   type D4EngineeringShakedownSelector,
   type D4ShakedownQuotaPhase,
@@ -2168,8 +2171,10 @@ function d3Manifest(wakeId: string): StewardEvaluationDataManifest {
 // and this assignment fails to compile.
 type ShakedownResultNotOfficial = D4EngineeringShakedownResult extends D4SmokeExecutionResult ? false : true;
 type ShakedownQuotaNotOfficial = D4EngineeringShakedownQuotaEvidence extends D4SmokeQuotaEvidence ? false : true;
+type ShakedownFailureNotOfficial = D4EngineeringShakedownFailure extends D4SmokeExecutionResult ? false : true;
 const SHAKEDOWN_RESULT_NOT_OFFICIAL: ShakedownResultNotOfficial = true;
 const SHAKEDOWN_QUOTA_NOT_OFFICIAL: ShakedownQuotaNotOfficial = true;
+const SHAKEDOWN_FAILURE_NOT_OFFICIAL: ShakedownFailureNotOfficial = true;
 
 function shakedownPhase(
   shakedownExecutionId: string,
@@ -2303,7 +2308,7 @@ describe('D4 engineering shakedown (issue #205)', () => {
     expect(D4_SMOKE_EXECUTION_COUNT).toBe(108);
     expect(D4_SMOKE_MODEL_TURN_COUNT).toBe(1296);
     expect(D4_ENGINEERING_SHAKEDOWN_MODEL_TURN_COUNT).toBe(1);
-    expect(SHAKEDOWN_RESULT_NOT_OFFICIAL && SHAKEDOWN_QUOTA_NOT_OFFICIAL).toBe(true);
+    expect(SHAKEDOWN_RESULT_NOT_OFFICIAL && SHAKEDOWN_QUOTA_NOT_OFFICIAL && SHAKEDOWN_FAILURE_NOT_OFFICIAL).toBe(true);
 
     const executionId = 'engineering-shakedown:claude:claude-fable-5:d4-crypto-major-bull-a:d01';
     const shakedown = shakedownQuotaEvidence(
@@ -2495,6 +2500,116 @@ describe('D4 engineering shakedown (issue #205)', () => {
     );
     expect(driverFactory).not.toHaveBeenCalled();
   });
+
+  it('preserves strict post-turn accounting in a distinct failure error before rejecting mismatched provider model ids', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-d4-shakedown-failure-'));
+    try {
+      const fixture = await createD4SmokeTestFixture();
+      const stage = await validateD4SmokeStage({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+      });
+      const sandboxBase = join(root, 'sandboxes');
+      const selector: D4EngineeringShakedownSelector = {
+        modelId: 'claude-fable-5',
+        cellId: stage.manifest.content.cells[0]!.id,
+        decisionIndex: 0,
+      };
+      const plan = planD4EngineeringShakedown(stage, sandboxBase, selector);
+      const credentialSource = join(root, '.credentials.json');
+      await writeFile(credentialSource, subscriptionOAuthFixture('claude'), { mode: 0o600 });
+      const driver = new FakeDriver();
+      vi.spyOn(driver, 'runTurn').mockResolvedValue({
+        turnId: 'turn-fable-with-auxiliary',
+        status: 'completed',
+        agentMessage: 'completed with provider-reported auxiliary model',
+        durationMs: 42,
+        interrupted: false,
+        actualModelIds: ['claude-fable-5', 'claude-haiku-4-5-20251001'],
+      });
+      vi.spyOn(driver, 'readTelemetry').mockReturnValue({
+        totalTokens: 193_997,
+        inputTokens: 13,
+        cachedInputTokens: 188_583,
+        outputTokens: 5_401,
+        updatedAt: NOW.toISOString(),
+      });
+      const phases: D4ShakedownQuotaPhase[] = [];
+      const failure = await runD4EngineeringShakedown({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+        contentByRef: fixture.contentByRef,
+        sandboxBase,
+        selector,
+        credentialSources: [{
+          provider: 'claude',
+          sourceIdentity: 'claude-max-oauth',
+          sourcePath: credentialSource,
+        }],
+        canonicalCredentialPaths: canonicalCredentialPaths(credentialSource),
+        quotaReader: async (phase, quotaPlan) => {
+          phases.push(phase);
+          return shakedownQuotaEvidence(
+            fixture.manifestSha256,
+            phase,
+            quotaPlan.candidate.modelId as keyof typeof D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS,
+            phase.kind === 'shakedown_post_turn' ? 11 : 10,
+          );
+        },
+        driverFactory: async (binding) => ({
+          driver,
+          resolvedModelId: binding.modelId,
+          runtimeVersion: binding.runtimeVersion,
+        }),
+        bootstrapWorkspace: async () => {
+          await mkdir(join(plan.paths.workspace, '.alice', 'steward'), { recursive: true, mode: 0o700 });
+          await writeFile(
+            join(plan.paths.workspace, '.alice', 'steward', 'validate-ledger.mjs'),
+            'process.exit(0)\n',
+            { mode: 0o600 },
+          );
+        },
+        prepareDecision: async (decision) => {
+          const record = wakeRecord(decision.wakeId, decision.fictionalAsOf);
+          return { record, candidateVisibleBytes: [JSON.stringify(record)] };
+        },
+        readTerminalArtifact: async (terminal) => terminalArtifact(plan.paths.workspace, terminal.wakeId),
+        auditLedger: new D4SmokeCapabilityAuditLedger(),
+        now: () => NOW,
+      }).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(D4EngineeringShakedownFailureError);
+      const artifact = (failure as D4EngineeringShakedownFailureError).artifact as D4EngineeringShakedownFailure;
+      expect(phases.map((phase) => phase.kind)).toEqual(['shakedown_dispatch', 'shakedown_post_turn']);
+      expect(assertD4EngineeringShakedownFailureNonInferential(artifact)).toBe(artifact);
+      expect(artifact).toMatchObject({
+        schema: 'steward-d4-engineering-shakedown-failure/1',
+        purpose: 'engineering_shakedown_failure',
+        failureValidity: 'invalid',
+        provider: 'claude',
+        requestedModelId: 'claude-fable-5',
+        providerReportedModelIds: ['claude-fable-5', 'claude-haiku-4-5-20251001'],
+        terminal: { providerReportedStatus: 'completed', interrupted: false },
+        durationMs: 42,
+        latencyMs: 0,
+        tokenTelemetry: { totalTokens: 193_997 },
+        credential: { provider: 'claude', unchangedAfterExecution: true },
+        capabilityAttempts: [],
+        error: { kind: 'policy', code: 'model_binding_invalid' },
+      });
+      expect(artifact.quota.dispatch.phase.kind).toBe('shakedown_dispatch');
+      expect(artifact.quota.postTurn.phase.kind).toBe('shakedown_post_turn');
+      expect(artifact).not.toHaveProperty('status');
+      expect(artifact).not.toHaveProperty('reports');
+      expect(artifact).not.toHaveProperty('quotaEvidence');
+      expect(() => assertD4EngineeringShakedownFailureNonInferential({ ...artifact, status: 'invalid' }))
+        .toThrow(/status/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 20_000);
 
   it('runs exactly one non-inferential frozen turn and never yields an official-Smoke result', async () => {
     const root = await mkdtemp(join(tmpdir(), 'openalice-d4-shakedown-'));
