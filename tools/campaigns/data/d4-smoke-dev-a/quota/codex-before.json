@@ -1,0 +1,69 @@
+{
+  "rateLimits": {
+    "limitId": "codex",
+    "limitName": null,
+    "primary": {
+      "usedPercent": 22,
+      "windowDurationMins": 10080,
+      "resetsAt": 1784487541
+    },
+    "secondary": null,
+    "credits": {
+      "hasCredits": false,
+      "unlimited": false,
+      "balance": "0"
+    },
+    "individualLimit": null,
+    "planType": "pro",
+    "rateLimitReachedType": null
+  },
+  "rateLimitsByLimitId": {
+    "codex": {
+      "limitId": "codex",
+      "limitName": null,
+      "primary": {
+        "usedPercent": 22,
+        "windowDurationMins": 10080,
+        "resetsAt": 1784487541
+      },
+      "secondary": null,
+      "credits": {
+        "hasCredits": false,
+        "unlimited": false,
+        "balance": "0"
+      },
+      "individualLimit": null,
+      "planType": "pro",
+      "rateLimitReachedType": null
+    },
+    "codex_bengalfox": {
+      "limitId": "codex_bengalfox",
+      "limitName": "GPT-5.3-Codex-Spark",
+      "primary": {
+        "usedPercent": 0,
+        "windowDurationMins": 10080,
+        "resetsAt": 1784535591
+      },
+      "secondary": null,
+      "credits": null,
+      "individualLimit": null,
+      "planType": "pro",
+      "rateLimitReachedType": null
+    }
+  },
+  "rateLimitResetCredits": {
+    "availableCount": 0,
+    "credits": []
+  },
+  "nativeEvidence": {
+    "capture": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/captures/codex-before.native.json",
+      "sha256": "95288d357917b67684d09ba439204c19e1d508bbe7827515772ecea578f6def0"
+    },
+    "calibrationReceipt": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/calibration-receipt.json",
+      "sha256": "2ac9f27ef3da92aa8d2e4a83b3d17a2c05128490fad993aae6ae339e17f76529"
+    },
+    "normalization": "Exact JSON-RPC result projection; rate-limit fields are unchanged."
+  }
+}

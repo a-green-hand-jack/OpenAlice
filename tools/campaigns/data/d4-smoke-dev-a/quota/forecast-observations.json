@@ -1,0 +1,72 @@
+{
+  "schema": "steward-d4-quota-forecast-observations/1",
+  "version": 1,
+  "sourceIdentity": "native-subscription-controls",
+  "observations": [
+    {
+      "id": "g2-codex-reachability-calibration",
+      "provider": "codex",
+      "charges": [
+        {
+          "id": "codex-general-weekly",
+          "chargedTurnCount": 4,
+          "resolutionPercent": 1
+        },
+        {
+          "id": "codex-spark",
+          "chargedTurnCount": 1,
+          "resolutionPercent": 1
+        }
+      ],
+      "before": {
+        "capturedAt": "2026-07-13T08:19:51.752Z",
+        "raw": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/codex-before.json",
+          "sha256": "2ded8804bec39ad4f6c0fb6d3ef7357ba9fea8f0129e7ca530fe7d638a89c0d5"
+        }
+      },
+      "after": {
+        "capturedAt": "2026-07-13T08:23:16.303Z",
+        "raw": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/codex-after.json",
+          "sha256": "e8fe2475ea873bfcd4eec14976080b5e8f6ced9e46f1120c169958361a102566"
+        }
+      }
+    },
+    {
+      "id": "g2-claude-reachability-calibration",
+      "provider": "claude",
+      "charges": [
+        {
+          "id": "claude-all-model-weekly",
+          "chargedTurnCount": 4,
+          "resolutionPercent": 1
+        },
+        {
+          "id": "claude-fable-weekly",
+          "chargedTurnCount": 1,
+          "resolutionPercent": 1
+        },
+        {
+          "id": "claude-current-short",
+          "chargedTurnCount": 4,
+          "resolutionPercent": 1
+        }
+      ],
+      "before": {
+        "capturedAt": "2026-07-13T08:20:27.776Z",
+        "raw": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/claude-before.json",
+          "sha256": "425677e9c115f7ebf06c5c665aa3033c5575b10b5cc6278442ff6e1d8b828ce3"
+        }
+      },
+      "after": {
+        "capturedAt": "2026-07-13T08:23:06.841Z",
+        "raw": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/claude-after.json",
+          "sha256": "152632936ead68d6000f67cd6668adc4b9970d749002ff79c58fc6afa7961c46"
+        }
+      }
+    }
+  ]
+}

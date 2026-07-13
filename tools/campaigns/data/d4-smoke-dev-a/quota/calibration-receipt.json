@@ -1,0 +1,118 @@
+{
+  "schema": "steward-d4-quota-calibration-receipt/1",
+  "version": 1,
+  "authorization": "AUTH-D4-DEV",
+  "sourceIdentity": "native-subscription-controls",
+  "billing": {
+    "codex": "Existing ChatGPT subscription; no credits or overage enabled.",
+    "claude": "Existing Claude Max subscription; CLI cost fields are shadow telemetry, not incremental billed spend.",
+    "incrementalSpendUsd": 0
+  },
+  "captures": {
+    "codexBefore": {
+      "capturedAt": "2026-07-13T08:19:51.752Z",
+      "control": "Codex app-server account/rateLimits/read",
+      "content": {
+        "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/captures/codex-before.native.json",
+        "sha256": "95288d357917b67684d09ba439204c19e1d508bbe7827515772ecea578f6def0"
+      }
+    },
+    "codexAfter": {
+      "capturedAt": "2026-07-13T08:23:16.303Z",
+      "control": "Codex app-server account/rateLimits/read",
+      "content": {
+        "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/captures/codex-after.native.json",
+        "sha256": "1bfc46584ca0436f3989ac5aeacfa09633e6e3ae06c4f25286b09d692ef29533"
+      }
+    },
+    "claudeBefore": {
+      "capturedAt": "2026-07-13T08:20:27.776Z",
+      "control": "Claude Code native /usage JSON result",
+      "content": {
+        "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/captures/claude-before.native.json",
+        "sha256": "37488a38d254c5fb420eed93cf2b39d8230c9dcf1b5157933dfe02a545698457"
+      }
+    },
+    "claudeAfter": {
+      "capturedAt": "2026-07-13T08:23:06.841Z",
+      "control": "Claude Code native /usage rendered result",
+      "content": {
+        "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/captures/claude-after.native.txt",
+        "sha256": "7c415576b2c0d8632ba54ef6445293079bad7bf5468731167e1f7ff729919037"
+      }
+    }
+  },
+  "normalization": {
+    "codex": "Project the JSON-RPC result object without changing rate-limit fields.",
+    "claude": "Parse the three integer utilization lines and Asia/Riyadh reset text, then project them into the later SDK usage-control shape required by the frozen runner. Preserve zero-turn/zero-cost control evidence.",
+    "displayResolutionPercent": 1
+  },
+  "probes": [
+    {
+      "provider": "codex",
+      "modelId": "gpt-5.6-sol",
+      "chargedWindows": ["codex-general-weekly"],
+      "stdout": {"ref": "tools/campaigns/data/d4-smoke-dev-a/quota/probes/codex/openalice-g2-codex-gpt-5.6-sol.txt", "sha256": "565339bc4d33d72817b583024112eb7f5cdf3e5eef0252d6ec1b9c9a94e12bb3"},
+      "stderr": {"ref": "tools/campaigns/data/d4-smoke-dev-a/quota/probes/codex/openalice-g2-codex-gpt-5.6-sol.err", "sha256": "79c2ce6c54eebda2b5b9bb780ed351307da6aaef04a01efa17ccfc851f46da6f"}
+    },
+    {
+      "provider": "codex",
+      "modelId": "gpt-5.6-terra",
+      "chargedWindows": ["codex-general-weekly"],
+      "stdout": {"ref": "tools/campaigns/data/d4-smoke-dev-a/quota/probes/codex/openalice-g2-codex-gpt-5.6-terra.txt", "sha256": "565339bc4d33d72817b583024112eb7f5cdf3e5eef0252d6ec1b9c9a94e12bb3"},
+      "stderr": {"ref": "tools/campaigns/data/d4-smoke-dev-a/quota/probes/codex/openalice-g2-codex-gpt-5.6-terra.err", "sha256": "3bd680df0a79fc3cdf56f82967ddfc49c8a78d11354c52852c2e7b91b212a14b"}
+    },
+    {
+      "provider": "codex",
+      "modelId": "gpt-5.6-luna",
+      "chargedWindows": ["codex-general-weekly"],
+      "stdout": {"ref": "tools/campaigns/data/d4-smoke-dev-a/quota/probes/codex/openalice-g2-codex-gpt-5.6-luna.txt", "sha256": "565339bc4d33d72817b583024112eb7f5cdf3e5eef0252d6ec1b9c9a94e12bb3"},
+      "stderr": {"ref": "tools/campaigns/data/d4-smoke-dev-a/quota/probes/codex/openalice-g2-codex-gpt-5.6-luna.err", "sha256": "f725839fee7be3e4b3621aebd6d99d563c5dbf7851516a47615f87fc65b84b61"}
+    },
+    {
+      "provider": "codex",
+      "modelId": "gpt-5.5",
+      "chargedWindows": ["codex-general-weekly"],
+      "stdout": {"ref": "tools/campaigns/data/d4-smoke-dev-a/quota/probes/codex/openalice-g2-codex-gpt-5.5.txt", "sha256": "565339bc4d33d72817b583024112eb7f5cdf3e5eef0252d6ec1b9c9a94e12bb3"},
+      "stderr": {"ref": "tools/campaigns/data/d4-smoke-dev-a/quota/probes/codex/openalice-g2-codex-gpt-5.5.err", "sha256": "6e112d0668f16f83287448159ef29bbad59b7f59f35e995d0fb0081c471a19c3"}
+    },
+    {
+      "provider": "codex",
+      "modelId": "gpt-5.3-codex-spark",
+      "chargedWindows": ["codex-spark"],
+      "stdout": {"ref": "tools/campaigns/data/d4-smoke-dev-a/quota/probes/codex/openalice-g2-codex-gpt-5.3-codex-spark.txt", "sha256": "565339bc4d33d72817b583024112eb7f5cdf3e5eef0252d6ec1b9c9a94e12bb3"},
+      "stderr": {"ref": "tools/campaigns/data/d4-smoke-dev-a/quota/probes/codex/openalice-g2-codex-gpt-5.3-codex-spark.err", "sha256": "9cd91b0eee04b2950d3127d1734771e45ed4b942eff83e6426c2ad28e5ff9b3e"}
+    },
+    {
+      "provider": "claude",
+      "modelId": "claude-fable-5",
+      "chargedWindows": ["claude-all-model-weekly", "claude-fable-weekly", "claude-current-short"],
+      "result": {"ref": "tools/campaigns/data/d4-smoke-dev-a/quota/probes/claude/openalice-g2-claude-claude-fable-5.json", "sha256": "181d6296b11c5db015fdabf648613a039ed9c1f7140873f75d2070df5eebbc68"}
+    },
+    {
+      "provider": "claude",
+      "modelId": "claude-sonnet-5",
+      "chargedWindows": ["claude-all-model-weekly", "claude-current-short"],
+      "result": {"ref": "tools/campaigns/data/d4-smoke-dev-a/quota/probes/claude/openalice-g2-claude-claude-sonnet-5.json", "sha256": "f649c311bd671b319b13c00ed455dcdb44ee8a2cfcc8fb9bb29bb56fbfe7a3a3"}
+    },
+    {
+      "provider": "claude",
+      "modelId": "claude-opus-4-8",
+      "chargedWindows": ["claude-all-model-weekly", "claude-current-short"],
+      "result": {"ref": "tools/campaigns/data/d4-smoke-dev-a/quota/probes/claude/openalice-g2-claude-claude-opus-4-8.json", "sha256": "3e685974ee4c601dd46fae7f811b3f19a485e6a0759de325536ec47b2eaa10ad"}
+    },
+    {
+      "provider": "claude",
+      "modelId": "claude-haiku-4-5-20251001",
+      "chargedWindows": ["claude-all-model-weekly", "claude-current-short"],
+      "result": {"ref": "tools/campaigns/data/d4-smoke-dev-a/quota/probes/claude/openalice-g2-claude-claude-haiku-4-5-20251001.json", "sha256": "36df3108889b17d96432fd03223634b5c1a70ab4fc69932ff95fff41df8353a3"}
+    }
+  ],
+  "chargedTurnCounts": {
+    "codex-general-weekly": 4,
+    "codex-spark": 1,
+    "claude-all-model-weekly": 4,
+    "claude-fable-weekly": 1,
+    "claude-current-short": 4
+  }
+}

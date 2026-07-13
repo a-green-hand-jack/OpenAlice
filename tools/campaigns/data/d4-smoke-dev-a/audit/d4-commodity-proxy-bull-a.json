@@ -1,0 +1,1663 @@
+{
+  "schema": "steward-d4-cell-audit/1",
+  "version": 1,
+  "cellId": "d4-commodity-proxy-bull-a",
+  "split": "dev",
+  "sourceReceipt": {
+    "schema": "steward-d4-source-receipt/1",
+    "version": 1,
+    "createdAt": "2026-07-13T00:00:00.000Z",
+    "redistribution": "receipt-only",
+    "provider": "yahoo-chart-public",
+    "symbol": "USO",
+    "assetClass": "commodity-etf",
+    "timezone": "America/New_York",
+    "exchangeCalendar": "XNYS",
+    "providerAdjustmentMode": "retrospective_split_adjusted",
+    "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+    "splitEvidence": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#split-evidence",
+      "sha256": "69f843bac015b12b50fc7b332cb8915a8e2bfa0421c2a36f89866ffaf2f6bf6f"
+    },
+    "futureSplitInvariance": [
+      {
+        "decisionOrdinal": 1,
+        "asOf": "2022-03-17T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "2f306179c2b8d2c84d193fdc738eac52d9f576ef85ff62cc5d79fa1e579e865b",
+        "deadjustedVisibleBarsSha256": "2f306179c2b8d2c84d193fdc738eac52d9f576ef85ff62cc5d79fa1e579e865b",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 2,
+        "asOf": "2022-03-24T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "f0a819efc299346954ebfc23edf46e448540523d9bb77bcebe35153b00948d54",
+        "deadjustedVisibleBarsSha256": "f0a819efc299346954ebfc23edf46e448540523d9bb77bcebe35153b00948d54",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 3,
+        "asOf": "2022-03-31T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "937917f2ad66f45824e66b00190ac2a4d723c42b8a2ccf5881eb1de604953aa4",
+        "deadjustedVisibleBarsSha256": "937917f2ad66f45824e66b00190ac2a4d723c42b8a2ccf5881eb1de604953aa4",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 4,
+        "asOf": "2022-04-07T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "61e715515346a8140f26f964ea63c47f54e9d80e946efa5cc2d39fe4b82067e3",
+        "deadjustedVisibleBarsSha256": "61e715515346a8140f26f964ea63c47f54e9d80e946efa5cc2d39fe4b82067e3",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 5,
+        "asOf": "2022-04-14T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "81cc0511a1f5d92857579f4d48b6027fc420bc10b5bfbfd045d99fda0a990ec6",
+        "deadjustedVisibleBarsSha256": "81cc0511a1f5d92857579f4d48b6027fc420bc10b5bfbfd045d99fda0a990ec6",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 6,
+        "asOf": "2022-04-22T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "63c182de75346eea8495c801f5ecb2820135fd026effec09fc99b4e58746b293",
+        "deadjustedVisibleBarsSha256": "63c182de75346eea8495c801f5ecb2820135fd026effec09fc99b4e58746b293",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 7,
+        "asOf": "2022-04-29T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "904dfec9bd98977014aec541e808d4017d5348d11c0ef27cdec9760a09050aac",
+        "deadjustedVisibleBarsSha256": "904dfec9bd98977014aec541e808d4017d5348d11c0ef27cdec9760a09050aac",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 8,
+        "asOf": "2022-05-06T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "61d1de76f16d2de373e850fc098eb71bac9f2913d485aeaf0b281242a4b8c908",
+        "deadjustedVisibleBarsSha256": "61d1de76f16d2de373e850fc098eb71bac9f2913d485aeaf0b281242a4b8c908",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 9,
+        "asOf": "2022-05-13T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "0be3cd337dacfec00319be2ce068a60161bfca739cb1bced433707efc411782f",
+        "deadjustedVisibleBarsSha256": "0be3cd337dacfec00319be2ce068a60161bfca739cb1bced433707efc411782f",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 10,
+        "asOf": "2022-05-20T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "04c990b00d6cae9df0911ec0714a3ca5b2715689041459f65430977340c9627f",
+        "deadjustedVisibleBarsSha256": "04c990b00d6cae9df0911ec0714a3ca5b2715689041459f65430977340c9627f",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 11,
+        "asOf": "2022-05-27T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "87f76d52f16300a814286fe54cf471e53d774c3484d7d836212047964308edb2",
+        "deadjustedVisibleBarsSha256": "87f76d52f16300a814286fe54cf471e53d774c3484d7d836212047964308edb2",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 12,
+        "asOf": "2022-06-04T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "a493d54b0ee3315ed91969d2313ce4b44b13510ee38f502b9ed5fd56940a741a",
+        "deadjustedVisibleBarsSha256": "a493d54b0ee3315ed91969d2313ce4b44b13510ee38f502b9ed5fd56940a741a",
+        "invariant": true
+      }
+    ],
+    "request": {
+      "method": "GET",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/USO?period1=1546300800&period2=1704067200&interval=1d&events=div%2Csplits&includeAdjustedClose=false&includePrePost=false",
+      "normalization": "chart.result[0] OHLCV; requested half-open range; non-finite/nonpositive rows removed; high/low expanded to include open/close; unadjusted"
+    },
+    "acquisition": {
+      "ref": "remote:d4-commodity-proxy-bull-a:acquisition",
+      "sha256": "70fadc6c7ea18053d2c46ad8b78e8e57d3b9686cb6bfd98c954c59bede9bf1fd",
+      "canonicalByteLength": 248285,
+      "barCount": 1258
+    },
+    "derivedPool": {
+      "ref": "derived:d4-commodity-proxy-bull-a:pool",
+      "sha256": "70fadc6c7ea18053d2c46ad8b78e8e57d3b9686cb6bfd98c954c59bede9bf1fd",
+      "canonicalByteLength": 248285,
+      "barCount": 1258
+    },
+    "selectedRaw": {
+      "ref": "remote:d4-commodity-proxy-bull-a:selected",
+      "sha256": "8878b8ad51626396e3ec2d2cbac6550ca69cf43a280c57fa9e6f3f7018015126",
+      "canonicalByteLength": 23551,
+      "barCount": 120
+    },
+    "selectedDerived": {
+      "ref": "derived:d4-commodity-proxy-bull-a:selected",
+      "sha256": "8878b8ad51626396e3ec2d2cbac6550ca69cf43a280c57fa9e6f3f7018015126",
+      "canonicalByteLength": 23551,
+      "barCount": 120
+    },
+    "selection": {
+      "profile": "bull",
+      "exactBarCount": 120,
+      "derivedPoolIndexStart": 748,
+      "derivedPoolIndexEndExclusive": 868,
+      "logReturn": 0.5912320087585491,
+      "firstTimestamp": "2021-12-20T14:30:00.000Z",
+      "finalAvailableAt": "2022-06-11T13:30:00.000Z"
+    },
+    "recipe": {
+      "command": "pnpm exec tsx tools/campaigns/build-d4-smoke-data.mjs --verify-source",
+      "failClosed": "Any request, canonical byte identity, exact selection index, or transform drift is an error.",
+      "implementation": [
+        {
+          "ref": "tools/campaigns/d4-smoke-data.mjs",
+          "sha256": "54b08c9ea59068879050070bc671ccb2327f3605e56d04398e80c1c99bb719c9"
+        },
+        {
+          "ref": "tools/campaigns/build-d4-smoke-data.mjs",
+          "sha256": "109edba4af37e03a3be1e1a674582aa0f6f01681a519532e1028cc1c8a722629"
+        }
+      ]
+    }
+  },
+  "splitEvidence": {
+    "schema": "steward-d4-split-evidence/1",
+    "version": 1,
+    "cellId": "d4-commodity-proxy-bull-a",
+    "provider": "yahoo-chart-public",
+    "symbol": "USO",
+    "providerAdjustmentMode": "retrospective_split_adjusted",
+    "cutoff": "2026-07-13T00:00:00.000Z",
+    "request": {
+      "method": "GET",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/USO?period1=1546300800&period2=1783900800&interval=1d&events=splits&includeAdjustedClose=false&includePrePost=false",
+      "normalization": "Yahoo split events through the frozen cutoff; sorted by effective timestamp."
+    },
+    "note": "Yahoo chart quote OHLCV is retrospectively normalized for split events even when adjusted-close output is disabled.",
+    "actions": [
+      {
+        "artifact": {
+          "schema": "steward-d4-split-action-evidence/1",
+          "provider": "yahoo-chart-public",
+          "symbol": "USO",
+          "effectiveAt": "2020-04-29T13:30:00.000Z",
+          "numerator": 1,
+          "denominator": 8,
+          "splitRatio": "1:8",
+          "announcedAt": "2020-04-29T13:30:00.000Z",
+          "announcementEvidence": null,
+          "availabilityPolicy": "Provider evidence proves the action no later than effectiveAt; earlier announcement access is not claimed."
+        },
+        "content": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#split-01",
+          "sha256": "fdaa9ec5947f53caa301461ac64dfc47d8031cd508f9423b86e1441e3fc9c343"
+        }
+      }
+    ]
+  },
+  "futureSplitInvariance": [
+    {
+      "decisionOrdinal": 1,
+      "asOf": "2022-03-17T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "2f306179c2b8d2c84d193fdc738eac52d9f576ef85ff62cc5d79fa1e579e865b",
+      "deadjustedVisibleBarsSha256": "2f306179c2b8d2c84d193fdc738eac52d9f576ef85ff62cc5d79fa1e579e865b",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 2,
+      "asOf": "2022-03-24T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "f0a819efc299346954ebfc23edf46e448540523d9bb77bcebe35153b00948d54",
+      "deadjustedVisibleBarsSha256": "f0a819efc299346954ebfc23edf46e448540523d9bb77bcebe35153b00948d54",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 3,
+      "asOf": "2022-03-31T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "937917f2ad66f45824e66b00190ac2a4d723c42b8a2ccf5881eb1de604953aa4",
+      "deadjustedVisibleBarsSha256": "937917f2ad66f45824e66b00190ac2a4d723c42b8a2ccf5881eb1de604953aa4",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 4,
+      "asOf": "2022-04-07T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "61e715515346a8140f26f964ea63c47f54e9d80e946efa5cc2d39fe4b82067e3",
+      "deadjustedVisibleBarsSha256": "61e715515346a8140f26f964ea63c47f54e9d80e946efa5cc2d39fe4b82067e3",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 5,
+      "asOf": "2022-04-14T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "81cc0511a1f5d92857579f4d48b6027fc420bc10b5bfbfd045d99fda0a990ec6",
+      "deadjustedVisibleBarsSha256": "81cc0511a1f5d92857579f4d48b6027fc420bc10b5bfbfd045d99fda0a990ec6",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 6,
+      "asOf": "2022-04-22T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "63c182de75346eea8495c801f5ecb2820135fd026effec09fc99b4e58746b293",
+      "deadjustedVisibleBarsSha256": "63c182de75346eea8495c801f5ecb2820135fd026effec09fc99b4e58746b293",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 7,
+      "asOf": "2022-04-29T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "904dfec9bd98977014aec541e808d4017d5348d11c0ef27cdec9760a09050aac",
+      "deadjustedVisibleBarsSha256": "904dfec9bd98977014aec541e808d4017d5348d11c0ef27cdec9760a09050aac",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 8,
+      "asOf": "2022-05-06T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "61d1de76f16d2de373e850fc098eb71bac9f2913d485aeaf0b281242a4b8c908",
+      "deadjustedVisibleBarsSha256": "61d1de76f16d2de373e850fc098eb71bac9f2913d485aeaf0b281242a4b8c908",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 9,
+      "asOf": "2022-05-13T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "0be3cd337dacfec00319be2ce068a60161bfca739cb1bced433707efc411782f",
+      "deadjustedVisibleBarsSha256": "0be3cd337dacfec00319be2ce068a60161bfca739cb1bced433707efc411782f",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 10,
+      "asOf": "2022-05-20T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "04c990b00d6cae9df0911ec0714a3ca5b2715689041459f65430977340c9627f",
+      "deadjustedVisibleBarsSha256": "04c990b00d6cae9df0911ec0714a3ca5b2715689041459f65430977340c9627f",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 11,
+      "asOf": "2022-05-27T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "87f76d52f16300a814286fe54cf471e53d774c3484d7d836212047964308edb2",
+      "deadjustedVisibleBarsSha256": "87f76d52f16300a814286fe54cf471e53d774c3484d7d836212047964308edb2",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 12,
+      "asOf": "2022-06-04T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "a493d54b0ee3315ed91969d2313ce4b44b13510ee38f502b9ed5fd56940a741a",
+      "deadjustedVisibleBarsSha256": "a493d54b0ee3315ed91969d2313ce4b44b13510ee38f502b9ed5fd56940a741a",
+      "invariant": true
+    }
+  ],
+  "universeEvidence": {
+    "cellId": "d4-commodity-proxy-bull-a",
+    "selectionBasis": "point_in_time",
+    "instrumentObservedFrom": "2021-12-20T14:30:00.000Z",
+    "instrumentObservedThrough": "2022-06-11T13:30:00.000Z",
+    "evidence": "The frozen single-instrument universe was selected before model calls and is evidenced by the pinned provider-bar receipt.",
+    "sourceReceipt": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#source-receipt",
+      "sha256": "7c0de2b30f6b8778fa566730264c489f71f621dec7429e25cb125952b068ff79"
+    }
+  },
+  "decisionManifests": [
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:01",
+      "datasetId": "d4-commodity-proxy-bull-a",
+      "asOf": "2022-03-17T13:30:00.000Z",
+      "snapshot": {
+        "ref": "e3201cca928ba01ae7d16cebb1ede70ff8393e12",
+        "sha256": "7f2f7f66ee0ca5135eb503f05e5caf279dd5b11abc90caf7ffa9370e09300cc4"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "USO",
+        "assetClass": "commodity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "e3201cca928ba01ae7d16cebb1ede70ff8393e12",
+          "sha256": "7f2f7f66ee0ca5135eb503f05e5caf279dd5b11abc90caf7ffa9370e09300cc4"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "e3201cca928ba01ae7d16cebb1ede70ff8393e12",
+              "sha256": "7f2f7f66ee0ca5135eb503f05e5caf279dd5b11abc90caf7ffa9370e09300cc4",
+              "observedAt": "2022-03-17T13:30:00.000Z",
+              "availableAt": "2022-03-17T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#split-01",
+          "sha256": "fdaa9ec5947f53caa301461ac64dfc47d8031cd508f9423b86e1441e3fc9c343",
+          "kind": "split",
+          "announcedAt": "2020-04-29T13:30:00.000Z",
+          "effectiveAt": "2020-04-29T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2021-12-20T14:30:00.000Z",
+        "effectiveFrom": "2021-12-20T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#universe",
+          "sha256": "7c17137c71b70bb4811534148ef166adf40fda418d2ab90f0f32320085a61014"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-commodity-proxy-bull-a",
+        "leakageGroups": [
+          "market:commodity-proxy",
+          "instrument:yahoo-chart-public:USO"
+        ],
+        "inputStart": "2021-12-20T14:30:00.000Z",
+        "decisionStart": "2022-03-17T13:30:00.000Z",
+        "decisionEnd": "2022-06-04T13:30:00.000Z",
+        "outcomeEnd": "2022-06-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:02",
+      "datasetId": "d4-commodity-proxy-bull-a",
+      "asOf": "2022-03-24T13:30:00.000Z",
+      "snapshot": {
+        "ref": "53aa01b92bd9a7ca7a396600f93a4295de2dc3d2",
+        "sha256": "47beab708f93d1110741b200f3976b07a70c8330ab3210bba35e3dc797a9505e"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "USO",
+        "assetClass": "commodity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "53aa01b92bd9a7ca7a396600f93a4295de2dc3d2",
+          "sha256": "47beab708f93d1110741b200f3976b07a70c8330ab3210bba35e3dc797a9505e"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "53aa01b92bd9a7ca7a396600f93a4295de2dc3d2",
+              "sha256": "47beab708f93d1110741b200f3976b07a70c8330ab3210bba35e3dc797a9505e",
+              "observedAt": "2022-03-24T13:30:00.000Z",
+              "availableAt": "2022-03-24T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#split-01",
+          "sha256": "fdaa9ec5947f53caa301461ac64dfc47d8031cd508f9423b86e1441e3fc9c343",
+          "kind": "split",
+          "announcedAt": "2020-04-29T13:30:00.000Z",
+          "effectiveAt": "2020-04-29T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2021-12-20T14:30:00.000Z",
+        "effectiveFrom": "2021-12-20T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#universe",
+          "sha256": "7c17137c71b70bb4811534148ef166adf40fda418d2ab90f0f32320085a61014"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-commodity-proxy-bull-a",
+        "leakageGroups": [
+          "market:commodity-proxy",
+          "instrument:yahoo-chart-public:USO"
+        ],
+        "inputStart": "2021-12-20T14:30:00.000Z",
+        "decisionStart": "2022-03-17T13:30:00.000Z",
+        "decisionEnd": "2022-06-04T13:30:00.000Z",
+        "outcomeEnd": "2022-06-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:03",
+      "datasetId": "d4-commodity-proxy-bull-a",
+      "asOf": "2022-03-31T13:30:00.000Z",
+      "snapshot": {
+        "ref": "5cfbdb3a2e8122c9267d4d0c7eaf63f61094313d",
+        "sha256": "0c8e69a3aa9376c5dbfa6a58af66f107ec75bb2a271c3a5dc96a59338d56db7f"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "USO",
+        "assetClass": "commodity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "5cfbdb3a2e8122c9267d4d0c7eaf63f61094313d",
+          "sha256": "0c8e69a3aa9376c5dbfa6a58af66f107ec75bb2a271c3a5dc96a59338d56db7f"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "5cfbdb3a2e8122c9267d4d0c7eaf63f61094313d",
+              "sha256": "0c8e69a3aa9376c5dbfa6a58af66f107ec75bb2a271c3a5dc96a59338d56db7f",
+              "observedAt": "2022-03-31T13:30:00.000Z",
+              "availableAt": "2022-03-31T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#split-01",
+          "sha256": "fdaa9ec5947f53caa301461ac64dfc47d8031cd508f9423b86e1441e3fc9c343",
+          "kind": "split",
+          "announcedAt": "2020-04-29T13:30:00.000Z",
+          "effectiveAt": "2020-04-29T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2021-12-20T14:30:00.000Z",
+        "effectiveFrom": "2021-12-20T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#universe",
+          "sha256": "7c17137c71b70bb4811534148ef166adf40fda418d2ab90f0f32320085a61014"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-commodity-proxy-bull-a",
+        "leakageGroups": [
+          "market:commodity-proxy",
+          "instrument:yahoo-chart-public:USO"
+        ],
+        "inputStart": "2021-12-20T14:30:00.000Z",
+        "decisionStart": "2022-03-17T13:30:00.000Z",
+        "decisionEnd": "2022-06-04T13:30:00.000Z",
+        "outcomeEnd": "2022-06-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:04",
+      "datasetId": "d4-commodity-proxy-bull-a",
+      "asOf": "2022-04-07T13:30:00.000Z",
+      "snapshot": {
+        "ref": "e97fcad31720c6071a96200ae946961ef7e6157e",
+        "sha256": "b9cd0e0f6e01ed9efaac44756cf8cafa939270392b3c32f4430c0237df545314"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "USO",
+        "assetClass": "commodity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "e97fcad31720c6071a96200ae946961ef7e6157e",
+          "sha256": "b9cd0e0f6e01ed9efaac44756cf8cafa939270392b3c32f4430c0237df545314"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "e97fcad31720c6071a96200ae946961ef7e6157e",
+              "sha256": "b9cd0e0f6e01ed9efaac44756cf8cafa939270392b3c32f4430c0237df545314",
+              "observedAt": "2022-04-07T13:30:00.000Z",
+              "availableAt": "2022-04-07T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#split-01",
+          "sha256": "fdaa9ec5947f53caa301461ac64dfc47d8031cd508f9423b86e1441e3fc9c343",
+          "kind": "split",
+          "announcedAt": "2020-04-29T13:30:00.000Z",
+          "effectiveAt": "2020-04-29T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2021-12-20T14:30:00.000Z",
+        "effectiveFrom": "2021-12-20T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#universe",
+          "sha256": "7c17137c71b70bb4811534148ef166adf40fda418d2ab90f0f32320085a61014"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-commodity-proxy-bull-a",
+        "leakageGroups": [
+          "market:commodity-proxy",
+          "instrument:yahoo-chart-public:USO"
+        ],
+        "inputStart": "2021-12-20T14:30:00.000Z",
+        "decisionStart": "2022-03-17T13:30:00.000Z",
+        "decisionEnd": "2022-06-04T13:30:00.000Z",
+        "outcomeEnd": "2022-06-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:05",
+      "datasetId": "d4-commodity-proxy-bull-a",
+      "asOf": "2022-04-14T13:30:00.000Z",
+      "snapshot": {
+        "ref": "28e27a5398c8e5a837ae87f6db77989705acb18e",
+        "sha256": "cd2c3f450a82b1a092135b3db5b3f731a688f41580be5267a3b1df410cc2c0a1"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "USO",
+        "assetClass": "commodity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "28e27a5398c8e5a837ae87f6db77989705acb18e",
+          "sha256": "cd2c3f450a82b1a092135b3db5b3f731a688f41580be5267a3b1df410cc2c0a1"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "28e27a5398c8e5a837ae87f6db77989705acb18e",
+              "sha256": "cd2c3f450a82b1a092135b3db5b3f731a688f41580be5267a3b1df410cc2c0a1",
+              "observedAt": "2022-04-14T13:30:00.000Z",
+              "availableAt": "2022-04-14T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#split-01",
+          "sha256": "fdaa9ec5947f53caa301461ac64dfc47d8031cd508f9423b86e1441e3fc9c343",
+          "kind": "split",
+          "announcedAt": "2020-04-29T13:30:00.000Z",
+          "effectiveAt": "2020-04-29T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2021-12-20T14:30:00.000Z",
+        "effectiveFrom": "2021-12-20T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#universe",
+          "sha256": "7c17137c71b70bb4811534148ef166adf40fda418d2ab90f0f32320085a61014"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-commodity-proxy-bull-a",
+        "leakageGroups": [
+          "market:commodity-proxy",
+          "instrument:yahoo-chart-public:USO"
+        ],
+        "inputStart": "2021-12-20T14:30:00.000Z",
+        "decisionStart": "2022-03-17T13:30:00.000Z",
+        "decisionEnd": "2022-06-04T13:30:00.000Z",
+        "outcomeEnd": "2022-06-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:06",
+      "datasetId": "d4-commodity-proxy-bull-a",
+      "asOf": "2022-04-22T13:30:00.000Z",
+      "snapshot": {
+        "ref": "4800237e2942d44d2de4e6bd0bef85a189af8474",
+        "sha256": "cef4a11d87a48bbab564c4330a33333b5f7f2e6ce90b7bce6fdada8e9587db1b"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "USO",
+        "assetClass": "commodity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "4800237e2942d44d2de4e6bd0bef85a189af8474",
+          "sha256": "cef4a11d87a48bbab564c4330a33333b5f7f2e6ce90b7bce6fdada8e9587db1b"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "4800237e2942d44d2de4e6bd0bef85a189af8474",
+              "sha256": "cef4a11d87a48bbab564c4330a33333b5f7f2e6ce90b7bce6fdada8e9587db1b",
+              "observedAt": "2022-04-22T13:30:00.000Z",
+              "availableAt": "2022-04-22T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#split-01",
+          "sha256": "fdaa9ec5947f53caa301461ac64dfc47d8031cd508f9423b86e1441e3fc9c343",
+          "kind": "split",
+          "announcedAt": "2020-04-29T13:30:00.000Z",
+          "effectiveAt": "2020-04-29T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2021-12-20T14:30:00.000Z",
+        "effectiveFrom": "2021-12-20T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#universe",
+          "sha256": "7c17137c71b70bb4811534148ef166adf40fda418d2ab90f0f32320085a61014"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-commodity-proxy-bull-a",
+        "leakageGroups": [
+          "market:commodity-proxy",
+          "instrument:yahoo-chart-public:USO"
+        ],
+        "inputStart": "2021-12-20T14:30:00.000Z",
+        "decisionStart": "2022-03-17T13:30:00.000Z",
+        "decisionEnd": "2022-06-04T13:30:00.000Z",
+        "outcomeEnd": "2022-06-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:07",
+      "datasetId": "d4-commodity-proxy-bull-a",
+      "asOf": "2022-04-29T13:30:00.000Z",
+      "snapshot": {
+        "ref": "d0c90aa46f22840d2d2aa87117e97af84374b65d",
+        "sha256": "24647a8e5698615b4cbb17bb8197e3bf9cab46e1108bd4af1baab1d6c232f5b9"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "USO",
+        "assetClass": "commodity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "d0c90aa46f22840d2d2aa87117e97af84374b65d",
+          "sha256": "24647a8e5698615b4cbb17bb8197e3bf9cab46e1108bd4af1baab1d6c232f5b9"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "d0c90aa46f22840d2d2aa87117e97af84374b65d",
+              "sha256": "24647a8e5698615b4cbb17bb8197e3bf9cab46e1108bd4af1baab1d6c232f5b9",
+              "observedAt": "2022-04-29T13:30:00.000Z",
+              "availableAt": "2022-04-29T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#split-01",
+          "sha256": "fdaa9ec5947f53caa301461ac64dfc47d8031cd508f9423b86e1441e3fc9c343",
+          "kind": "split",
+          "announcedAt": "2020-04-29T13:30:00.000Z",
+          "effectiveAt": "2020-04-29T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2021-12-20T14:30:00.000Z",
+        "effectiveFrom": "2021-12-20T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#universe",
+          "sha256": "7c17137c71b70bb4811534148ef166adf40fda418d2ab90f0f32320085a61014"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-commodity-proxy-bull-a",
+        "leakageGroups": [
+          "market:commodity-proxy",
+          "instrument:yahoo-chart-public:USO"
+        ],
+        "inputStart": "2021-12-20T14:30:00.000Z",
+        "decisionStart": "2022-03-17T13:30:00.000Z",
+        "decisionEnd": "2022-06-04T13:30:00.000Z",
+        "outcomeEnd": "2022-06-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:08",
+      "datasetId": "d4-commodity-proxy-bull-a",
+      "asOf": "2022-05-06T13:30:00.000Z",
+      "snapshot": {
+        "ref": "9a81fb7d65faf814aada0a24cd2b84185d6c4608",
+        "sha256": "1e39f69a5a67c3b949258b8c56739a99aa70244e625de1e239bee10ceffa3422"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "USO",
+        "assetClass": "commodity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "9a81fb7d65faf814aada0a24cd2b84185d6c4608",
+          "sha256": "1e39f69a5a67c3b949258b8c56739a99aa70244e625de1e239bee10ceffa3422"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "9a81fb7d65faf814aada0a24cd2b84185d6c4608",
+              "sha256": "1e39f69a5a67c3b949258b8c56739a99aa70244e625de1e239bee10ceffa3422",
+              "observedAt": "2022-05-06T13:30:00.000Z",
+              "availableAt": "2022-05-06T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#split-01",
+          "sha256": "fdaa9ec5947f53caa301461ac64dfc47d8031cd508f9423b86e1441e3fc9c343",
+          "kind": "split",
+          "announcedAt": "2020-04-29T13:30:00.000Z",
+          "effectiveAt": "2020-04-29T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2021-12-20T14:30:00.000Z",
+        "effectiveFrom": "2021-12-20T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#universe",
+          "sha256": "7c17137c71b70bb4811534148ef166adf40fda418d2ab90f0f32320085a61014"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-commodity-proxy-bull-a",
+        "leakageGroups": [
+          "market:commodity-proxy",
+          "instrument:yahoo-chart-public:USO"
+        ],
+        "inputStart": "2021-12-20T14:30:00.000Z",
+        "decisionStart": "2022-03-17T13:30:00.000Z",
+        "decisionEnd": "2022-06-04T13:30:00.000Z",
+        "outcomeEnd": "2022-06-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:09",
+      "datasetId": "d4-commodity-proxy-bull-a",
+      "asOf": "2022-05-13T13:30:00.000Z",
+      "snapshot": {
+        "ref": "38d7b9031f7538b165fe2f5d162066112e648c91",
+        "sha256": "20a820e798806ca2d28c2cc192e8f0be8002085cb68ce3d7d0091eb5b9cbb84e"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "USO",
+        "assetClass": "commodity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "38d7b9031f7538b165fe2f5d162066112e648c91",
+          "sha256": "20a820e798806ca2d28c2cc192e8f0be8002085cb68ce3d7d0091eb5b9cbb84e"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "38d7b9031f7538b165fe2f5d162066112e648c91",
+              "sha256": "20a820e798806ca2d28c2cc192e8f0be8002085cb68ce3d7d0091eb5b9cbb84e",
+              "observedAt": "2022-05-13T13:30:00.000Z",
+              "availableAt": "2022-05-13T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#split-01",
+          "sha256": "fdaa9ec5947f53caa301461ac64dfc47d8031cd508f9423b86e1441e3fc9c343",
+          "kind": "split",
+          "announcedAt": "2020-04-29T13:30:00.000Z",
+          "effectiveAt": "2020-04-29T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2021-12-20T14:30:00.000Z",
+        "effectiveFrom": "2021-12-20T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#universe",
+          "sha256": "7c17137c71b70bb4811534148ef166adf40fda418d2ab90f0f32320085a61014"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-commodity-proxy-bull-a",
+        "leakageGroups": [
+          "market:commodity-proxy",
+          "instrument:yahoo-chart-public:USO"
+        ],
+        "inputStart": "2021-12-20T14:30:00.000Z",
+        "decisionStart": "2022-03-17T13:30:00.000Z",
+        "decisionEnd": "2022-06-04T13:30:00.000Z",
+        "outcomeEnd": "2022-06-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:10",
+      "datasetId": "d4-commodity-proxy-bull-a",
+      "asOf": "2022-05-20T13:30:00.000Z",
+      "snapshot": {
+        "ref": "fb58e84add1276dfa10557d01866987179e94ba1",
+        "sha256": "71947421c7d2db99c51bd1ce4ea70790a5f25c6727fbf8a6a8ce9fab1a4c97d1"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "USO",
+        "assetClass": "commodity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "fb58e84add1276dfa10557d01866987179e94ba1",
+          "sha256": "71947421c7d2db99c51bd1ce4ea70790a5f25c6727fbf8a6a8ce9fab1a4c97d1"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "fb58e84add1276dfa10557d01866987179e94ba1",
+              "sha256": "71947421c7d2db99c51bd1ce4ea70790a5f25c6727fbf8a6a8ce9fab1a4c97d1",
+              "observedAt": "2022-05-20T13:30:00.000Z",
+              "availableAt": "2022-05-20T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#split-01",
+          "sha256": "fdaa9ec5947f53caa301461ac64dfc47d8031cd508f9423b86e1441e3fc9c343",
+          "kind": "split",
+          "announcedAt": "2020-04-29T13:30:00.000Z",
+          "effectiveAt": "2020-04-29T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2021-12-20T14:30:00.000Z",
+        "effectiveFrom": "2021-12-20T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#universe",
+          "sha256": "7c17137c71b70bb4811534148ef166adf40fda418d2ab90f0f32320085a61014"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-commodity-proxy-bull-a",
+        "leakageGroups": [
+          "market:commodity-proxy",
+          "instrument:yahoo-chart-public:USO"
+        ],
+        "inputStart": "2021-12-20T14:30:00.000Z",
+        "decisionStart": "2022-03-17T13:30:00.000Z",
+        "decisionEnd": "2022-06-04T13:30:00.000Z",
+        "outcomeEnd": "2022-06-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:11",
+      "datasetId": "d4-commodity-proxy-bull-a",
+      "asOf": "2022-05-27T13:30:00.000Z",
+      "snapshot": {
+        "ref": "8e4a7d8dae1b7efe366e9c0b89d84c67e83d970b",
+        "sha256": "de3d9fba06431834c99fc0f1ba2647500db006a6d72edb0c66e8d0fa98791abc"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "USO",
+        "assetClass": "commodity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "8e4a7d8dae1b7efe366e9c0b89d84c67e83d970b",
+          "sha256": "de3d9fba06431834c99fc0f1ba2647500db006a6d72edb0c66e8d0fa98791abc"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "8e4a7d8dae1b7efe366e9c0b89d84c67e83d970b",
+              "sha256": "de3d9fba06431834c99fc0f1ba2647500db006a6d72edb0c66e8d0fa98791abc",
+              "observedAt": "2022-05-27T13:30:00.000Z",
+              "availableAt": "2022-05-27T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#split-01",
+          "sha256": "fdaa9ec5947f53caa301461ac64dfc47d8031cd508f9423b86e1441e3fc9c343",
+          "kind": "split",
+          "announcedAt": "2020-04-29T13:30:00.000Z",
+          "effectiveAt": "2020-04-29T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2021-12-20T14:30:00.000Z",
+        "effectiveFrom": "2021-12-20T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#universe",
+          "sha256": "7c17137c71b70bb4811534148ef166adf40fda418d2ab90f0f32320085a61014"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-commodity-proxy-bull-a",
+        "leakageGroups": [
+          "market:commodity-proxy",
+          "instrument:yahoo-chart-public:USO"
+        ],
+        "inputStart": "2021-12-20T14:30:00.000Z",
+        "decisionStart": "2022-03-17T13:30:00.000Z",
+        "decisionEnd": "2022-06-04T13:30:00.000Z",
+        "outcomeEnd": "2022-06-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:12",
+      "datasetId": "d4-commodity-proxy-bull-a",
+      "asOf": "2022-06-04T13:30:00.000Z",
+      "snapshot": {
+        "ref": "95d26b8574870c18fba1028497f5d06e2410ee4f",
+        "sha256": "5556984db573aa46307b5313b701b7cfae01e4cb057a31c9c07f8cb0a81f2b56"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "USO",
+        "assetClass": "commodity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "95d26b8574870c18fba1028497f5d06e2410ee4f",
+          "sha256": "5556984db573aa46307b5313b701b7cfae01e4cb057a31c9c07f8cb0a81f2b56"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "95d26b8574870c18fba1028497f5d06e2410ee4f",
+              "sha256": "5556984db573aa46307b5313b701b7cfae01e4cb057a31c9c07f8cb0a81f2b56",
+              "observedAt": "2022-06-04T13:30:00.000Z",
+              "availableAt": "2022-06-04T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#split-01",
+          "sha256": "fdaa9ec5947f53caa301461ac64dfc47d8031cd508f9423b86e1441e3fc9c343",
+          "kind": "split",
+          "announcedAt": "2020-04-29T13:30:00.000Z",
+          "effectiveAt": "2020-04-29T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2021-12-20T14:30:00.000Z",
+        "effectiveFrom": "2021-12-20T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#universe",
+          "sha256": "7c17137c71b70bb4811534148ef166adf40fda418d2ab90f0f32320085a61014"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-commodity-proxy-bull-a",
+        "leakageGroups": [
+          "market:commodity-proxy",
+          "instrument:yahoo-chart-public:USO"
+        ],
+        "inputStart": "2021-12-20T14:30:00.000Z",
+        "decisionStart": "2022-03-17T13:30:00.000Z",
+        "decisionEnd": "2022-06-04T13:30:00.000Z",
+        "outcomeEnd": "2022-06-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    }
+  ]
+}

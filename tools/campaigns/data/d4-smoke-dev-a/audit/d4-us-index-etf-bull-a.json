@@ -1,0 +1,1536 @@
+{
+  "schema": "steward-d4-cell-audit/1",
+  "version": 1,
+  "cellId": "d4-us-index-etf-bull-a",
+  "split": "dev",
+  "sourceReceipt": {
+    "schema": "steward-d4-source-receipt/1",
+    "version": 1,
+    "createdAt": "2026-07-13T00:00:00.000Z",
+    "redistribution": "receipt-only",
+    "provider": "yahoo-chart-public",
+    "symbol": "SPY",
+    "assetClass": "equity-etf",
+    "timezone": "America/New_York",
+    "exchangeCalendar": "XNYS",
+    "providerAdjustmentMode": "retrospective_split_adjusted",
+    "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+    "splitEvidence": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#split-evidence",
+      "sha256": "de5bbce4ba7a28f4a2b5a50b8758307da0a83d8973ae660cacb85ed52850799d"
+    },
+    "futureSplitInvariance": [
+      {
+        "decisionOrdinal": 1,
+        "asOf": "2020-06-17T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "3197407d20de515578e3f5d9ce289249a4cfd0ca0626c555e171fd274cf390fa",
+        "deadjustedVisibleBarsSha256": "3197407d20de515578e3f5d9ce289249a4cfd0ca0626c555e171fd274cf390fa",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 2,
+        "asOf": "2020-06-24T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "2913205824c9c3ec4a7f9d025ccf26c902867b2e00880bb9f833f7d6b134cf73",
+        "deadjustedVisibleBarsSha256": "2913205824c9c3ec4a7f9d025ccf26c902867b2e00880bb9f833f7d6b134cf73",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 3,
+        "asOf": "2020-07-01T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "e73aa1808400a2c674e0b469590df89bd2bc0855ecacffb9317080f58f8819b0",
+        "deadjustedVisibleBarsSha256": "e73aa1808400a2c674e0b469590df89bd2bc0855ecacffb9317080f58f8819b0",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 4,
+        "asOf": "2020-07-09T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "356d6d5fbebc6f219117f0af161d1bc520e36e5dc79c236daa5cfcb64febdffb",
+        "deadjustedVisibleBarsSha256": "356d6d5fbebc6f219117f0af161d1bc520e36e5dc79c236daa5cfcb64febdffb",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 5,
+        "asOf": "2020-07-16T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "f62a949700a90d01a216ae723297f122c462bf3bb3dcedad82a221d8c8cb9f0b",
+        "deadjustedVisibleBarsSha256": "f62a949700a90d01a216ae723297f122c462bf3bb3dcedad82a221d8c8cb9f0b",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 6,
+        "asOf": "2020-07-23T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "1c988290a6b1be22713555b639f477cb1ecca5b716e4609669ed7a8ac123a48d",
+        "deadjustedVisibleBarsSha256": "1c988290a6b1be22713555b639f477cb1ecca5b716e4609669ed7a8ac123a48d",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 7,
+        "asOf": "2020-07-30T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "f737db9b9afd9ec45c2611d81809ab7d6a6ea79898b6d3206f989deb5ff8f088",
+        "deadjustedVisibleBarsSha256": "f737db9b9afd9ec45c2611d81809ab7d6a6ea79898b6d3206f989deb5ff8f088",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 8,
+        "asOf": "2020-08-06T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "93583a85b806a092749f193e1b923dc88503acf6d22de6003528ab7a8a93d0b1",
+        "deadjustedVisibleBarsSha256": "93583a85b806a092749f193e1b923dc88503acf6d22de6003528ab7a8a93d0b1",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 9,
+        "asOf": "2020-08-13T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "e7ca58971b91aacdbc4f7598e4bd85b3fcd846df84c0665dc18779f0d56d9009",
+        "deadjustedVisibleBarsSha256": "e7ca58971b91aacdbc4f7598e4bd85b3fcd846df84c0665dc18779f0d56d9009",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 10,
+        "asOf": "2020-08-20T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "ad6b9a2720655ec0c2266c3ffaf93e348ef72d73f01b6e3c0df7ff7a3a82bb68",
+        "deadjustedVisibleBarsSha256": "ad6b9a2720655ec0c2266c3ffaf93e348ef72d73f01b6e3c0df7ff7a3a82bb68",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 11,
+        "asOf": "2020-08-27T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "a6c8bf4837804999c46d14602ac7c4d6579512357a8ecdd339af057643af7cbf",
+        "deadjustedVisibleBarsSha256": "a6c8bf4837804999c46d14602ac7c4d6579512357a8ecdd339af057643af7cbf",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 12,
+        "asOf": "2020-09-03T13:30:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "05590c772e97062680537a2cdb16d61e02d3840d11852d44959778c7dd2560e8",
+        "deadjustedVisibleBarsSha256": "05590c772e97062680537a2cdb16d61e02d3840d11852d44959778c7dd2560e8",
+        "invariant": true
+      }
+    ],
+    "request": {
+      "method": "GET",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/SPY?period1=1546300800&period2=1704067200&interval=1d&events=div%2Csplits&includeAdjustedClose=false&includePrePost=false",
+      "normalization": "chart.result[0] OHLCV; requested half-open range; non-finite/nonpositive rows removed; high/low expanded to include open/close; unadjusted"
+    },
+    "acquisition": {
+      "ref": "remote:d4-us-index-etf-bull-a:acquisition",
+      "sha256": "5d915f8c0cd911eb5ebc3bb333ec080935908d5e4bd0ee75324b75413b8c4c83",
+      "canonicalByteLength": 249988,
+      "barCount": 1258
+    },
+    "derivedPool": {
+      "ref": "derived:d4-us-index-etf-bull-a:pool",
+      "sha256": "5d915f8c0cd911eb5ebc3bb333ec080935908d5e4bd0ee75324b75413b8c4c83",
+      "canonicalByteLength": 249988,
+      "barCount": 1258
+    },
+    "selectedRaw": {
+      "ref": "remote:d4-us-index-etf-bull-a:selected",
+      "sha256": "a6c32696fc69e11fd2f7fda53329f4503e1357191f5c9532e1a5ca8bb89e1daf",
+      "canonicalByteLength": 23828,
+      "barCount": 120
+    },
+    "selectedDerived": {
+      "ref": "derived:d4-us-index-etf-bull-a:selected",
+      "sha256": "a6c32696fc69e11fd2f7fda53329f4503e1357191f5c9532e1a5ca8bb89e1daf",
+      "canonicalByteLength": 23828,
+      "barCount": 120
+    },
+    "selection": {
+      "profile": "bull",
+      "exactBarCount": 120,
+      "derivedPoolIndexStart": 307,
+      "derivedPoolIndexEndExclusive": 427,
+      "logReturn": 0.4038641239012145,
+      "firstTimestamp": "2020-03-23T13:30:00.000Z",
+      "finalAvailableAt": "2020-09-11T13:30:00.000Z"
+    },
+    "recipe": {
+      "command": "pnpm exec tsx tools/campaigns/build-d4-smoke-data.mjs --verify-source",
+      "failClosed": "Any request, canonical byte identity, exact selection index, or transform drift is an error.",
+      "implementation": [
+        {
+          "ref": "tools/campaigns/d4-smoke-data.mjs",
+          "sha256": "54b08c9ea59068879050070bc671ccb2327f3605e56d04398e80c1c99bb719c9"
+        },
+        {
+          "ref": "tools/campaigns/build-d4-smoke-data.mjs",
+          "sha256": "109edba4af37e03a3be1e1a674582aa0f6f01681a519532e1028cc1c8a722629"
+        }
+      ]
+    }
+  },
+  "splitEvidence": {
+    "schema": "steward-d4-split-evidence/1",
+    "version": 1,
+    "cellId": "d4-us-index-etf-bull-a",
+    "provider": "yahoo-chart-public",
+    "symbol": "SPY",
+    "providerAdjustmentMode": "retrospective_split_adjusted",
+    "cutoff": "2026-07-13T00:00:00.000Z",
+    "request": {
+      "method": "GET",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/SPY?period1=1546300800&period2=1783900800&interval=1d&events=splits&includeAdjustedClose=false&includePrePost=false",
+      "normalization": "Yahoo split events through the frozen cutoff; sorted by effective timestamp."
+    },
+    "note": "Yahoo chart quote OHLCV is retrospectively normalized for split events even when adjusted-close output is disabled.",
+    "actions": []
+  },
+  "futureSplitInvariance": [
+    {
+      "decisionOrdinal": 1,
+      "asOf": "2020-06-17T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "3197407d20de515578e3f5d9ce289249a4cfd0ca0626c555e171fd274cf390fa",
+      "deadjustedVisibleBarsSha256": "3197407d20de515578e3f5d9ce289249a4cfd0ca0626c555e171fd274cf390fa",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 2,
+      "asOf": "2020-06-24T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "2913205824c9c3ec4a7f9d025ccf26c902867b2e00880bb9f833f7d6b134cf73",
+      "deadjustedVisibleBarsSha256": "2913205824c9c3ec4a7f9d025ccf26c902867b2e00880bb9f833f7d6b134cf73",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 3,
+      "asOf": "2020-07-01T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "e73aa1808400a2c674e0b469590df89bd2bc0855ecacffb9317080f58f8819b0",
+      "deadjustedVisibleBarsSha256": "e73aa1808400a2c674e0b469590df89bd2bc0855ecacffb9317080f58f8819b0",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 4,
+      "asOf": "2020-07-09T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "356d6d5fbebc6f219117f0af161d1bc520e36e5dc79c236daa5cfcb64febdffb",
+      "deadjustedVisibleBarsSha256": "356d6d5fbebc6f219117f0af161d1bc520e36e5dc79c236daa5cfcb64febdffb",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 5,
+      "asOf": "2020-07-16T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "f62a949700a90d01a216ae723297f122c462bf3bb3dcedad82a221d8c8cb9f0b",
+      "deadjustedVisibleBarsSha256": "f62a949700a90d01a216ae723297f122c462bf3bb3dcedad82a221d8c8cb9f0b",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 6,
+      "asOf": "2020-07-23T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "1c988290a6b1be22713555b639f477cb1ecca5b716e4609669ed7a8ac123a48d",
+      "deadjustedVisibleBarsSha256": "1c988290a6b1be22713555b639f477cb1ecca5b716e4609669ed7a8ac123a48d",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 7,
+      "asOf": "2020-07-30T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "f737db9b9afd9ec45c2611d81809ab7d6a6ea79898b6d3206f989deb5ff8f088",
+      "deadjustedVisibleBarsSha256": "f737db9b9afd9ec45c2611d81809ab7d6a6ea79898b6d3206f989deb5ff8f088",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 8,
+      "asOf": "2020-08-06T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "93583a85b806a092749f193e1b923dc88503acf6d22de6003528ab7a8a93d0b1",
+      "deadjustedVisibleBarsSha256": "93583a85b806a092749f193e1b923dc88503acf6d22de6003528ab7a8a93d0b1",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 9,
+      "asOf": "2020-08-13T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "e7ca58971b91aacdbc4f7598e4bd85b3fcd846df84c0665dc18779f0d56d9009",
+      "deadjustedVisibleBarsSha256": "e7ca58971b91aacdbc4f7598e4bd85b3fcd846df84c0665dc18779f0d56d9009",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 10,
+      "asOf": "2020-08-20T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "ad6b9a2720655ec0c2266c3ffaf93e348ef72d73f01b6e3c0df7ff7a3a82bb68",
+      "deadjustedVisibleBarsSha256": "ad6b9a2720655ec0c2266c3ffaf93e348ef72d73f01b6e3c0df7ff7a3a82bb68",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 11,
+      "asOf": "2020-08-27T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "a6c8bf4837804999c46d14602ac7c4d6579512357a8ecdd339af057643af7cbf",
+      "deadjustedVisibleBarsSha256": "a6c8bf4837804999c46d14602ac7c4d6579512357a8ecdd339af057643af7cbf",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 12,
+      "asOf": "2020-09-03T13:30:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "05590c772e97062680537a2cdb16d61e02d3840d11852d44959778c7dd2560e8",
+      "deadjustedVisibleBarsSha256": "05590c772e97062680537a2cdb16d61e02d3840d11852d44959778c7dd2560e8",
+      "invariant": true
+    }
+  ],
+  "universeEvidence": {
+    "cellId": "d4-us-index-etf-bull-a",
+    "selectionBasis": "point_in_time",
+    "instrumentObservedFrom": "2020-03-23T13:30:00.000Z",
+    "instrumentObservedThrough": "2020-09-11T13:30:00.000Z",
+    "evidence": "The frozen single-instrument universe was selected before model calls and is evidenced by the pinned provider-bar receipt.",
+    "sourceReceipt": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#source-receipt",
+      "sha256": "60ebc0b14c7b76ebc558d5392cc4ea239c10bbfcbaf2514e7bed0fda49027acc"
+    }
+  },
+  "decisionManifests": [
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:01",
+      "datasetId": "d4-us-index-etf-bull-a",
+      "asOf": "2020-06-17T13:30:00.000Z",
+      "snapshot": {
+        "ref": "376ec93544fa7bb5ea428944b733854bb9b80af3",
+        "sha256": "a082e5a691a09980531b8161b948851c18c146b874cf8966d734c476b6d5bdda"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "SPY",
+        "assetClass": "equity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "376ec93544fa7bb5ea428944b733854bb9b80af3",
+          "sha256": "a082e5a691a09980531b8161b948851c18c146b874cf8966d734c476b6d5bdda"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "376ec93544fa7bb5ea428944b733854bb9b80af3",
+              "sha256": "a082e5a691a09980531b8161b948851c18c146b874cf8966d734c476b6d5bdda",
+              "observedAt": "2020-06-17T13:30:00.000Z",
+              "availableAt": "2020-06-17T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2020-03-23T13:30:00.000Z",
+        "effectiveFrom": "2020-03-23T13:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#universe",
+          "sha256": "347a86767295a250fda0cbc03abd4dbed037187f7e66096313ea8b7e2f1a707b"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-index-etf-bull-a",
+        "leakageGroups": [
+          "market:us-index-etf",
+          "instrument:yahoo-chart-public:SPY"
+        ],
+        "inputStart": "2020-03-23T13:30:00.000Z",
+        "decisionStart": "2020-06-17T13:30:00.000Z",
+        "decisionEnd": "2020-09-03T13:30:00.000Z",
+        "outcomeEnd": "2020-09-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:02",
+      "datasetId": "d4-us-index-etf-bull-a",
+      "asOf": "2020-06-24T13:30:00.000Z",
+      "snapshot": {
+        "ref": "032e914d7753f1cc803558d7fc35a62ec06e99fc",
+        "sha256": "f493b522c1cfd409b4723d0fbe4070704aaf4dc785c80f366de51caedafb8682"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "SPY",
+        "assetClass": "equity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "032e914d7753f1cc803558d7fc35a62ec06e99fc",
+          "sha256": "f493b522c1cfd409b4723d0fbe4070704aaf4dc785c80f366de51caedafb8682"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "032e914d7753f1cc803558d7fc35a62ec06e99fc",
+              "sha256": "f493b522c1cfd409b4723d0fbe4070704aaf4dc785c80f366de51caedafb8682",
+              "observedAt": "2020-06-24T13:30:00.000Z",
+              "availableAt": "2020-06-24T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2020-03-23T13:30:00.000Z",
+        "effectiveFrom": "2020-03-23T13:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#universe",
+          "sha256": "347a86767295a250fda0cbc03abd4dbed037187f7e66096313ea8b7e2f1a707b"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-index-etf-bull-a",
+        "leakageGroups": [
+          "market:us-index-etf",
+          "instrument:yahoo-chart-public:SPY"
+        ],
+        "inputStart": "2020-03-23T13:30:00.000Z",
+        "decisionStart": "2020-06-17T13:30:00.000Z",
+        "decisionEnd": "2020-09-03T13:30:00.000Z",
+        "outcomeEnd": "2020-09-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:03",
+      "datasetId": "d4-us-index-etf-bull-a",
+      "asOf": "2020-07-01T13:30:00.000Z",
+      "snapshot": {
+        "ref": "33668af11e561cc613cf59d40de06648eb60fec0",
+        "sha256": "4b81e3cf67f350f7a16794bf5776ab77ff9ab6c5fe3ea99147c2de8a7b095cef"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "SPY",
+        "assetClass": "equity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "33668af11e561cc613cf59d40de06648eb60fec0",
+          "sha256": "4b81e3cf67f350f7a16794bf5776ab77ff9ab6c5fe3ea99147c2de8a7b095cef"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "33668af11e561cc613cf59d40de06648eb60fec0",
+              "sha256": "4b81e3cf67f350f7a16794bf5776ab77ff9ab6c5fe3ea99147c2de8a7b095cef",
+              "observedAt": "2020-07-01T13:30:00.000Z",
+              "availableAt": "2020-07-01T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2020-03-23T13:30:00.000Z",
+        "effectiveFrom": "2020-03-23T13:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#universe",
+          "sha256": "347a86767295a250fda0cbc03abd4dbed037187f7e66096313ea8b7e2f1a707b"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-index-etf-bull-a",
+        "leakageGroups": [
+          "market:us-index-etf",
+          "instrument:yahoo-chart-public:SPY"
+        ],
+        "inputStart": "2020-03-23T13:30:00.000Z",
+        "decisionStart": "2020-06-17T13:30:00.000Z",
+        "decisionEnd": "2020-09-03T13:30:00.000Z",
+        "outcomeEnd": "2020-09-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:04",
+      "datasetId": "d4-us-index-etf-bull-a",
+      "asOf": "2020-07-09T13:30:00.000Z",
+      "snapshot": {
+        "ref": "e9f64f3a9a02d33f2ca11b8dcc095ce847cb1e66",
+        "sha256": "2cb8d8e594a7546b779b3ca1a00fef7913ccffecb9995d46ba6e37c44f20816e"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "SPY",
+        "assetClass": "equity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "e9f64f3a9a02d33f2ca11b8dcc095ce847cb1e66",
+          "sha256": "2cb8d8e594a7546b779b3ca1a00fef7913ccffecb9995d46ba6e37c44f20816e"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "e9f64f3a9a02d33f2ca11b8dcc095ce847cb1e66",
+              "sha256": "2cb8d8e594a7546b779b3ca1a00fef7913ccffecb9995d46ba6e37c44f20816e",
+              "observedAt": "2020-07-09T13:30:00.000Z",
+              "availableAt": "2020-07-09T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2020-03-23T13:30:00.000Z",
+        "effectiveFrom": "2020-03-23T13:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#universe",
+          "sha256": "347a86767295a250fda0cbc03abd4dbed037187f7e66096313ea8b7e2f1a707b"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-index-etf-bull-a",
+        "leakageGroups": [
+          "market:us-index-etf",
+          "instrument:yahoo-chart-public:SPY"
+        ],
+        "inputStart": "2020-03-23T13:30:00.000Z",
+        "decisionStart": "2020-06-17T13:30:00.000Z",
+        "decisionEnd": "2020-09-03T13:30:00.000Z",
+        "outcomeEnd": "2020-09-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:05",
+      "datasetId": "d4-us-index-etf-bull-a",
+      "asOf": "2020-07-16T13:30:00.000Z",
+      "snapshot": {
+        "ref": "bc94545aab49c5aaf2f7f2ffbf8806d592a23d90",
+        "sha256": "78fa0fffc36cbddfe9f7bc009ac50463be8ef165ca33b20944039d998b5e48d5"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "SPY",
+        "assetClass": "equity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "bc94545aab49c5aaf2f7f2ffbf8806d592a23d90",
+          "sha256": "78fa0fffc36cbddfe9f7bc009ac50463be8ef165ca33b20944039d998b5e48d5"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "bc94545aab49c5aaf2f7f2ffbf8806d592a23d90",
+              "sha256": "78fa0fffc36cbddfe9f7bc009ac50463be8ef165ca33b20944039d998b5e48d5",
+              "observedAt": "2020-07-16T13:30:00.000Z",
+              "availableAt": "2020-07-16T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2020-03-23T13:30:00.000Z",
+        "effectiveFrom": "2020-03-23T13:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#universe",
+          "sha256": "347a86767295a250fda0cbc03abd4dbed037187f7e66096313ea8b7e2f1a707b"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-index-etf-bull-a",
+        "leakageGroups": [
+          "market:us-index-etf",
+          "instrument:yahoo-chart-public:SPY"
+        ],
+        "inputStart": "2020-03-23T13:30:00.000Z",
+        "decisionStart": "2020-06-17T13:30:00.000Z",
+        "decisionEnd": "2020-09-03T13:30:00.000Z",
+        "outcomeEnd": "2020-09-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:06",
+      "datasetId": "d4-us-index-etf-bull-a",
+      "asOf": "2020-07-23T13:30:00.000Z",
+      "snapshot": {
+        "ref": "18b7c06751a55f72d33f14a02daa58f351d0896e",
+        "sha256": "28928ab695086afe0ff48471064aa85199c114f1e0da9ad8443717b63ac6e084"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "SPY",
+        "assetClass": "equity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "18b7c06751a55f72d33f14a02daa58f351d0896e",
+          "sha256": "28928ab695086afe0ff48471064aa85199c114f1e0da9ad8443717b63ac6e084"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "18b7c06751a55f72d33f14a02daa58f351d0896e",
+              "sha256": "28928ab695086afe0ff48471064aa85199c114f1e0da9ad8443717b63ac6e084",
+              "observedAt": "2020-07-23T13:30:00.000Z",
+              "availableAt": "2020-07-23T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2020-03-23T13:30:00.000Z",
+        "effectiveFrom": "2020-03-23T13:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#universe",
+          "sha256": "347a86767295a250fda0cbc03abd4dbed037187f7e66096313ea8b7e2f1a707b"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-index-etf-bull-a",
+        "leakageGroups": [
+          "market:us-index-etf",
+          "instrument:yahoo-chart-public:SPY"
+        ],
+        "inputStart": "2020-03-23T13:30:00.000Z",
+        "decisionStart": "2020-06-17T13:30:00.000Z",
+        "decisionEnd": "2020-09-03T13:30:00.000Z",
+        "outcomeEnd": "2020-09-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:07",
+      "datasetId": "d4-us-index-etf-bull-a",
+      "asOf": "2020-07-30T13:30:00.000Z",
+      "snapshot": {
+        "ref": "3aef72bf751ee37eebe5cce44542e0eb1d6fad8a",
+        "sha256": "e0d99d5822ad011b8b57af26a27e64f7880474b47c7fd1b499a9b3bcdc616c4f"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "SPY",
+        "assetClass": "equity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "3aef72bf751ee37eebe5cce44542e0eb1d6fad8a",
+          "sha256": "e0d99d5822ad011b8b57af26a27e64f7880474b47c7fd1b499a9b3bcdc616c4f"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "3aef72bf751ee37eebe5cce44542e0eb1d6fad8a",
+              "sha256": "e0d99d5822ad011b8b57af26a27e64f7880474b47c7fd1b499a9b3bcdc616c4f",
+              "observedAt": "2020-07-30T13:30:00.000Z",
+              "availableAt": "2020-07-30T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2020-03-23T13:30:00.000Z",
+        "effectiveFrom": "2020-03-23T13:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#universe",
+          "sha256": "347a86767295a250fda0cbc03abd4dbed037187f7e66096313ea8b7e2f1a707b"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-index-etf-bull-a",
+        "leakageGroups": [
+          "market:us-index-etf",
+          "instrument:yahoo-chart-public:SPY"
+        ],
+        "inputStart": "2020-03-23T13:30:00.000Z",
+        "decisionStart": "2020-06-17T13:30:00.000Z",
+        "decisionEnd": "2020-09-03T13:30:00.000Z",
+        "outcomeEnd": "2020-09-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:08",
+      "datasetId": "d4-us-index-etf-bull-a",
+      "asOf": "2020-08-06T13:30:00.000Z",
+      "snapshot": {
+        "ref": "673365f8fb0726883aa650cab99f136c7fcccae3",
+        "sha256": "d41c76c1891f1fa29f1f58d6c379b41ee07eae003db38d46242d54d7275923a5"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "SPY",
+        "assetClass": "equity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "673365f8fb0726883aa650cab99f136c7fcccae3",
+          "sha256": "d41c76c1891f1fa29f1f58d6c379b41ee07eae003db38d46242d54d7275923a5"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "673365f8fb0726883aa650cab99f136c7fcccae3",
+              "sha256": "d41c76c1891f1fa29f1f58d6c379b41ee07eae003db38d46242d54d7275923a5",
+              "observedAt": "2020-08-06T13:30:00.000Z",
+              "availableAt": "2020-08-06T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2020-03-23T13:30:00.000Z",
+        "effectiveFrom": "2020-03-23T13:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#universe",
+          "sha256": "347a86767295a250fda0cbc03abd4dbed037187f7e66096313ea8b7e2f1a707b"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-index-etf-bull-a",
+        "leakageGroups": [
+          "market:us-index-etf",
+          "instrument:yahoo-chart-public:SPY"
+        ],
+        "inputStart": "2020-03-23T13:30:00.000Z",
+        "decisionStart": "2020-06-17T13:30:00.000Z",
+        "decisionEnd": "2020-09-03T13:30:00.000Z",
+        "outcomeEnd": "2020-09-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:09",
+      "datasetId": "d4-us-index-etf-bull-a",
+      "asOf": "2020-08-13T13:30:00.000Z",
+      "snapshot": {
+        "ref": "d41daf2297919aff3c113eab38d387ca2147a074",
+        "sha256": "4f5aa0b3c41a1f63b4a169aea2e0bb329ecdc6762f938499ba5b0665e195518f"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "SPY",
+        "assetClass": "equity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "d41daf2297919aff3c113eab38d387ca2147a074",
+          "sha256": "4f5aa0b3c41a1f63b4a169aea2e0bb329ecdc6762f938499ba5b0665e195518f"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "d41daf2297919aff3c113eab38d387ca2147a074",
+              "sha256": "4f5aa0b3c41a1f63b4a169aea2e0bb329ecdc6762f938499ba5b0665e195518f",
+              "observedAt": "2020-08-13T13:30:00.000Z",
+              "availableAt": "2020-08-13T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2020-03-23T13:30:00.000Z",
+        "effectiveFrom": "2020-03-23T13:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#universe",
+          "sha256": "347a86767295a250fda0cbc03abd4dbed037187f7e66096313ea8b7e2f1a707b"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-index-etf-bull-a",
+        "leakageGroups": [
+          "market:us-index-etf",
+          "instrument:yahoo-chart-public:SPY"
+        ],
+        "inputStart": "2020-03-23T13:30:00.000Z",
+        "decisionStart": "2020-06-17T13:30:00.000Z",
+        "decisionEnd": "2020-09-03T13:30:00.000Z",
+        "outcomeEnd": "2020-09-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:10",
+      "datasetId": "d4-us-index-etf-bull-a",
+      "asOf": "2020-08-20T13:30:00.000Z",
+      "snapshot": {
+        "ref": "53f37a52a5c6549793e41a5d97d6877a8798c679",
+        "sha256": "9386ab1c69446fb555a3eedbb66f351c3f2fe2f22e23750b7886f176d426f1f0"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "SPY",
+        "assetClass": "equity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "53f37a52a5c6549793e41a5d97d6877a8798c679",
+          "sha256": "9386ab1c69446fb555a3eedbb66f351c3f2fe2f22e23750b7886f176d426f1f0"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "53f37a52a5c6549793e41a5d97d6877a8798c679",
+              "sha256": "9386ab1c69446fb555a3eedbb66f351c3f2fe2f22e23750b7886f176d426f1f0",
+              "observedAt": "2020-08-20T13:30:00.000Z",
+              "availableAt": "2020-08-20T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2020-03-23T13:30:00.000Z",
+        "effectiveFrom": "2020-03-23T13:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#universe",
+          "sha256": "347a86767295a250fda0cbc03abd4dbed037187f7e66096313ea8b7e2f1a707b"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-index-etf-bull-a",
+        "leakageGroups": [
+          "market:us-index-etf",
+          "instrument:yahoo-chart-public:SPY"
+        ],
+        "inputStart": "2020-03-23T13:30:00.000Z",
+        "decisionStart": "2020-06-17T13:30:00.000Z",
+        "decisionEnd": "2020-09-03T13:30:00.000Z",
+        "outcomeEnd": "2020-09-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:11",
+      "datasetId": "d4-us-index-etf-bull-a",
+      "asOf": "2020-08-27T13:30:00.000Z",
+      "snapshot": {
+        "ref": "ad0ec51855392177a2c08cbf6bab058b031b6638",
+        "sha256": "c626a6ab46255711d3a53328d5e21621cf46b32dc2e7ef9c76b22477ab9836f1"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "SPY",
+        "assetClass": "equity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "ad0ec51855392177a2c08cbf6bab058b031b6638",
+          "sha256": "c626a6ab46255711d3a53328d5e21621cf46b32dc2e7ef9c76b22477ab9836f1"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "ad0ec51855392177a2c08cbf6bab058b031b6638",
+              "sha256": "c626a6ab46255711d3a53328d5e21621cf46b32dc2e7ef9c76b22477ab9836f1",
+              "observedAt": "2020-08-27T13:30:00.000Z",
+              "availableAt": "2020-08-27T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2020-03-23T13:30:00.000Z",
+        "effectiveFrom": "2020-03-23T13:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#universe",
+          "sha256": "347a86767295a250fda0cbc03abd4dbed037187f7e66096313ea8b7e2f1a707b"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-index-etf-bull-a",
+        "leakageGroups": [
+          "market:us-index-etf",
+          "instrument:yahoo-chart-public:SPY"
+        ],
+        "inputStart": "2020-03-23T13:30:00.000Z",
+        "decisionStart": "2020-06-17T13:30:00.000Z",
+        "decisionEnd": "2020-09-03T13:30:00.000Z",
+        "outcomeEnd": "2020-09-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:12",
+      "datasetId": "d4-us-index-etf-bull-a",
+      "asOf": "2020-09-03T13:30:00.000Z",
+      "snapshot": {
+        "ref": "12d85cbc9af071419a966b1ab6f335e9067b3a8a",
+        "sha256": "b67137038d2570559a99dccb9d132fe6cb4c7724b76c2d5313acde95d66419de"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "SPY",
+        "assetClass": "equity-etf",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNYS",
+        "content": {
+          "ref": "12d85cbc9af071419a966b1ab6f335e9067b3a8a",
+          "sha256": "b67137038d2570559a99dccb9d132fe6cb4c7724b76c2d5313acde95d66419de"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "12d85cbc9af071419a966b1ab6f335e9067b3a8a",
+              "sha256": "b67137038d2570559a99dccb9d132fe6cb4c7724b76c2d5313acde95d66419de",
+              "observedAt": "2020-09-03T13:30:00.000Z",
+              "availableAt": "2020-09-03T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2020-03-23T13:30:00.000Z",
+        "effectiveFrom": "2020-03-23T13:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#universe",
+          "sha256": "347a86767295a250fda0cbc03abd4dbed037187f7e66096313ea8b7e2f1a707b"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-index-etf-bull-a",
+        "leakageGroups": [
+          "market:us-index-etf",
+          "instrument:yahoo-chart-public:SPY"
+        ],
+        "inputStart": "2020-03-23T13:30:00.000Z",
+        "decisionStart": "2020-06-17T13:30:00.000Z",
+        "decisionEnd": "2020-09-03T13:30:00.000Z",
+        "outcomeEnd": "2020-09-11T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    }
+  ]
+}

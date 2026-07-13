@@ -1,0 +1,1535 @@
+{
+  "schema": "steward-d4-cell-audit/1",
+  "version": 1,
+  "cellId": "d4-crypto-major-bear-a",
+  "split": "dev",
+  "sourceReceipt": {
+    "schema": "steward-d4-source-receipt/1",
+    "version": 1,
+    "createdAt": "2026-07-13T00:00:00.000Z",
+    "redistribution": "receipt-only",
+    "provider": "binance-public",
+    "symbol": "BTCUSDT",
+    "assetClass": "crypto",
+    "timezone": "UTC",
+    "exchangeCalendar": "24/7",
+    "providerAdjustmentMode": "native_unadjusted",
+    "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+    "splitEvidence": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#split-evidence",
+      "sha256": "c9864d757dc964e1ce7312ef6cefffbb19d3734bca73f6db6839521d33c11e12"
+    },
+    "futureSplitInvariance": [
+      {
+        "decisionOrdinal": 1,
+        "asOf": "2026-01-31T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "057c22a595e62d311d864b0852b780e6a88ff62139b2a78b420928f5f40c192e",
+        "deadjustedVisibleBarsSha256": "057c22a595e62d311d864b0852b780e6a88ff62139b2a78b420928f5f40c192e",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 2,
+        "asOf": "2026-02-01T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "dad3140397cc964bb7e8677e4ad6d3213cb2178039e3c232433552ff3f7ae5ce",
+        "deadjustedVisibleBarsSha256": "dad3140397cc964bb7e8677e4ad6d3213cb2178039e3c232433552ff3f7ae5ce",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 3,
+        "asOf": "2026-02-02T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "7a60f0974e143d1876ccc99d2a76d0af4d2f2c68bcd605e07cbd8381b5544432",
+        "deadjustedVisibleBarsSha256": "7a60f0974e143d1876ccc99d2a76d0af4d2f2c68bcd605e07cbd8381b5544432",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 4,
+        "asOf": "2026-02-03T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "3f4f62607061a0ab9b96d0e9c8991b72c28fa236d34572f45ab11561a8771e93",
+        "deadjustedVisibleBarsSha256": "3f4f62607061a0ab9b96d0e9c8991b72c28fa236d34572f45ab11561a8771e93",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 5,
+        "asOf": "2026-02-04T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "c0274bb39cb0dc533f6e9ffe61c69340480e8025b9001bf039967f2d37af6e83",
+        "deadjustedVisibleBarsSha256": "c0274bb39cb0dc533f6e9ffe61c69340480e8025b9001bf039967f2d37af6e83",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 6,
+        "asOf": "2026-02-05T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "96002d8ecce2627a85ecb0ca27c4c26a2ed417c3c2e871c648a6b63ba406ec64",
+        "deadjustedVisibleBarsSha256": "96002d8ecce2627a85ecb0ca27c4c26a2ed417c3c2e871c648a6b63ba406ec64",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 7,
+        "asOf": "2026-02-06T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "e524922db066d20aebe16a73ba8bc69f7fa63a6f074d4873cf2988bd96d5495e",
+        "deadjustedVisibleBarsSha256": "e524922db066d20aebe16a73ba8bc69f7fa63a6f074d4873cf2988bd96d5495e",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 8,
+        "asOf": "2026-02-07T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "3bc3fb43dbdc2d84cb37ad0b282a0b645693ccd43727262105cbf6fa8f8aea89",
+        "deadjustedVisibleBarsSha256": "3bc3fb43dbdc2d84cb37ad0b282a0b645693ccd43727262105cbf6fa8f8aea89",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 9,
+        "asOf": "2026-02-08T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "92346d37eb552318aca1482664c5a594f69e45e26b9dc58c62aeb775eb14e33b",
+        "deadjustedVisibleBarsSha256": "92346d37eb552318aca1482664c5a594f69e45e26b9dc58c62aeb775eb14e33b",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 10,
+        "asOf": "2026-02-09T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "0d9363b6b9accb7757ba2dbb2c919001d8c440d4efd3e76b3602e8eca4f2639d",
+        "deadjustedVisibleBarsSha256": "0d9363b6b9accb7757ba2dbb2c919001d8c440d4efd3e76b3602e8eca4f2639d",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 11,
+        "asOf": "2026-02-10T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "fae7abbc5b8f8a8833c53fc7f9f11d5139c28f609a0f53392bd1b8c7ba308746",
+        "deadjustedVisibleBarsSha256": "fae7abbc5b8f8a8833c53fc7f9f11d5139c28f609a0f53392bd1b8c7ba308746",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 12,
+        "asOf": "2026-02-11T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "1a8fb18e87bc9286c6f429f4473b04efdad8708daebcef1e18be5d11d30bacf0",
+        "deadjustedVisibleBarsSha256": "1a8fb18e87bc9286c6f429f4473b04efdad8708daebcef1e18be5d11d30bacf0",
+        "invariant": true
+      }
+    ],
+    "request": {
+      "method": "GET",
+      "url": "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h",
+      "startTime": 1722470400000,
+      "endTimeExclusive": 1782864000000,
+      "pageLimit": 1000,
+      "normalization": "Binance kline OHLCV; requested half-open range; paginated by open time; unadjusted"
+    },
+    "acquisition": {
+      "ref": "remote:d4-crypto-major-bear-a:acquisition",
+      "sha256": "92effb0caac8fa5689f1a948cff4d9ccf398d925b9a6accad54bb06af42f38c8",
+      "canonicalByteLength": 2753081,
+      "barCount": 16776
+    },
+    "derivedPool": {
+      "ref": "derived:d4-crypto-major-bear-a:pool",
+      "sha256": "f323f9e851f912c882b501d04e5e04864d1901ca2d2bb953de8524e78db29159",
+      "canonicalByteLength": 1241551,
+      "barCount": 4194
+    },
+    "selectedRaw": {
+      "ref": "remote:d4-crypto-major-bear-a:selected",
+      "sha256": "1c0988cfc3cd6fc6b4412a4ca384bd79b490abb2f4ef236a171eca2d5e346579",
+      "canonicalByteLength": 105782,
+      "barCount": 648
+    },
+    "selectedDerived": {
+      "ref": "derived:d4-crypto-major-bear-a:selected",
+      "sha256": "5f6bbb13f27d9d7b068da8f59498600cdda27685c53b81acbd33ec197a348aa6",
+      "canonicalByteLength": 47734,
+      "barCount": 162
+    },
+    "selection": {
+      "profile": "bear",
+      "exactBarCount": 162,
+      "derivedPoolIndexStart": 3203,
+      "derivedPoolIndexEndExclusive": 3365,
+      "logReturn": -0.37321658543253156,
+      "firstTimestamp": "2026-01-16T20:00:00.000Z",
+      "finalAvailableAt": "2026-02-12T20:00:00.000Z"
+    },
+    "recipe": {
+      "command": "pnpm exec tsx tools/campaigns/build-d4-smoke-data.mjs --verify-source",
+      "failClosed": "Any request, canonical byte identity, exact selection index, or transform drift is an error.",
+      "implementation": [
+        {
+          "ref": "tools/campaigns/d4-smoke-data.mjs",
+          "sha256": "54b08c9ea59068879050070bc671ccb2327f3605e56d04398e80c1c99bb719c9"
+        },
+        {
+          "ref": "tools/campaigns/build-d4-smoke-data.mjs",
+          "sha256": "109edba4af37e03a3be1e1a674582aa0f6f01681a519532e1028cc1c8a722629"
+        }
+      ]
+    }
+  },
+  "splitEvidence": {
+    "schema": "steward-d4-split-evidence/1",
+    "version": 1,
+    "cellId": "d4-crypto-major-bear-a",
+    "provider": "binance-public",
+    "symbol": "BTCUSDT",
+    "providerAdjustmentMode": "native_unadjusted",
+    "cutoff": "2026-07-13T00:00:00.000Z",
+    "request": null,
+    "note": "Native spot units have no issuer corporate-split action.",
+    "actions": []
+  },
+  "futureSplitInvariance": [
+    {
+      "decisionOrdinal": 1,
+      "asOf": "2026-01-31T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "057c22a595e62d311d864b0852b780e6a88ff62139b2a78b420928f5f40c192e",
+      "deadjustedVisibleBarsSha256": "057c22a595e62d311d864b0852b780e6a88ff62139b2a78b420928f5f40c192e",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 2,
+      "asOf": "2026-02-01T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "dad3140397cc964bb7e8677e4ad6d3213cb2178039e3c232433552ff3f7ae5ce",
+      "deadjustedVisibleBarsSha256": "dad3140397cc964bb7e8677e4ad6d3213cb2178039e3c232433552ff3f7ae5ce",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 3,
+      "asOf": "2026-02-02T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "7a60f0974e143d1876ccc99d2a76d0af4d2f2c68bcd605e07cbd8381b5544432",
+      "deadjustedVisibleBarsSha256": "7a60f0974e143d1876ccc99d2a76d0af4d2f2c68bcd605e07cbd8381b5544432",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 4,
+      "asOf": "2026-02-03T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "3f4f62607061a0ab9b96d0e9c8991b72c28fa236d34572f45ab11561a8771e93",
+      "deadjustedVisibleBarsSha256": "3f4f62607061a0ab9b96d0e9c8991b72c28fa236d34572f45ab11561a8771e93",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 5,
+      "asOf": "2026-02-04T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "c0274bb39cb0dc533f6e9ffe61c69340480e8025b9001bf039967f2d37af6e83",
+      "deadjustedVisibleBarsSha256": "c0274bb39cb0dc533f6e9ffe61c69340480e8025b9001bf039967f2d37af6e83",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 6,
+      "asOf": "2026-02-05T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "96002d8ecce2627a85ecb0ca27c4c26a2ed417c3c2e871c648a6b63ba406ec64",
+      "deadjustedVisibleBarsSha256": "96002d8ecce2627a85ecb0ca27c4c26a2ed417c3c2e871c648a6b63ba406ec64",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 7,
+      "asOf": "2026-02-06T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "e524922db066d20aebe16a73ba8bc69f7fa63a6f074d4873cf2988bd96d5495e",
+      "deadjustedVisibleBarsSha256": "e524922db066d20aebe16a73ba8bc69f7fa63a6f074d4873cf2988bd96d5495e",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 8,
+      "asOf": "2026-02-07T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "3bc3fb43dbdc2d84cb37ad0b282a0b645693ccd43727262105cbf6fa8f8aea89",
+      "deadjustedVisibleBarsSha256": "3bc3fb43dbdc2d84cb37ad0b282a0b645693ccd43727262105cbf6fa8f8aea89",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 9,
+      "asOf": "2026-02-08T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "92346d37eb552318aca1482664c5a594f69e45e26b9dc58c62aeb775eb14e33b",
+      "deadjustedVisibleBarsSha256": "92346d37eb552318aca1482664c5a594f69e45e26b9dc58c62aeb775eb14e33b",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 10,
+      "asOf": "2026-02-09T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "0d9363b6b9accb7757ba2dbb2c919001d8c440d4efd3e76b3602e8eca4f2639d",
+      "deadjustedVisibleBarsSha256": "0d9363b6b9accb7757ba2dbb2c919001d8c440d4efd3e76b3602e8eca4f2639d",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 11,
+      "asOf": "2026-02-10T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "fae7abbc5b8f8a8833c53fc7f9f11d5139c28f609a0f53392bd1b8c7ba308746",
+      "deadjustedVisibleBarsSha256": "fae7abbc5b8f8a8833c53fc7f9f11d5139c28f609a0f53392bd1b8c7ba308746",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 12,
+      "asOf": "2026-02-11T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "1a8fb18e87bc9286c6f429f4473b04efdad8708daebcef1e18be5d11d30bacf0",
+      "deadjustedVisibleBarsSha256": "1a8fb18e87bc9286c6f429f4473b04efdad8708daebcef1e18be5d11d30bacf0",
+      "invariant": true
+    }
+  ],
+  "universeEvidence": {
+    "cellId": "d4-crypto-major-bear-a",
+    "selectionBasis": "point_in_time",
+    "instrumentObservedFrom": "2026-01-16T20:00:00.000Z",
+    "instrumentObservedThrough": "2026-02-12T20:00:00.000Z",
+    "evidence": "The frozen single-instrument universe was selected before model calls and is evidenced by the pinned provider-bar receipt.",
+    "sourceReceipt": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#source-receipt",
+      "sha256": "2b343ab0f54a073a5c6f21b9bdf01374e7488c3d034ee8058ffad8576b646371"
+    }
+  },
+  "decisionManifests": [
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:01",
+      "datasetId": "d4-crypto-major-bear-a",
+      "asOf": "2026-01-31T20:00:00.000Z",
+      "snapshot": {
+        "ref": "1ceb23cac2aa0e12c03976fe8aaadff864b7555f",
+        "sha256": "dcbcee93d626c289864e90949ffdb9b7180d97a37abfa6504b70acec582fde0d"
+      },
+      "dataset": {
+        "provider": "binance-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "BTCUSDT",
+        "assetClass": "crypto",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/7",
+        "content": {
+          "ref": "1ceb23cac2aa0e12c03976fe8aaadff864b7555f",
+          "sha256": "dcbcee93d626c289864e90949ffdb9b7180d97a37abfa6504b70acec582fde0d"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "1ceb23cac2aa0e12c03976fe8aaadff864b7555f",
+              "sha256": "dcbcee93d626c289864e90949ffdb9b7180d97a37abfa6504b70acec582fde0d",
+              "observedAt": "2026-01-31T20:00:00.000Z",
+              "availableAt": "2026-01-31T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2026-01-16T20:00:00.000Z",
+        "effectiveFrom": "2026-01-16T20:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#universe",
+          "sha256": "2a92d87c5cff87bcff0c66b7edb76bd9f5a7193942eb993998abd0147679f808"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-crypto-major-bear-a",
+        "leakageGroups": [
+          "market:crypto-major",
+          "instrument:binance-public:BTCUSDT"
+        ],
+        "inputStart": "2026-01-16T20:00:00.000Z",
+        "decisionStart": "2026-01-31T20:00:00.000Z",
+        "decisionEnd": "2026-02-11T20:00:00.000Z",
+        "outcomeEnd": "2026-02-12T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:02",
+      "datasetId": "d4-crypto-major-bear-a",
+      "asOf": "2026-02-01T20:00:00.000Z",
+      "snapshot": {
+        "ref": "fd21040fa007d8ddbc7c2139a057e8b9aa03ecb3",
+        "sha256": "a6b5d176c75b029b9b750bad43f4c00c8c09f800148fde29dfb9d314b8002130"
+      },
+      "dataset": {
+        "provider": "binance-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "BTCUSDT",
+        "assetClass": "crypto",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/7",
+        "content": {
+          "ref": "fd21040fa007d8ddbc7c2139a057e8b9aa03ecb3",
+          "sha256": "a6b5d176c75b029b9b750bad43f4c00c8c09f800148fde29dfb9d314b8002130"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "fd21040fa007d8ddbc7c2139a057e8b9aa03ecb3",
+              "sha256": "a6b5d176c75b029b9b750bad43f4c00c8c09f800148fde29dfb9d314b8002130",
+              "observedAt": "2026-02-01T20:00:00.000Z",
+              "availableAt": "2026-02-01T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2026-01-16T20:00:00.000Z",
+        "effectiveFrom": "2026-01-16T20:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#universe",
+          "sha256": "2a92d87c5cff87bcff0c66b7edb76bd9f5a7193942eb993998abd0147679f808"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-crypto-major-bear-a",
+        "leakageGroups": [
+          "market:crypto-major",
+          "instrument:binance-public:BTCUSDT"
+        ],
+        "inputStart": "2026-01-16T20:00:00.000Z",
+        "decisionStart": "2026-01-31T20:00:00.000Z",
+        "decisionEnd": "2026-02-11T20:00:00.000Z",
+        "outcomeEnd": "2026-02-12T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:03",
+      "datasetId": "d4-crypto-major-bear-a",
+      "asOf": "2026-02-02T20:00:00.000Z",
+      "snapshot": {
+        "ref": "1d41d9a87247dc7b29843eb8050a6c97fa3483dd",
+        "sha256": "31994e9b72dee4164d94d4f37cdaa9d6e1185eb73469be8718d0b9d12b6b9a97"
+      },
+      "dataset": {
+        "provider": "binance-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "BTCUSDT",
+        "assetClass": "crypto",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/7",
+        "content": {
+          "ref": "1d41d9a87247dc7b29843eb8050a6c97fa3483dd",
+          "sha256": "31994e9b72dee4164d94d4f37cdaa9d6e1185eb73469be8718d0b9d12b6b9a97"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "1d41d9a87247dc7b29843eb8050a6c97fa3483dd",
+              "sha256": "31994e9b72dee4164d94d4f37cdaa9d6e1185eb73469be8718d0b9d12b6b9a97",
+              "observedAt": "2026-02-02T20:00:00.000Z",
+              "availableAt": "2026-02-02T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2026-01-16T20:00:00.000Z",
+        "effectiveFrom": "2026-01-16T20:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#universe",
+          "sha256": "2a92d87c5cff87bcff0c66b7edb76bd9f5a7193942eb993998abd0147679f808"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-crypto-major-bear-a",
+        "leakageGroups": [
+          "market:crypto-major",
+          "instrument:binance-public:BTCUSDT"
+        ],
+        "inputStart": "2026-01-16T20:00:00.000Z",
+        "decisionStart": "2026-01-31T20:00:00.000Z",
+        "decisionEnd": "2026-02-11T20:00:00.000Z",
+        "outcomeEnd": "2026-02-12T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:04",
+      "datasetId": "d4-crypto-major-bear-a",
+      "asOf": "2026-02-03T20:00:00.000Z",
+      "snapshot": {
+        "ref": "7f6ba2817208c91fe2bdddc2617aecd11de9cb93",
+        "sha256": "00e27aeb3b4ccd6156490e3868c49a81612f0813c641eb355b7e9f3c2ba3b5a3"
+      },
+      "dataset": {
+        "provider": "binance-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "BTCUSDT",
+        "assetClass": "crypto",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/7",
+        "content": {
+          "ref": "7f6ba2817208c91fe2bdddc2617aecd11de9cb93",
+          "sha256": "00e27aeb3b4ccd6156490e3868c49a81612f0813c641eb355b7e9f3c2ba3b5a3"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "7f6ba2817208c91fe2bdddc2617aecd11de9cb93",
+              "sha256": "00e27aeb3b4ccd6156490e3868c49a81612f0813c641eb355b7e9f3c2ba3b5a3",
+              "observedAt": "2026-02-03T20:00:00.000Z",
+              "availableAt": "2026-02-03T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2026-01-16T20:00:00.000Z",
+        "effectiveFrom": "2026-01-16T20:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#universe",
+          "sha256": "2a92d87c5cff87bcff0c66b7edb76bd9f5a7193942eb993998abd0147679f808"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-crypto-major-bear-a",
+        "leakageGroups": [
+          "market:crypto-major",
+          "instrument:binance-public:BTCUSDT"
+        ],
+        "inputStart": "2026-01-16T20:00:00.000Z",
+        "decisionStart": "2026-01-31T20:00:00.000Z",
+        "decisionEnd": "2026-02-11T20:00:00.000Z",
+        "outcomeEnd": "2026-02-12T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:05",
+      "datasetId": "d4-crypto-major-bear-a",
+      "asOf": "2026-02-04T20:00:00.000Z",
+      "snapshot": {
+        "ref": "6aaadc1bf6d0f3c2d50f2087e43fecf7187a25cd",
+        "sha256": "6a89dd42710ea26fe7fbace525c258de9cb6c710122bf8e8eaa6dea7bac92692"
+      },
+      "dataset": {
+        "provider": "binance-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "BTCUSDT",
+        "assetClass": "crypto",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/7",
+        "content": {
+          "ref": "6aaadc1bf6d0f3c2d50f2087e43fecf7187a25cd",
+          "sha256": "6a89dd42710ea26fe7fbace525c258de9cb6c710122bf8e8eaa6dea7bac92692"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "6aaadc1bf6d0f3c2d50f2087e43fecf7187a25cd",
+              "sha256": "6a89dd42710ea26fe7fbace525c258de9cb6c710122bf8e8eaa6dea7bac92692",
+              "observedAt": "2026-02-04T20:00:00.000Z",
+              "availableAt": "2026-02-04T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2026-01-16T20:00:00.000Z",
+        "effectiveFrom": "2026-01-16T20:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#universe",
+          "sha256": "2a92d87c5cff87bcff0c66b7edb76bd9f5a7193942eb993998abd0147679f808"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-crypto-major-bear-a",
+        "leakageGroups": [
+          "market:crypto-major",
+          "instrument:binance-public:BTCUSDT"
+        ],
+        "inputStart": "2026-01-16T20:00:00.000Z",
+        "decisionStart": "2026-01-31T20:00:00.000Z",
+        "decisionEnd": "2026-02-11T20:00:00.000Z",
+        "outcomeEnd": "2026-02-12T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:06",
+      "datasetId": "d4-crypto-major-bear-a",
+      "asOf": "2026-02-05T20:00:00.000Z",
+      "snapshot": {
+        "ref": "254b7a9d8761fbb4e04a1811c11d8e97133415c3",
+        "sha256": "c289f0b34ebcaad1bacc3837d625aa89a77b1356af7bcb6daf2a53241758303f"
+      },
+      "dataset": {
+        "provider": "binance-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "BTCUSDT",
+        "assetClass": "crypto",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/7",
+        "content": {
+          "ref": "254b7a9d8761fbb4e04a1811c11d8e97133415c3",
+          "sha256": "c289f0b34ebcaad1bacc3837d625aa89a77b1356af7bcb6daf2a53241758303f"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "254b7a9d8761fbb4e04a1811c11d8e97133415c3",
+              "sha256": "c289f0b34ebcaad1bacc3837d625aa89a77b1356af7bcb6daf2a53241758303f",
+              "observedAt": "2026-02-05T20:00:00.000Z",
+              "availableAt": "2026-02-05T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2026-01-16T20:00:00.000Z",
+        "effectiveFrom": "2026-01-16T20:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#universe",
+          "sha256": "2a92d87c5cff87bcff0c66b7edb76bd9f5a7193942eb993998abd0147679f808"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-crypto-major-bear-a",
+        "leakageGroups": [
+          "market:crypto-major",
+          "instrument:binance-public:BTCUSDT"
+        ],
+        "inputStart": "2026-01-16T20:00:00.000Z",
+        "decisionStart": "2026-01-31T20:00:00.000Z",
+        "decisionEnd": "2026-02-11T20:00:00.000Z",
+        "outcomeEnd": "2026-02-12T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:07",
+      "datasetId": "d4-crypto-major-bear-a",
+      "asOf": "2026-02-06T20:00:00.000Z",
+      "snapshot": {
+        "ref": "71d029dd3992bafd7af87e8e67ac6330d90a080b",
+        "sha256": "18039b3c17bb74afb06a8e08c9de38700ccfcfe6f9d9db17916fd74d6e7d15b0"
+      },
+      "dataset": {
+        "provider": "binance-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "BTCUSDT",
+        "assetClass": "crypto",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/7",
+        "content": {
+          "ref": "71d029dd3992bafd7af87e8e67ac6330d90a080b",
+          "sha256": "18039b3c17bb74afb06a8e08c9de38700ccfcfe6f9d9db17916fd74d6e7d15b0"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "71d029dd3992bafd7af87e8e67ac6330d90a080b",
+              "sha256": "18039b3c17bb74afb06a8e08c9de38700ccfcfe6f9d9db17916fd74d6e7d15b0",
+              "observedAt": "2026-02-06T20:00:00.000Z",
+              "availableAt": "2026-02-06T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2026-01-16T20:00:00.000Z",
+        "effectiveFrom": "2026-01-16T20:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#universe",
+          "sha256": "2a92d87c5cff87bcff0c66b7edb76bd9f5a7193942eb993998abd0147679f808"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-crypto-major-bear-a",
+        "leakageGroups": [
+          "market:crypto-major",
+          "instrument:binance-public:BTCUSDT"
+        ],
+        "inputStart": "2026-01-16T20:00:00.000Z",
+        "decisionStart": "2026-01-31T20:00:00.000Z",
+        "decisionEnd": "2026-02-11T20:00:00.000Z",
+        "outcomeEnd": "2026-02-12T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:08",
+      "datasetId": "d4-crypto-major-bear-a",
+      "asOf": "2026-02-07T20:00:00.000Z",
+      "snapshot": {
+        "ref": "72d5289c45dfa60826db447f4a8bf81e16a68797",
+        "sha256": "d0caf8062e688260771ade36cd03d3942ed36d5ffa7d880a5c30482386132fa7"
+      },
+      "dataset": {
+        "provider": "binance-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "BTCUSDT",
+        "assetClass": "crypto",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/7",
+        "content": {
+          "ref": "72d5289c45dfa60826db447f4a8bf81e16a68797",
+          "sha256": "d0caf8062e688260771ade36cd03d3942ed36d5ffa7d880a5c30482386132fa7"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "72d5289c45dfa60826db447f4a8bf81e16a68797",
+              "sha256": "d0caf8062e688260771ade36cd03d3942ed36d5ffa7d880a5c30482386132fa7",
+              "observedAt": "2026-02-07T20:00:00.000Z",
+              "availableAt": "2026-02-07T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2026-01-16T20:00:00.000Z",
+        "effectiveFrom": "2026-01-16T20:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#universe",
+          "sha256": "2a92d87c5cff87bcff0c66b7edb76bd9f5a7193942eb993998abd0147679f808"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-crypto-major-bear-a",
+        "leakageGroups": [
+          "market:crypto-major",
+          "instrument:binance-public:BTCUSDT"
+        ],
+        "inputStart": "2026-01-16T20:00:00.000Z",
+        "decisionStart": "2026-01-31T20:00:00.000Z",
+        "decisionEnd": "2026-02-11T20:00:00.000Z",
+        "outcomeEnd": "2026-02-12T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:09",
+      "datasetId": "d4-crypto-major-bear-a",
+      "asOf": "2026-02-08T20:00:00.000Z",
+      "snapshot": {
+        "ref": "e7f766ac55170b793256d688dc5645a18793bf44",
+        "sha256": "80e9215e0827657055df864c05bb65f51179437eb323f8881f7b3c2d8e43f424"
+      },
+      "dataset": {
+        "provider": "binance-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "BTCUSDT",
+        "assetClass": "crypto",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/7",
+        "content": {
+          "ref": "e7f766ac55170b793256d688dc5645a18793bf44",
+          "sha256": "80e9215e0827657055df864c05bb65f51179437eb323f8881f7b3c2d8e43f424"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "e7f766ac55170b793256d688dc5645a18793bf44",
+              "sha256": "80e9215e0827657055df864c05bb65f51179437eb323f8881f7b3c2d8e43f424",
+              "observedAt": "2026-02-08T20:00:00.000Z",
+              "availableAt": "2026-02-08T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2026-01-16T20:00:00.000Z",
+        "effectiveFrom": "2026-01-16T20:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#universe",
+          "sha256": "2a92d87c5cff87bcff0c66b7edb76bd9f5a7193942eb993998abd0147679f808"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-crypto-major-bear-a",
+        "leakageGroups": [
+          "market:crypto-major",
+          "instrument:binance-public:BTCUSDT"
+        ],
+        "inputStart": "2026-01-16T20:00:00.000Z",
+        "decisionStart": "2026-01-31T20:00:00.000Z",
+        "decisionEnd": "2026-02-11T20:00:00.000Z",
+        "outcomeEnd": "2026-02-12T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:10",
+      "datasetId": "d4-crypto-major-bear-a",
+      "asOf": "2026-02-09T20:00:00.000Z",
+      "snapshot": {
+        "ref": "6de9d70df358ab4f0ed139734ccd9c48a4de718f",
+        "sha256": "d6bbc8e29af409a78df31b0f51df3a6a9e8d09d7e01c6e2ee4eb9f6aef4987f7"
+      },
+      "dataset": {
+        "provider": "binance-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "BTCUSDT",
+        "assetClass": "crypto",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/7",
+        "content": {
+          "ref": "6de9d70df358ab4f0ed139734ccd9c48a4de718f",
+          "sha256": "d6bbc8e29af409a78df31b0f51df3a6a9e8d09d7e01c6e2ee4eb9f6aef4987f7"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "6de9d70df358ab4f0ed139734ccd9c48a4de718f",
+              "sha256": "d6bbc8e29af409a78df31b0f51df3a6a9e8d09d7e01c6e2ee4eb9f6aef4987f7",
+              "observedAt": "2026-02-09T20:00:00.000Z",
+              "availableAt": "2026-02-09T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2026-01-16T20:00:00.000Z",
+        "effectiveFrom": "2026-01-16T20:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#universe",
+          "sha256": "2a92d87c5cff87bcff0c66b7edb76bd9f5a7193942eb993998abd0147679f808"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-crypto-major-bear-a",
+        "leakageGroups": [
+          "market:crypto-major",
+          "instrument:binance-public:BTCUSDT"
+        ],
+        "inputStart": "2026-01-16T20:00:00.000Z",
+        "decisionStart": "2026-01-31T20:00:00.000Z",
+        "decisionEnd": "2026-02-11T20:00:00.000Z",
+        "outcomeEnd": "2026-02-12T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:11",
+      "datasetId": "d4-crypto-major-bear-a",
+      "asOf": "2026-02-10T20:00:00.000Z",
+      "snapshot": {
+        "ref": "5a45621c4e7a142f37fea057735b5b79fc26efb6",
+        "sha256": "4ae6437cade5f3cf0cdab6f8c6ddd55917a45a6c43be5dbb43eb4b0d6d93efe3"
+      },
+      "dataset": {
+        "provider": "binance-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "BTCUSDT",
+        "assetClass": "crypto",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/7",
+        "content": {
+          "ref": "5a45621c4e7a142f37fea057735b5b79fc26efb6",
+          "sha256": "4ae6437cade5f3cf0cdab6f8c6ddd55917a45a6c43be5dbb43eb4b0d6d93efe3"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "5a45621c4e7a142f37fea057735b5b79fc26efb6",
+              "sha256": "4ae6437cade5f3cf0cdab6f8c6ddd55917a45a6c43be5dbb43eb4b0d6d93efe3",
+              "observedAt": "2026-02-10T20:00:00.000Z",
+              "availableAt": "2026-02-10T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2026-01-16T20:00:00.000Z",
+        "effectiveFrom": "2026-01-16T20:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#universe",
+          "sha256": "2a92d87c5cff87bcff0c66b7edb76bd9f5a7193942eb993998abd0147679f808"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-crypto-major-bear-a",
+        "leakageGroups": [
+          "market:crypto-major",
+          "instrument:binance-public:BTCUSDT"
+        ],
+        "inputStart": "2026-01-16T20:00:00.000Z",
+        "decisionStart": "2026-01-31T20:00:00.000Z",
+        "decisionEnd": "2026-02-11T20:00:00.000Z",
+        "outcomeEnd": "2026-02-12T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:12",
+      "datasetId": "d4-crypto-major-bear-a",
+      "asOf": "2026-02-11T20:00:00.000Z",
+      "snapshot": {
+        "ref": "899f57498177362042b01b56e566f44a6e313a5d",
+        "sha256": "7c174023bc80b20fcaa1481153fbe5d92f475360c670019a83d6309a7684cb20"
+      },
+      "dataset": {
+        "provider": "binance-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "BTCUSDT",
+        "assetClass": "crypto",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/7",
+        "content": {
+          "ref": "899f57498177362042b01b56e566f44a6e313a5d",
+          "sha256": "7c174023bc80b20fcaa1481153fbe5d92f475360c670019a83d6309a7684cb20"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "899f57498177362042b01b56e566f44a6e313a5d",
+              "sha256": "7c174023bc80b20fcaa1481153fbe5d92f475360c670019a83d6309a7684cb20",
+              "observedAt": "2026-02-11T20:00:00.000Z",
+              "availableAt": "2026-02-11T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2026-01-16T20:00:00.000Z",
+        "effectiveFrom": "2026-01-16T20:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#universe",
+          "sha256": "2a92d87c5cff87bcff0c66b7edb76bd9f5a7193942eb993998abd0147679f808"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-crypto-major-bear-a",
+        "leakageGroups": [
+          "market:crypto-major",
+          "instrument:binance-public:BTCUSDT"
+        ],
+        "inputStart": "2026-01-16T20:00:00.000Z",
+        "decisionStart": "2026-01-31T20:00:00.000Z",
+        "decisionEnd": "2026-02-11T20:00:00.000Z",
+        "outcomeEnd": "2026-02-12T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    }
+  ]
+}

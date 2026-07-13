@@ -1,0 +1,51 @@
+{
+  "session": {
+    "total_cost_usd": 0,
+    "total_api_duration_ms": 0,
+    "model_usage": {},
+    "num_turns": 0
+  },
+  "subscription_type": "max",
+  "rate_limits_available": true,
+  "rate_limits": {
+    "five_hour": {
+      "utilization": 16,
+      "resets_at": "2026-07-13T13:00:00.000Z"
+    },
+    "seven_day": {
+      "utilization": 59,
+      "resets_at": "2026-07-18T03:00:00.000Z"
+    },
+    "model_scoped": [
+      {
+        "display_name": "Fable",
+        "utilization": 54,
+        "resets_at": "2026-07-18T03:00:00.000Z"
+      }
+    ],
+    "extra_usage": {
+      "is_enabled": false,
+      "monthly_limit": null,
+      "used_credits": null,
+      "utilization": null
+    },
+    "spend": {
+      "enabled": false,
+      "used": {
+        "amount_minor": 0
+      },
+      "can_purchase_credits": false
+    }
+  },
+  "nativeEvidence": {
+    "capture": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/captures/claude-after.native.txt",
+      "sha256": "7c415576b2c0d8632ba54ef6445293079bad7bf5468731167e1f7ff729919037"
+    },
+    "calibrationReceipt": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/calibration-receipt.json",
+      "sha256": "2ac9f27ef3da92aa8d2e4a83b3d17a2c05128490fad993aae6ae339e17f76529"
+    },
+    "normalization": "Integer utilization and Asia/Riyadh reset text are projected into the SDK usage-control shape required by the frozen runner."
+  }
+}

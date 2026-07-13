@@ -1,0 +1,1536 @@
+{
+  "schema": "steward-d4-cell-audit/1",
+  "version": 1,
+  "cellId": "d4-fx-bear-a",
+  "split": "dev",
+  "sourceReceipt": {
+    "schema": "steward-d4-source-receipt/1",
+    "version": 1,
+    "createdAt": "2026-07-13T00:00:00.000Z",
+    "redistribution": "receipt-only",
+    "provider": "yahoo-chart-public",
+    "symbol": "EURUSD=X",
+    "assetClass": "fx",
+    "timezone": "UTC",
+    "exchangeCalendar": "24/5",
+    "providerAdjustmentMode": "retrospective_split_adjusted",
+    "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+    "splitEvidence": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#split-evidence",
+      "sha256": "ac2726e860f13db198f0bb3a79ad7cdecd017e618f382a42b3500a8e7f34deab"
+    },
+    "futureSplitInvariance": [
+      {
+        "decisionOrdinal": 1,
+        "asOf": "2024-11-06T12:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "a98ebdde06f73123ea26823f95c918973859541cb6d4a8f27044329e238f2c4a",
+        "deadjustedVisibleBarsSha256": "a98ebdde06f73123ea26823f95c918973859541cb6d4a8f27044329e238f2c4a",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 2,
+        "asOf": "2024-11-07T12:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "ac459270657bdb66b1972fc7e9f88bf2d6c42fff5e7969e704e7b21e3f7d0eab",
+        "deadjustedVisibleBarsSha256": "ac459270657bdb66b1972fc7e9f88bf2d6c42fff5e7969e704e7b21e3f7d0eab",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 3,
+        "asOf": "2024-11-08T12:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "73a9305634edadb25d90458d4bf4a3d8b90ae08203311302703c836c0d5c879c",
+        "deadjustedVisibleBarsSha256": "73a9305634edadb25d90458d4bf4a3d8b90ae08203311302703c836c0d5c879c",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 4,
+        "asOf": "2024-11-11T16:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "f89ca7b216cd5da3b89e73827aecd93d605f0c49ab3d4261222d477c6387961b",
+        "deadjustedVisibleBarsSha256": "f89ca7b216cd5da3b89e73827aecd93d605f0c49ab3d4261222d477c6387961b",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 5,
+        "asOf": "2024-11-12T16:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "46a199c84936f3e3a3b17403adddb5ec2da2dd7ee4dbf5c65431a086a7bd7093",
+        "deadjustedVisibleBarsSha256": "46a199c84936f3e3a3b17403adddb5ec2da2dd7ee4dbf5c65431a086a7bd7093",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 6,
+        "asOf": "2024-11-13T16:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "fa423b54833c8d7d9807044c1fe24af487b19247a5f9c4f670d532f684be843b",
+        "deadjustedVisibleBarsSha256": "fa423b54833c8d7d9807044c1fe24af487b19247a5f9c4f670d532f684be843b",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 7,
+        "asOf": "2024-11-14T16:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "a3a1089c26d6977ab2aa7232e23a981f596adf07650b8644dd8f1747b3d377b9",
+        "deadjustedVisibleBarsSha256": "a3a1089c26d6977ab2aa7232e23a981f596adf07650b8644dd8f1747b3d377b9",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 8,
+        "asOf": "2024-11-15T16:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "64b5417581caf4a70559d9d9c95283df93d4382aaaec034a239e2cfd11b0e6a6",
+        "deadjustedVisibleBarsSha256": "64b5417581caf4a70559d9d9c95283df93d4382aaaec034a239e2cfd11b0e6a6",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 9,
+        "asOf": "2024-11-18T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "de33eb4e31c223cf927672a93391e2514708237010efc0a09b8dd78a81cd478f",
+        "deadjustedVisibleBarsSha256": "de33eb4e31c223cf927672a93391e2514708237010efc0a09b8dd78a81cd478f",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 10,
+        "asOf": "2024-11-19T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "36b07fa4e5e777351dc37cbcde33b02c2c115b861b14a691042075a750e93670",
+        "deadjustedVisibleBarsSha256": "36b07fa4e5e777351dc37cbcde33b02c2c115b861b14a691042075a750e93670",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 11,
+        "asOf": "2024-11-20T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "74b5c6f099c3782ff0e7358d778f9b9e581ebd15788b2b6c11102af63ec48ad2",
+        "deadjustedVisibleBarsSha256": "74b5c6f099c3782ff0e7358d778f9b9e581ebd15788b2b6c11102af63ec48ad2",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 12,
+        "asOf": "2024-11-21T20:00:00.000Z",
+        "futureSplitRefs": [],
+        "providerVisibleBarsSha256": "b760a67629c355de57d7fb0838f87057d6a3631dcb0eb59210e8d4d506c07d09",
+        "deadjustedVisibleBarsSha256": "b760a67629c355de57d7fb0838f87057d6a3631dcb0eb59210e8d4d506c07d09",
+        "invariant": true
+      }
+    ],
+    "request": {
+      "method": "GET",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/EURUSD%3DX?period1=1722470400&period2=1782864000&interval=1h&events=div%2Csplits&includeAdjustedClose=false&includePrePost=false",
+      "normalization": "chart.result[0] OHLCV; requested half-open range; non-finite/nonpositive rows removed; high/low expanded to include open/close; unadjusted"
+    },
+    "acquisition": {
+      "ref": "remote:d4-fx-bear-a:acquisition",
+      "sha256": "03787a97215220e6da2987dd72a88e5c5f573318916c2a4c23a00b13ce978cb3",
+      "canonicalByteLength": 2313045,
+      "barCount": 11800
+    },
+    "derivedPool": {
+      "ref": "derived:d4-fx-bear-a:pool",
+      "sha256": "a3c279ca0304c4ec1667ca982a1d0c6f10499dc4d19e0ecefe60754496e19286",
+      "canonicalByteLength": 932509,
+      "barCount": 2869
+    },
+    "selectedRaw": {
+      "ref": "remote:d4-fx-bear-a:selected",
+      "sha256": "e67fa7d9f56afb32de2823d24078a0bd4731f7bc6b0a074669c4ec26f84cdfda",
+      "canonicalByteLength": 126841,
+      "barCount": 648
+    },
+    "selectedDerived": {
+      "ref": "derived:d4-fx-bear-a:selected",
+      "sha256": "b2180c4965508c51aefccc60493bb155f4208c983d5c29b654981c04ae322c02",
+      "canonicalByteLength": 52617,
+      "barCount": 162
+    },
+    "selection": {
+      "profile": "bear",
+      "exactBarCount": 162,
+      "derivedPoolIndexStart": 312,
+      "derivedPoolIndexEndExclusive": 474,
+      "logReturn": -0.044948936556094096,
+      "firstTimestamp": "2024-10-16T00:00:00.000Z",
+      "finalAvailableAt": "2024-11-22T20:00:00.000Z"
+    },
+    "recipe": {
+      "command": "pnpm exec tsx tools/campaigns/build-d4-smoke-data.mjs --verify-source",
+      "failClosed": "Any request, canonical byte identity, exact selection index, or transform drift is an error.",
+      "implementation": [
+        {
+          "ref": "tools/campaigns/d4-smoke-data.mjs",
+          "sha256": "54b08c9ea59068879050070bc671ccb2327f3605e56d04398e80c1c99bb719c9"
+        },
+        {
+          "ref": "tools/campaigns/build-d4-smoke-data.mjs",
+          "sha256": "109edba4af37e03a3be1e1a674582aa0f6f01681a519532e1028cc1c8a722629"
+        }
+      ]
+    }
+  },
+  "splitEvidence": {
+    "schema": "steward-d4-split-evidence/1",
+    "version": 1,
+    "cellId": "d4-fx-bear-a",
+    "provider": "yahoo-chart-public",
+    "symbol": "EURUSD=X",
+    "providerAdjustmentMode": "retrospective_split_adjusted",
+    "cutoff": "2026-07-13T00:00:00.000Z",
+    "request": {
+      "method": "GET",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/EURUSD%3DX?period1=1546300800&period2=1783900800&interval=1d&events=splits&includeAdjustedClose=false&includePrePost=false",
+      "normalization": "Yahoo split events through the frozen cutoff; sorted by effective timestamp."
+    },
+    "note": "Yahoo chart quote OHLCV is retrospectively normalized for split events even when adjusted-close output is disabled.",
+    "actions": []
+  },
+  "futureSplitInvariance": [
+    {
+      "decisionOrdinal": 1,
+      "asOf": "2024-11-06T12:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "a98ebdde06f73123ea26823f95c918973859541cb6d4a8f27044329e238f2c4a",
+      "deadjustedVisibleBarsSha256": "a98ebdde06f73123ea26823f95c918973859541cb6d4a8f27044329e238f2c4a",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 2,
+      "asOf": "2024-11-07T12:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "ac459270657bdb66b1972fc7e9f88bf2d6c42fff5e7969e704e7b21e3f7d0eab",
+      "deadjustedVisibleBarsSha256": "ac459270657bdb66b1972fc7e9f88bf2d6c42fff5e7969e704e7b21e3f7d0eab",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 3,
+      "asOf": "2024-11-08T12:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "73a9305634edadb25d90458d4bf4a3d8b90ae08203311302703c836c0d5c879c",
+      "deadjustedVisibleBarsSha256": "73a9305634edadb25d90458d4bf4a3d8b90ae08203311302703c836c0d5c879c",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 4,
+      "asOf": "2024-11-11T16:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "f89ca7b216cd5da3b89e73827aecd93d605f0c49ab3d4261222d477c6387961b",
+      "deadjustedVisibleBarsSha256": "f89ca7b216cd5da3b89e73827aecd93d605f0c49ab3d4261222d477c6387961b",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 5,
+      "asOf": "2024-11-12T16:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "46a199c84936f3e3a3b17403adddb5ec2da2dd7ee4dbf5c65431a086a7bd7093",
+      "deadjustedVisibleBarsSha256": "46a199c84936f3e3a3b17403adddb5ec2da2dd7ee4dbf5c65431a086a7bd7093",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 6,
+      "asOf": "2024-11-13T16:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "fa423b54833c8d7d9807044c1fe24af487b19247a5f9c4f670d532f684be843b",
+      "deadjustedVisibleBarsSha256": "fa423b54833c8d7d9807044c1fe24af487b19247a5f9c4f670d532f684be843b",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 7,
+      "asOf": "2024-11-14T16:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "a3a1089c26d6977ab2aa7232e23a981f596adf07650b8644dd8f1747b3d377b9",
+      "deadjustedVisibleBarsSha256": "a3a1089c26d6977ab2aa7232e23a981f596adf07650b8644dd8f1747b3d377b9",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 8,
+      "asOf": "2024-11-15T16:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "64b5417581caf4a70559d9d9c95283df93d4382aaaec034a239e2cfd11b0e6a6",
+      "deadjustedVisibleBarsSha256": "64b5417581caf4a70559d9d9c95283df93d4382aaaec034a239e2cfd11b0e6a6",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 9,
+      "asOf": "2024-11-18T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "de33eb4e31c223cf927672a93391e2514708237010efc0a09b8dd78a81cd478f",
+      "deadjustedVisibleBarsSha256": "de33eb4e31c223cf927672a93391e2514708237010efc0a09b8dd78a81cd478f",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 10,
+      "asOf": "2024-11-19T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "36b07fa4e5e777351dc37cbcde33b02c2c115b861b14a691042075a750e93670",
+      "deadjustedVisibleBarsSha256": "36b07fa4e5e777351dc37cbcde33b02c2c115b861b14a691042075a750e93670",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 11,
+      "asOf": "2024-11-20T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "74b5c6f099c3782ff0e7358d778f9b9e581ebd15788b2b6c11102af63ec48ad2",
+      "deadjustedVisibleBarsSha256": "74b5c6f099c3782ff0e7358d778f9b9e581ebd15788b2b6c11102af63ec48ad2",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 12,
+      "asOf": "2024-11-21T20:00:00.000Z",
+      "futureSplitRefs": [],
+      "providerVisibleBarsSha256": "b760a67629c355de57d7fb0838f87057d6a3631dcb0eb59210e8d4d506c07d09",
+      "deadjustedVisibleBarsSha256": "b760a67629c355de57d7fb0838f87057d6a3631dcb0eb59210e8d4d506c07d09",
+      "invariant": true
+    }
+  ],
+  "universeEvidence": {
+    "cellId": "d4-fx-bear-a",
+    "selectionBasis": "point_in_time",
+    "instrumentObservedFrom": "2024-10-16T00:00:00.000Z",
+    "instrumentObservedThrough": "2024-11-22T20:00:00.000Z",
+    "evidence": "The frozen single-instrument universe was selected before model calls and is evidenced by the pinned provider-bar receipt.",
+    "sourceReceipt": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#source-receipt",
+      "sha256": "253a331e0605de31eac9f04f2a04dd3bf935054c164bfc03075c65c7eef4801d"
+    }
+  },
+  "decisionManifests": [
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:01",
+      "datasetId": "d4-fx-bear-a",
+      "asOf": "2024-11-06T12:00:00.000Z",
+      "snapshot": {
+        "ref": "5219abeee003ad4cb99a5f5300a87c7797f65091",
+        "sha256": "2c16cc4eab4fcedcf494e7fcd2de902844fa3849b3d632c08cf64670e742613c"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "EURUSD=X",
+        "assetClass": "fx",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/5",
+        "content": {
+          "ref": "5219abeee003ad4cb99a5f5300a87c7797f65091",
+          "sha256": "2c16cc4eab4fcedcf494e7fcd2de902844fa3849b3d632c08cf64670e742613c"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "5219abeee003ad4cb99a5f5300a87c7797f65091",
+              "sha256": "2c16cc4eab4fcedcf494e7fcd2de902844fa3849b3d632c08cf64670e742613c",
+              "observedAt": "2024-11-06T12:00:00.000Z",
+              "availableAt": "2024-11-06T12:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2024-10-16T00:00:00.000Z",
+        "effectiveFrom": "2024-10-16T00:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#universe",
+          "sha256": "fc4110861c942a582315318a0d3215167335577a24a86a47f682fd8f88cb7f7a"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-fx-bear-a",
+        "leakageGroups": [
+          "market:fx",
+          "instrument:yahoo-chart-public:EURUSD=X"
+        ],
+        "inputStart": "2024-10-16T00:00:00.000Z",
+        "decisionStart": "2024-11-06T12:00:00.000Z",
+        "decisionEnd": "2024-11-21T20:00:00.000Z",
+        "outcomeEnd": "2024-11-22T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:02",
+      "datasetId": "d4-fx-bear-a",
+      "asOf": "2024-11-07T12:00:00.000Z",
+      "snapshot": {
+        "ref": "9f7fd932ceccf72716d50c30316d0be6d3f1f808",
+        "sha256": "62de904c5b9c1b41b82ad5fe343e256677390ed837ef78a0c9814b0e37616e2f"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "EURUSD=X",
+        "assetClass": "fx",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/5",
+        "content": {
+          "ref": "9f7fd932ceccf72716d50c30316d0be6d3f1f808",
+          "sha256": "62de904c5b9c1b41b82ad5fe343e256677390ed837ef78a0c9814b0e37616e2f"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "9f7fd932ceccf72716d50c30316d0be6d3f1f808",
+              "sha256": "62de904c5b9c1b41b82ad5fe343e256677390ed837ef78a0c9814b0e37616e2f",
+              "observedAt": "2024-11-07T12:00:00.000Z",
+              "availableAt": "2024-11-07T12:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2024-10-16T00:00:00.000Z",
+        "effectiveFrom": "2024-10-16T00:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#universe",
+          "sha256": "fc4110861c942a582315318a0d3215167335577a24a86a47f682fd8f88cb7f7a"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-fx-bear-a",
+        "leakageGroups": [
+          "market:fx",
+          "instrument:yahoo-chart-public:EURUSD=X"
+        ],
+        "inputStart": "2024-10-16T00:00:00.000Z",
+        "decisionStart": "2024-11-06T12:00:00.000Z",
+        "decisionEnd": "2024-11-21T20:00:00.000Z",
+        "outcomeEnd": "2024-11-22T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:03",
+      "datasetId": "d4-fx-bear-a",
+      "asOf": "2024-11-08T12:00:00.000Z",
+      "snapshot": {
+        "ref": "2ba877bbb33a84211f09f20ac751833fd8398409",
+        "sha256": "198bdf706c80a271bb5fd3b8dfef332a591557180913c5bb044975f735ce8191"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "EURUSD=X",
+        "assetClass": "fx",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/5",
+        "content": {
+          "ref": "2ba877bbb33a84211f09f20ac751833fd8398409",
+          "sha256": "198bdf706c80a271bb5fd3b8dfef332a591557180913c5bb044975f735ce8191"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "2ba877bbb33a84211f09f20ac751833fd8398409",
+              "sha256": "198bdf706c80a271bb5fd3b8dfef332a591557180913c5bb044975f735ce8191",
+              "observedAt": "2024-11-08T12:00:00.000Z",
+              "availableAt": "2024-11-08T12:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2024-10-16T00:00:00.000Z",
+        "effectiveFrom": "2024-10-16T00:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#universe",
+          "sha256": "fc4110861c942a582315318a0d3215167335577a24a86a47f682fd8f88cb7f7a"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-fx-bear-a",
+        "leakageGroups": [
+          "market:fx",
+          "instrument:yahoo-chart-public:EURUSD=X"
+        ],
+        "inputStart": "2024-10-16T00:00:00.000Z",
+        "decisionStart": "2024-11-06T12:00:00.000Z",
+        "decisionEnd": "2024-11-21T20:00:00.000Z",
+        "outcomeEnd": "2024-11-22T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:04",
+      "datasetId": "d4-fx-bear-a",
+      "asOf": "2024-11-11T16:00:00.000Z",
+      "snapshot": {
+        "ref": "ed2cd033a0cba71b9977d684fa0033727c4a1fbb",
+        "sha256": "9f35773312214b17cbe0b7f35a75192d9c4a0287400901845d5e703e5ba60396"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "EURUSD=X",
+        "assetClass": "fx",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/5",
+        "content": {
+          "ref": "ed2cd033a0cba71b9977d684fa0033727c4a1fbb",
+          "sha256": "9f35773312214b17cbe0b7f35a75192d9c4a0287400901845d5e703e5ba60396"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "ed2cd033a0cba71b9977d684fa0033727c4a1fbb",
+              "sha256": "9f35773312214b17cbe0b7f35a75192d9c4a0287400901845d5e703e5ba60396",
+              "observedAt": "2024-11-11T16:00:00.000Z",
+              "availableAt": "2024-11-11T16:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2024-10-16T00:00:00.000Z",
+        "effectiveFrom": "2024-10-16T00:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#universe",
+          "sha256": "fc4110861c942a582315318a0d3215167335577a24a86a47f682fd8f88cb7f7a"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-fx-bear-a",
+        "leakageGroups": [
+          "market:fx",
+          "instrument:yahoo-chart-public:EURUSD=X"
+        ],
+        "inputStart": "2024-10-16T00:00:00.000Z",
+        "decisionStart": "2024-11-06T12:00:00.000Z",
+        "decisionEnd": "2024-11-21T20:00:00.000Z",
+        "outcomeEnd": "2024-11-22T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:05",
+      "datasetId": "d4-fx-bear-a",
+      "asOf": "2024-11-12T16:00:00.000Z",
+      "snapshot": {
+        "ref": "1c7d462ee9de09c8cd6c421babd86206f1415339",
+        "sha256": "2bf2c6f2bf401264222c8199f62f4659ac75069ea14b65afb764fe6c2135299b"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "EURUSD=X",
+        "assetClass": "fx",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/5",
+        "content": {
+          "ref": "1c7d462ee9de09c8cd6c421babd86206f1415339",
+          "sha256": "2bf2c6f2bf401264222c8199f62f4659ac75069ea14b65afb764fe6c2135299b"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "1c7d462ee9de09c8cd6c421babd86206f1415339",
+              "sha256": "2bf2c6f2bf401264222c8199f62f4659ac75069ea14b65afb764fe6c2135299b",
+              "observedAt": "2024-11-12T16:00:00.000Z",
+              "availableAt": "2024-11-12T16:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2024-10-16T00:00:00.000Z",
+        "effectiveFrom": "2024-10-16T00:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#universe",
+          "sha256": "fc4110861c942a582315318a0d3215167335577a24a86a47f682fd8f88cb7f7a"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-fx-bear-a",
+        "leakageGroups": [
+          "market:fx",
+          "instrument:yahoo-chart-public:EURUSD=X"
+        ],
+        "inputStart": "2024-10-16T00:00:00.000Z",
+        "decisionStart": "2024-11-06T12:00:00.000Z",
+        "decisionEnd": "2024-11-21T20:00:00.000Z",
+        "outcomeEnd": "2024-11-22T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:06",
+      "datasetId": "d4-fx-bear-a",
+      "asOf": "2024-11-13T16:00:00.000Z",
+      "snapshot": {
+        "ref": "6920d87d52afb8e0f2bf90c8734d7b3381721d83",
+        "sha256": "b94c28e140256f1ce01e1bbfb73d6add04ae954a389caa8a8126db97de1f067a"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "EURUSD=X",
+        "assetClass": "fx",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/5",
+        "content": {
+          "ref": "6920d87d52afb8e0f2bf90c8734d7b3381721d83",
+          "sha256": "b94c28e140256f1ce01e1bbfb73d6add04ae954a389caa8a8126db97de1f067a"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "6920d87d52afb8e0f2bf90c8734d7b3381721d83",
+              "sha256": "b94c28e140256f1ce01e1bbfb73d6add04ae954a389caa8a8126db97de1f067a",
+              "observedAt": "2024-11-13T16:00:00.000Z",
+              "availableAt": "2024-11-13T16:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2024-10-16T00:00:00.000Z",
+        "effectiveFrom": "2024-10-16T00:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#universe",
+          "sha256": "fc4110861c942a582315318a0d3215167335577a24a86a47f682fd8f88cb7f7a"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-fx-bear-a",
+        "leakageGroups": [
+          "market:fx",
+          "instrument:yahoo-chart-public:EURUSD=X"
+        ],
+        "inputStart": "2024-10-16T00:00:00.000Z",
+        "decisionStart": "2024-11-06T12:00:00.000Z",
+        "decisionEnd": "2024-11-21T20:00:00.000Z",
+        "outcomeEnd": "2024-11-22T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:07",
+      "datasetId": "d4-fx-bear-a",
+      "asOf": "2024-11-14T16:00:00.000Z",
+      "snapshot": {
+        "ref": "53517653591f7bb726aa2e2f8a7230bf3c1d2371",
+        "sha256": "ee782b98e1d4331a4563f33c301669fb50450d4766fd65f67999788527ab9743"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "EURUSD=X",
+        "assetClass": "fx",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/5",
+        "content": {
+          "ref": "53517653591f7bb726aa2e2f8a7230bf3c1d2371",
+          "sha256": "ee782b98e1d4331a4563f33c301669fb50450d4766fd65f67999788527ab9743"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "53517653591f7bb726aa2e2f8a7230bf3c1d2371",
+              "sha256": "ee782b98e1d4331a4563f33c301669fb50450d4766fd65f67999788527ab9743",
+              "observedAt": "2024-11-14T16:00:00.000Z",
+              "availableAt": "2024-11-14T16:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2024-10-16T00:00:00.000Z",
+        "effectiveFrom": "2024-10-16T00:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#universe",
+          "sha256": "fc4110861c942a582315318a0d3215167335577a24a86a47f682fd8f88cb7f7a"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-fx-bear-a",
+        "leakageGroups": [
+          "market:fx",
+          "instrument:yahoo-chart-public:EURUSD=X"
+        ],
+        "inputStart": "2024-10-16T00:00:00.000Z",
+        "decisionStart": "2024-11-06T12:00:00.000Z",
+        "decisionEnd": "2024-11-21T20:00:00.000Z",
+        "outcomeEnd": "2024-11-22T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:08",
+      "datasetId": "d4-fx-bear-a",
+      "asOf": "2024-11-15T16:00:00.000Z",
+      "snapshot": {
+        "ref": "c586bf15360bcc0e8bed2f5e48f5953800f5f67c",
+        "sha256": "0fb798741af297462ebdd006197559a4f1a05a1ccf63708ec7265231c4110085"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "EURUSD=X",
+        "assetClass": "fx",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/5",
+        "content": {
+          "ref": "c586bf15360bcc0e8bed2f5e48f5953800f5f67c",
+          "sha256": "0fb798741af297462ebdd006197559a4f1a05a1ccf63708ec7265231c4110085"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "c586bf15360bcc0e8bed2f5e48f5953800f5f67c",
+              "sha256": "0fb798741af297462ebdd006197559a4f1a05a1ccf63708ec7265231c4110085",
+              "observedAt": "2024-11-15T16:00:00.000Z",
+              "availableAt": "2024-11-15T16:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2024-10-16T00:00:00.000Z",
+        "effectiveFrom": "2024-10-16T00:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#universe",
+          "sha256": "fc4110861c942a582315318a0d3215167335577a24a86a47f682fd8f88cb7f7a"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-fx-bear-a",
+        "leakageGroups": [
+          "market:fx",
+          "instrument:yahoo-chart-public:EURUSD=X"
+        ],
+        "inputStart": "2024-10-16T00:00:00.000Z",
+        "decisionStart": "2024-11-06T12:00:00.000Z",
+        "decisionEnd": "2024-11-21T20:00:00.000Z",
+        "outcomeEnd": "2024-11-22T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:09",
+      "datasetId": "d4-fx-bear-a",
+      "asOf": "2024-11-18T20:00:00.000Z",
+      "snapshot": {
+        "ref": "d09c9b75ed238e5547519203d7d5e3b95ac01969",
+        "sha256": "e7a97b18b14de2b82cd7441440c64c5ee8260247282b6267391fb3bf9834b379"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "EURUSD=X",
+        "assetClass": "fx",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/5",
+        "content": {
+          "ref": "d09c9b75ed238e5547519203d7d5e3b95ac01969",
+          "sha256": "e7a97b18b14de2b82cd7441440c64c5ee8260247282b6267391fb3bf9834b379"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "d09c9b75ed238e5547519203d7d5e3b95ac01969",
+              "sha256": "e7a97b18b14de2b82cd7441440c64c5ee8260247282b6267391fb3bf9834b379",
+              "observedAt": "2024-11-18T20:00:00.000Z",
+              "availableAt": "2024-11-18T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2024-10-16T00:00:00.000Z",
+        "effectiveFrom": "2024-10-16T00:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#universe",
+          "sha256": "fc4110861c942a582315318a0d3215167335577a24a86a47f682fd8f88cb7f7a"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-fx-bear-a",
+        "leakageGroups": [
+          "market:fx",
+          "instrument:yahoo-chart-public:EURUSD=X"
+        ],
+        "inputStart": "2024-10-16T00:00:00.000Z",
+        "decisionStart": "2024-11-06T12:00:00.000Z",
+        "decisionEnd": "2024-11-21T20:00:00.000Z",
+        "outcomeEnd": "2024-11-22T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:10",
+      "datasetId": "d4-fx-bear-a",
+      "asOf": "2024-11-19T20:00:00.000Z",
+      "snapshot": {
+        "ref": "3aa7f0dce18b6060f34cd458b7dda9e170e68548",
+        "sha256": "fe09b551012b5581be4dd156808716bac7ac9b7d6da5637ccee9affba6473021"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "EURUSD=X",
+        "assetClass": "fx",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/5",
+        "content": {
+          "ref": "3aa7f0dce18b6060f34cd458b7dda9e170e68548",
+          "sha256": "fe09b551012b5581be4dd156808716bac7ac9b7d6da5637ccee9affba6473021"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "3aa7f0dce18b6060f34cd458b7dda9e170e68548",
+              "sha256": "fe09b551012b5581be4dd156808716bac7ac9b7d6da5637ccee9affba6473021",
+              "observedAt": "2024-11-19T20:00:00.000Z",
+              "availableAt": "2024-11-19T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2024-10-16T00:00:00.000Z",
+        "effectiveFrom": "2024-10-16T00:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#universe",
+          "sha256": "fc4110861c942a582315318a0d3215167335577a24a86a47f682fd8f88cb7f7a"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-fx-bear-a",
+        "leakageGroups": [
+          "market:fx",
+          "instrument:yahoo-chart-public:EURUSD=X"
+        ],
+        "inputStart": "2024-10-16T00:00:00.000Z",
+        "decisionStart": "2024-11-06T12:00:00.000Z",
+        "decisionEnd": "2024-11-21T20:00:00.000Z",
+        "outcomeEnd": "2024-11-22T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:11",
+      "datasetId": "d4-fx-bear-a",
+      "asOf": "2024-11-20T20:00:00.000Z",
+      "snapshot": {
+        "ref": "29f7886473b56deca587af85570394048652cce5",
+        "sha256": "896297c874957f549bcd5cb9e2cabb3130ad3e66c551e64035984d8b813b8379"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "EURUSD=X",
+        "assetClass": "fx",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/5",
+        "content": {
+          "ref": "29f7886473b56deca587af85570394048652cce5",
+          "sha256": "896297c874957f549bcd5cb9e2cabb3130ad3e66c551e64035984d8b813b8379"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "29f7886473b56deca587af85570394048652cce5",
+              "sha256": "896297c874957f549bcd5cb9e2cabb3130ad3e66c551e64035984d8b813b8379",
+              "observedAt": "2024-11-20T20:00:00.000Z",
+              "availableAt": "2024-11-20T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2024-10-16T00:00:00.000Z",
+        "effectiveFrom": "2024-10-16T00:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#universe",
+          "sha256": "fc4110861c942a582315318a0d3215167335577a24a86a47f682fd8f88cb7f7a"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-fx-bear-a",
+        "leakageGroups": [
+          "market:fx",
+          "instrument:yahoo-chart-public:EURUSD=X"
+        ],
+        "inputStart": "2024-10-16T00:00:00.000Z",
+        "decisionStart": "2024-11-06T12:00:00.000Z",
+        "decisionEnd": "2024-11-21T20:00:00.000Z",
+        "outcomeEnd": "2024-11-22T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:12",
+      "datasetId": "d4-fx-bear-a",
+      "asOf": "2024-11-21T20:00:00.000Z",
+      "snapshot": {
+        "ref": "0720de5c2272a631d2220ad5668fc3ad6bef6ade",
+        "sha256": "ef13a7c28693abaa21c3bf01f4110651702944a11423cb36bf1f49416eee8a9c"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "4h-ohlcv-anonymized",
+        "rawSymbol": "EURUSD=X",
+        "assetClass": "fx",
+        "timezone": "UTC",
+        "exchangeCalendar": "24/5",
+        "content": {
+          "ref": "0720de5c2272a631d2220ad5668fc3ad6bef6ade",
+          "sha256": "ef13a7c28693abaa21c3bf01f4110651702944a11423cb36bf1f49416eee8a9c"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "0720de5c2272a631d2220ad5668fc3ad6bef6ade",
+              "sha256": "ef13a7c28693abaa21c3bf01f4110651702944a11423cb36bf1f49416eee8a9c",
+              "observedAt": "2024-11-21T20:00:00.000Z",
+              "availableAt": "2024-11-21T20:00:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2024-10-16T00:00:00.000Z",
+        "effectiveFrom": "2024-10-16T00:00:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#universe",
+          "sha256": "fc4110861c942a582315318a0d3215167335577a24a86a47f682fd8f88cb7f7a"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-fx-bear-a",
+        "leakageGroups": [
+          "market:fx",
+          "instrument:yahoo-chart-public:EURUSD=X"
+        ],
+        "inputStart": "2024-10-16T00:00:00.000Z",
+        "decisionStart": "2024-11-06T12:00:00.000Z",
+        "decisionEnd": "2024-11-21T20:00:00.000Z",
+        "outcomeEnd": "2024-11-22T20:00:00.000Z",
+        "embargoMs": 14400000
+      }
+    }
+  ]
+}

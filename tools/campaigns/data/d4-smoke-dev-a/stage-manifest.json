@@ -1,0 +1,1080 @@
+{
+  "content": {
+    "authorization": "AUTH-D4-DEV",
+    "baseline": {
+      "behaviorVersion": "v9-RUNTIME",
+      "commit": "c8071ebf",
+      "instruction": {
+        "ref": "src/workspaces/templates/steward/files/instruction.md",
+        "sha256": "2b76a194634015914807b8e6591fd72f00bf50647c8c57c665eec7c021a5803c"
+      },
+      "quotaForecastEvidence": {
+        "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/forecast-observations.json",
+        "sha256": "3e450e7515cca8a6c36c0bd44fb473fe21c031ab066837ede670dda9532cc26f"
+      },
+      "runtimePolicy": {
+        "ref": "src/workspaces/templates/steward/files/d4-smoke-runtime-policy.md",
+        "sha256": "c46f434f813e59b4ba9979c95f5769fac49aca83361023e28b8143e0bf701de7"
+      },
+      "runtimeTree": {
+        "entries": [
+          {
+            "byteLength": 449,
+            "path": "src/workspaces/claude-autotrust-settings.ts",
+            "sha256": "c86a6b69138816a816a6d60891f481f6e00fb0d61313a308a477a43c126ed9a2"
+          },
+          {
+            "byteLength": 131856,
+            "path": "src/workspaces/steward/d4-smoke-runner.ts",
+            "sha256": "596a4c90d7a665691c6cf4231d1a44a74428a277e10ebafdb26179b11d37a703"
+          },
+          {
+            "byteLength": 49253,
+            "path": "src/workspaces/steward/d4-smoke-stage-manifest.ts",
+            "sha256": "734bb508ff6b1404cfacb4eb9b4cee040197ea02231c63bc8fdfc7842aed904c"
+          },
+          {
+            "byteLength": 19603,
+            "path": "src/workspaces/steward/evaluation-data-manifest.ts",
+            "sha256": "a009579f6462ffac11e3a7eb602cd5feb59906c0200b23d769db9bc98847fcf4"
+          },
+          {
+            "byteLength": 9897,
+            "path": "src/workspaces/steward/evaluation-harness.ts",
+            "sha256": "af5310d30d5c0f011e1ada672052d574b7621bec73f0b5d5b97d10e0d72430d9"
+          },
+          {
+            "byteLength": 13898,
+            "path": "src/workspaces/steward/evaluation-provenance-store.ts",
+            "sha256": "e60d3fec646e4e27b5a9609ef7ba8f85bbc61a2e951b2a770b65f318a67f9dba"
+          },
+          {
+            "byteLength": 2730,
+            "path": "src/workspaces/steward/finalize-store.ts",
+            "sha256": "540dc25be8a201ae227869a2ec6da43256b809c688db40fb1196db841e7af863"
+          },
+          {
+            "byteLength": 4432,
+            "path": "src/workspaces/steward/injector.ts",
+            "sha256": "9e766e07753054ec801255287def7590a5c887112811254461aea13b0e2449fa"
+          },
+          {
+            "byteLength": 5804,
+            "path": "src/workspaces/steward/ledger-receipt.ts",
+            "sha256": "c0fbf11401eb0b03b9d99cfd89786f5bd5fbee45ad8bf7a5257c125094ee8719"
+          },
+          {
+            "byteLength": 12236,
+            "path": "src/workspaces/steward/ledger-store.ts",
+            "sha256": "0a1f4582901fa688d25971e9d581771d4ff52a2153f0df6205e7bb724e8f68b7"
+          },
+          {
+            "byteLength": 7368,
+            "path": "src/workspaces/steward/ledger-writer.ts",
+            "sha256": "9e44839d23b51d73c46b5766335d2add041e1e4a00c23ec012712c58636f4e39"
+          },
+          {
+            "byteLength": 23905,
+            "path": "src/workspaces/steward/machine-driver/claude-agent-sdk-driver.ts",
+            "sha256": "b988e1421c62d3507a558930bd240be0c90e34a10409a70672da293a25bdbe49"
+          },
+          {
+            "byteLength": 28874,
+            "path": "src/workspaces/steward/machine-driver/codex-app-server-driver.ts",
+            "sha256": "461e186e3c9acfb00cbe55492f48f0773cd3ae6b19498507428b103cf32f22ee"
+          },
+          {
+            "byteLength": 6678,
+            "path": "src/workspaces/steward/machine-driver/jsonrpc-stdio.ts",
+            "sha256": "e5f7e9cf094dd9372fea75aeaf74324a1089e70b395959722a72384e6aa83c3f"
+          },
+          {
+            "byteLength": 10605,
+            "path": "src/workspaces/steward/machine-driver/types.ts",
+            "sha256": "8c71d2eeb35f90a11aa0bbac0f85bd64a9325f939e4d70d6863d4029b5a7090d"
+          },
+          {
+            "byteLength": 6192,
+            "path": "src/workspaces/steward/paths.ts",
+            "sha256": "ca9924d2bb9e3595636cd40a0603f277b2b40d234c09c74cda1445f9dd02f24f"
+          },
+          {
+            "byteLength": 16132,
+            "path": "src/workspaces/steward/snapshot.ts",
+            "sha256": "7b7ebcef9af0e1f54bd77948c93b3367593e22ed321445915f80895a2929ee94"
+          },
+          {
+            "byteLength": 36558,
+            "path": "src/workspaces/steward/types.ts",
+            "sha256": "8d299942095151b9a15d7d881f8c59394c43d15b2ccb4753bddf15fa24657535"
+          },
+          {
+            "byteLength": 6378,
+            "path": "src/workspaces/steward/wake-store.ts",
+            "sha256": "d9acb8c0a89110e8f1895df37f50ba7e7a7b18d6f208345f31cca3341f2dc5d1"
+          },
+          {
+            "byteLength": 3023,
+            "path": "src/workspaces/templates/_common.mjs",
+            "sha256": "5ffe669d2964c0c1047d7a43a4b465a95bc6a080cecc972725450bab245272cd"
+          },
+          {
+            "byteLength": 41978,
+            "path": "src/workspaces/templates/steward/bootstrap.mjs",
+            "sha256": "bb6099f93ce57876cb9f59c7915e25ae2fbad423e996e0916f58c88fe9e96209"
+          },
+          {
+            "byteLength": 383,
+            "path": "src/workspaces/templates/steward/files/d4-smoke-runtime-policy.md",
+            "sha256": "c46f434f813e59b4ba9979c95f5769fac49aca83361023e28b8143e0bf701de7"
+          },
+          {
+            "byteLength": 8683,
+            "path": "src/workspaces/templates/steward/files/decision-ledger.v3.json",
+            "sha256": "39f9bec16fdd2e157b1bedcb4691be35cc0831a2e2eef6a032e325e72631ee36"
+          },
+          {
+            "byteLength": 1985,
+            "path": "src/workspaces/templates/steward/README.md",
+            "sha256": "d74772978c3734eb5b391c7524125c9eea3f72375c938063b3b932737e432bbd"
+          }
+        ],
+        "files": [
+          "src/workspaces/claude-autotrust-settings.ts",
+          "src/workspaces/steward/d4-smoke-runner.ts",
+          "src/workspaces/steward/d4-smoke-stage-manifest.ts",
+          "src/workspaces/steward/evaluation-data-manifest.ts",
+          "src/workspaces/steward/evaluation-harness.ts",
+          "src/workspaces/steward/evaluation-provenance-store.ts",
+          "src/workspaces/steward/finalize-store.ts",
+          "src/workspaces/steward/injector.ts",
+          "src/workspaces/steward/ledger-receipt.ts",
+          "src/workspaces/steward/ledger-store.ts",
+          "src/workspaces/steward/ledger-writer.ts",
+          "src/workspaces/steward/machine-driver/claude-agent-sdk-driver.ts",
+          "src/workspaces/steward/machine-driver/codex-app-server-driver.ts",
+          "src/workspaces/steward/machine-driver/jsonrpc-stdio.ts",
+          "src/workspaces/steward/machine-driver/types.ts",
+          "src/workspaces/steward/paths.ts",
+          "src/workspaces/steward/snapshot.ts",
+          "src/workspaces/steward/types.ts",
+          "src/workspaces/steward/wake-store.ts",
+          "src/workspaces/templates/_common.mjs",
+          "src/workspaces/templates/steward/bootstrap.mjs",
+          "src/workspaces/templates/steward/files/d4-smoke-runtime-policy.md",
+          "src/workspaces/templates/steward/files/decision-ledger.v3.json",
+          "src/workspaces/templates/steward/README.md"
+        ],
+        "schema": "steward-d4-runtime-tree/1",
+        "sha256": "95a5f596340ff343a8929e8286fa8ee47a1471d188e239c3bb0533a7fc306ab4",
+        "version": 1
+      }
+    },
+    "candidates": [
+      {
+        "modelId": "gpt-5.6-sol",
+        "provider": "codex",
+        "runtime": "Codex CLI",
+        "runtimeVersion": "0.144.0",
+        "subscription": "ChatGPT subscription"
+      },
+      {
+        "modelId": "gpt-5.6-terra",
+        "provider": "codex",
+        "runtime": "Codex CLI",
+        "runtimeVersion": "0.144.0",
+        "subscription": "ChatGPT subscription"
+      },
+      {
+        "modelId": "gpt-5.6-luna",
+        "provider": "codex",
+        "runtime": "Codex CLI",
+        "runtimeVersion": "0.144.0",
+        "subscription": "ChatGPT subscription"
+      },
+      {
+        "modelId": "gpt-5.5",
+        "provider": "codex",
+        "runtime": "Codex CLI",
+        "runtimeVersion": "0.144.0",
+        "subscription": "ChatGPT subscription"
+      },
+      {
+        "modelId": "gpt-5.3-codex-spark",
+        "provider": "codex",
+        "runtime": "Codex CLI",
+        "runtimeVersion": "0.144.0",
+        "subscription": "ChatGPT subscription (Spark window)"
+      },
+      {
+        "modelId": "claude-fable-5",
+        "provider": "claude",
+        "runtime": "Claude Code",
+        "runtimeVersion": "2.1.202",
+        "subscription": "Claude Max"
+      },
+      {
+        "modelId": "claude-sonnet-5",
+        "provider": "claude",
+        "runtime": "Claude Code",
+        "runtimeVersion": "2.1.202",
+        "subscription": "Claude Max"
+      },
+      {
+        "modelId": "claude-opus-4-8",
+        "provider": "claude",
+        "runtime": "Claude Code",
+        "runtimeVersion": "2.1.202",
+        "subscription": "Claude Max"
+      },
+      {
+        "modelId": "claude-haiku-4-5-20251001",
+        "provider": "claude",
+        "runtime": "Claude Code",
+        "runtimeVersion": "2.1.202",
+        "subscription": "Claude Max"
+      }
+    ],
+    "cells": [
+      {
+        "asOf": {
+          "decisionEnd": "2021-02-17T00:00:00.000Z",
+          "decisionStart": "2020-12-24T00:00:00.000Z",
+          "outcomeEnd": "2021-02-22T00:00:00.000Z"
+        },
+        "evidence": {
+          "audit": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json",
+            "sha256": "7cf32bf1b8176d021f3db3f74b1ea13f88a4931e67911a83af3216c590721a6a"
+          },
+          "candidatePayload": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/candidate/d4-crypto-major-bull-a.json",
+            "sha256": "dc64934fe04cc83de24a7339900677781e4214284880f45f0a5f157ed106e2fd"
+          },
+          "samplingPlan": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+            "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+          },
+          "selectedDerived": {
+            "barCount": 120,
+            "canonicalByteLength": 19746,
+            "ref": "derived:d4-crypto-major-bull-a:selected",
+            "sha256": "aecbf93d5fb84612b942e2f00bb807fdfdf15e0a4a3c420c9705520061498026"
+          },
+          "selectedRaw": {
+            "barCount": 120,
+            "canonicalByteLength": 19746,
+            "ref": "remote:d4-crypto-major-bull-a:selected",
+            "sha256": "aecbf93d5fb84612b942e2f00bb807fdfdf15e0a4a3c420c9705520061498026"
+          },
+          "sourceReceipt": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json#source-receipt",
+            "sha256": "9d926331d17c6d1bdcfbbf824282b922c0d07bd5d2cc9e26b8e5b015ff33602c"
+          },
+          "splitEvidence": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json#split-evidence",
+            "sha256": "66dbba4e0797f67fb07f2b56f3b707340206330e6bfb844ce4edb312274e498d"
+          }
+        },
+        "id": "d4-crypto-major-bull-a",
+        "instrument": {
+          "assetClass": "crypto",
+          "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+          "d3AdjustmentMode": "unadjusted",
+          "datasetName": "1d-ohlcv-anonymized",
+          "exchangeCalendar": "24/7",
+          "provider": "binance-public",
+          "providerAdjustmentMode": "native_unadjusted",
+          "symbol": "BTCUSDT",
+          "timezone": "UTC"
+        },
+        "market": "crypto-major",
+        "pairingKey": "d4-crypto-major-bull-a",
+        "profile": "bull",
+        "split": "dev",
+        "stratum": "crypto-major:bull",
+        "temporal": {
+          "barInterval": "1d",
+          "decisionCadenceBars": 5,
+          "decisionCount": 12,
+          "finalVisibleEndExclusive": 115,
+          "lookbackBars": 60,
+          "totalBars": 120
+        },
+        "window": "a"
+      },
+      {
+        "asOf": {
+          "decisionEnd": "2026-02-11T20:00:00.000Z",
+          "decisionStart": "2026-01-31T20:00:00.000Z",
+          "outcomeEnd": "2026-02-12T20:00:00.000Z"
+        },
+        "evidence": {
+          "audit": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json",
+            "sha256": "6d94144659c7fd8c436da2308bf84d983933b5dd40e4a3e63ed89e66554fdd89"
+          },
+          "candidatePayload": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/candidate/d4-crypto-major-bear-a.json",
+            "sha256": "f5d1fde9bbc4a05ff0f0d9a1ce2f7c6631f480546d7aa4780e40a6951303300a"
+          },
+          "samplingPlan": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+            "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+          },
+          "selectedDerived": {
+            "barCount": 162,
+            "canonicalByteLength": 47734,
+            "ref": "derived:d4-crypto-major-bear-a:selected",
+            "sha256": "5f6bbb13f27d9d7b068da8f59498600cdda27685c53b81acbd33ec197a348aa6"
+          },
+          "selectedRaw": {
+            "barCount": 648,
+            "canonicalByteLength": 105782,
+            "ref": "remote:d4-crypto-major-bear-a:selected",
+            "sha256": "1c0988cfc3cd6fc6b4412a4ca384bd79b490abb2f4ef236a171eca2d5e346579"
+          },
+          "sourceReceipt": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#source-receipt",
+            "sha256": "2b343ab0f54a073a5c6f21b9bdf01374e7488c3d034ee8058ffad8576b646371"
+          },
+          "splitEvidence": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bear-a.json#split-evidence",
+            "sha256": "c9864d757dc964e1ce7312ef6cefffbb19d3734bca73f6db6839521d33c11e12"
+          }
+        },
+        "id": "d4-crypto-major-bear-a",
+        "instrument": {
+          "assetClass": "crypto",
+          "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+          "d3AdjustmentMode": "unadjusted",
+          "datasetName": "4h-ohlcv-anonymized",
+          "exchangeCalendar": "24/7",
+          "provider": "binance-public",
+          "providerAdjustmentMode": "native_unadjusted",
+          "symbol": "BTCUSDT",
+          "timezone": "UTC"
+        },
+        "market": "crypto-major",
+        "pairingKey": "d4-crypto-major-bear-a",
+        "profile": "bear",
+        "split": "dev",
+        "stratum": "crypto-major:bear",
+        "temporal": {
+          "barInterval": "4h",
+          "decisionCadenceBars": 6,
+          "decisionCount": 12,
+          "finalVisibleEndExclusive": 156,
+          "lookbackBars": 90,
+          "totalBars": 162
+        },
+        "window": "a"
+      },
+      {
+        "asOf": {
+          "decisionEnd": "2020-09-03T13:30:00.000Z",
+          "decisionStart": "2020-06-17T13:30:00.000Z",
+          "outcomeEnd": "2020-09-11T13:30:00.000Z"
+        },
+        "evidence": {
+          "audit": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json",
+            "sha256": "1b9832d4be44207f8eddd2eef1067a0066857fcb34b894cfc6179b97a7ab9689"
+          },
+          "candidatePayload": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/candidate/d4-us-index-etf-bull-a.json",
+            "sha256": "bf4726a6676ed1a3ed1579695b2c1d0f8ae2fd300b18a6ea45500f28615081ca"
+          },
+          "samplingPlan": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+            "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+          },
+          "selectedDerived": {
+            "barCount": 120,
+            "canonicalByteLength": 23828,
+            "ref": "derived:d4-us-index-etf-bull-a:selected",
+            "sha256": "a6c32696fc69e11fd2f7fda53329f4503e1357191f5c9532e1a5ca8bb89e1daf"
+          },
+          "selectedRaw": {
+            "barCount": 120,
+            "canonicalByteLength": 23828,
+            "ref": "remote:d4-us-index-etf-bull-a:selected",
+            "sha256": "a6c32696fc69e11fd2f7fda53329f4503e1357191f5c9532e1a5ca8bb89e1daf"
+          },
+          "sourceReceipt": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#source-receipt",
+            "sha256": "60ebc0b14c7b76ebc558d5392cc4ea239c10bbfcbaf2514e7bed0fda49027acc"
+          },
+          "splitEvidence": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bull-a.json#split-evidence",
+            "sha256": "de5bbce4ba7a28f4a2b5a50b8758307da0a83d8973ae660cacb85ed52850799d"
+          }
+        },
+        "id": "d4-us-index-etf-bull-a",
+        "instrument": {
+          "assetClass": "equity-etf",
+          "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+          "d3AdjustmentMode": "unadjusted",
+          "datasetName": "1d-ohlcv-anonymized",
+          "exchangeCalendar": "XNYS",
+          "provider": "yahoo-chart-public",
+          "providerAdjustmentMode": "retrospective_split_adjusted",
+          "symbol": "SPY",
+          "timezone": "America/New_York"
+        },
+        "market": "us-index-etf",
+        "pairingKey": "d4-us-index-etf-bull-a",
+        "profile": "bull",
+        "split": "dev",
+        "stratum": "us-index-etf:bull",
+        "temporal": {
+          "barInterval": "1d",
+          "decisionCadenceBars": 5,
+          "decisionCount": 12,
+          "finalVisibleEndExclusive": 115,
+          "lookbackBars": 60,
+          "totalBars": 120
+        },
+        "window": "a"
+      },
+      {
+        "asOf": {
+          "decisionEnd": "2025-04-10T20:30:00.000Z",
+          "decisionStart": "2025-01-03T20:30:00.000Z",
+          "outcomeEnd": "2025-04-21T20:30:00.000Z"
+        },
+        "evidence": {
+          "audit": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bear-a.json",
+            "sha256": "cb9fd6a55c3c2849e7c7b7c207d1c5fa235a0becbd45889d3d940ebb009221f3"
+          },
+          "candidatePayload": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/candidate/d4-us-index-etf-bear-a.json",
+            "sha256": "dcc4122ebf68a15c6c802b628b470d0262e2f51614a6dde3ede60ff9b189cbd2"
+          },
+          "samplingPlan": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+            "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+          },
+          "selectedDerived": {
+            "barCount": 162,
+            "canonicalByteLength": 52722,
+            "ref": "derived:d4-us-index-etf-bear-a:selected",
+            "sha256": "b13bcb14e31b234176ba74033618f9a6465291e17fc2611a352c7e5c18f82b39"
+          },
+          "selectedRaw": {
+            "barCount": 648,
+            "canonicalByteLength": 126902,
+            "ref": "remote:d4-us-index-etf-bear-a:selected",
+            "sha256": "080923aac2476c506217f5160ab0996ea2d8240aa9c0ec48a9493324e6d4ca4b"
+          },
+          "sourceReceipt": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bear-a.json#source-receipt",
+            "sha256": "976cc9537619e4fb1fd90ae8fcef0c81bd3054fe9a2218ca5d352830627eb75e"
+          },
+          "splitEvidence": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-index-etf-bear-a.json#split-evidence",
+            "sha256": "8fce34da6a4249dad41f0e4ca3948f5182b295fb3f4f613ede975bd4f47020f8"
+          }
+        },
+        "id": "d4-us-index-etf-bear-a",
+        "instrument": {
+          "assetClass": "equity-etf",
+          "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+          "d3AdjustmentMode": "unadjusted",
+          "datasetName": "4h-ohlcv-anonymized",
+          "exchangeCalendar": "XNYS",
+          "provider": "yahoo-chart-public",
+          "providerAdjustmentMode": "retrospective_split_adjusted",
+          "symbol": "SPY",
+          "timezone": "America/New_York"
+        },
+        "market": "us-index-etf",
+        "pairingKey": "d4-us-index-etf-bear-a",
+        "profile": "bear",
+        "split": "dev",
+        "stratum": "us-index-etf:bear",
+        "temporal": {
+          "barInterval": "4h",
+          "decisionCadenceBars": 6,
+          "decisionCount": 12,
+          "finalVisibleEndExclusive": 156,
+          "lookbackBars": 90,
+          "totalBars": 162
+        },
+        "window": "a"
+      },
+      {
+        "asOf": {
+          "decisionEnd": "2023-06-13T13:30:00.000Z",
+          "decisionStart": "2023-03-24T13:30:00.000Z",
+          "outcomeEnd": "2023-06-21T13:30:00.000Z"
+        },
+        "evidence": {
+          "audit": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json",
+            "sha256": "85de2d5c274bee906b49db2f4fdbfca177451d1e810853e06de8ecce6300a6d8"
+          },
+          "candidatePayload": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/candidate/d4-us-single-bull-a.json",
+            "sha256": "24ba1623ca5a6e9eabc32514268f59fd3f178864213ad8e71eef4e975f4fbb08"
+          },
+          "samplingPlan": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+            "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+          },
+          "selectedDerived": {
+            "barCount": 120,
+            "canonicalByteLength": 24199,
+            "ref": "derived:d4-us-single-bull-a:selected",
+            "sha256": "6babc72adac76148ec978a92b36b35b710f321ce81887b2c9c078a53f9ad5fc4"
+          },
+          "selectedRaw": {
+            "barCount": 120,
+            "canonicalByteLength": 24199,
+            "ref": "remote:d4-us-single-bull-a:selected",
+            "sha256": "6babc72adac76148ec978a92b36b35b710f321ce81887b2c9c078a53f9ad5fc4"
+          },
+          "sourceReceipt": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#source-receipt",
+            "sha256": "a8af218221e5263e1657ddc58d9582a2b7f95572f5ef9160b1a0f3d6591853c0"
+          },
+          "splitEvidence": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-evidence",
+            "sha256": "5be256cc5337ce38e8919f294ef663ae7a28a653e9f472703aaa6dc3f70afee2"
+          }
+        },
+        "id": "d4-us-single-bull-a",
+        "instrument": {
+          "assetClass": "equity",
+          "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+          "d3AdjustmentMode": "unadjusted",
+          "datasetName": "1d-ohlcv-anonymized",
+          "exchangeCalendar": "XNAS",
+          "provider": "yahoo-chart-public",
+          "providerAdjustmentMode": "retrospective_split_adjusted",
+          "symbol": "NVDA",
+          "timezone": "America/New_York"
+        },
+        "market": "us-single",
+        "pairingKey": "d4-us-single-bull-a",
+        "profile": "bull",
+        "split": "dev",
+        "stratum": "us-single:bull",
+        "temporal": {
+          "barInterval": "1d",
+          "decisionCadenceBars": 5,
+          "decisionCount": 12,
+          "finalVisibleEndExclusive": 115,
+          "lookbackBars": 60,
+          "totalBars": 120
+        },
+        "window": "a"
+      },
+      {
+        "asOf": {
+          "decisionEnd": "2025-04-10T20:30:00.000Z",
+          "decisionStart": "2025-01-03T20:30:00.000Z",
+          "outcomeEnd": "2025-04-21T20:30:00.000Z"
+        },
+        "evidence": {
+          "audit": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bear-a.json",
+            "sha256": "b3e71ab277d9a8850a739eed50d91363c8c757d1a29a86c5451a0c4c3196efd4"
+          },
+          "candidatePayload": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/candidate/d4-us-single-bear-a.json",
+            "sha256": "d9791fc59bbd0520e7c083d6dcbf2200c87ce3f9067e2faf8250171ebe4cabc2"
+          },
+          "samplingPlan": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+            "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+          },
+          "selectedDerived": {
+            "barCount": 162,
+            "canonicalByteLength": 53439,
+            "ref": "derived:d4-us-single-bear-a:selected",
+            "sha256": "086c4b89d94e1cded1d2e7f362b5f703707908d0893a67b529dba0ddd24b514a"
+          },
+          "selectedRaw": {
+            "barCount": 648,
+            "canonicalByteLength": 130081,
+            "ref": "remote:d4-us-single-bear-a:selected",
+            "sha256": "a26a5487ebe4d67e51c695f35393a8f78e11bfc52d9f9ce1ec2714b870de6bef"
+          },
+          "sourceReceipt": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bear-a.json#source-receipt",
+            "sha256": "57ff6acc101a1d0d071bf2290689f39df4556a7ad5cda77051adffb13a841564"
+          },
+          "splitEvidence": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bear-a.json#split-evidence",
+            "sha256": "dcd54519d86452ced0781721b5d2ee87725596cb651cf606016b5c06441621af"
+          }
+        },
+        "id": "d4-us-single-bear-a",
+        "instrument": {
+          "assetClass": "equity",
+          "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+          "d3AdjustmentMode": "unadjusted",
+          "datasetName": "4h-ohlcv-anonymized",
+          "exchangeCalendar": "XNAS",
+          "provider": "yahoo-chart-public",
+          "providerAdjustmentMode": "retrospective_split_adjusted",
+          "symbol": "NVDA",
+          "timezone": "America/New_York"
+        },
+        "market": "us-single",
+        "pairingKey": "d4-us-single-bear-a",
+        "profile": "bear",
+        "split": "dev",
+        "stratum": "us-single:bear",
+        "temporal": {
+          "barInterval": "4h",
+          "decisionCadenceBars": 6,
+          "decisionCount": 12,
+          "finalVisibleEndExclusive": 156,
+          "lookbackBars": 90,
+          "totalBars": 162
+        },
+        "window": "a"
+      },
+      {
+        "asOf": {
+          "decisionEnd": "2023-04-20T01:30:00.000Z",
+          "decisionStart": "2023-01-28T01:30:00.000Z",
+          "outcomeEnd": "2023-04-27T01:30:00.000Z"
+        },
+        "evidence": {
+          "audit": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json",
+            "sha256": "fd0f18f48759b9766eb6036a248ced0d1fa4577413396303ef7bd052576ed9bd"
+          },
+          "candidatePayload": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/candidate/d4-gcn-equity-bull-a.json",
+            "sha256": "cc6243a0d3fb7f4de71854e5f88711d7b3765ca9adc0e89e9e500940955bba30"
+          },
+          "samplingPlan": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+            "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+          },
+          "selectedDerived": {
+            "barCount": 120,
+            "canonicalByteLength": 22765,
+            "ref": "derived:d4-gcn-equity-bull-a:selected",
+            "sha256": "fea49dc3f39faf154af1c74f5d40152e59142ff1b7f8f937cce65fcf864a262c"
+          },
+          "selectedRaw": {
+            "barCount": 120,
+            "canonicalByteLength": 22765,
+            "ref": "remote:d4-gcn-equity-bull-a:selected",
+            "sha256": "fea49dc3f39faf154af1c74f5d40152e59142ff1b7f8f937cce65fcf864a262c"
+          },
+          "sourceReceipt": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json#source-receipt",
+            "sha256": "b01e13ce7b3a2ba462e5ca5a44db2a43b88e53f4c0846cf1f228f360e5b0510c"
+          },
+          "splitEvidence": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json#split-evidence",
+            "sha256": "f0428a6d368857df92af50c220d18d37743060740489946510d21acfda0ce460"
+          }
+        },
+        "id": "d4-gcn-equity-bull-a",
+        "instrument": {
+          "assetClass": "equity",
+          "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+          "d3AdjustmentMode": "unadjusted",
+          "datasetName": "1d-ohlcv-anonymized",
+          "exchangeCalendar": "XHKG",
+          "provider": "yahoo-chart-public",
+          "providerAdjustmentMode": "retrospective_split_adjusted",
+          "symbol": "0700.HK",
+          "timezone": "Asia/Hong_Kong"
+        },
+        "market": "gcn-equity",
+        "pairingKey": "d4-gcn-equity-bull-a",
+        "profile": "bull",
+        "split": "dev",
+        "stratum": "gcn-equity:bull",
+        "temporal": {
+          "barInterval": "1d",
+          "decisionCadenceBars": 5,
+          "decisionCount": 12,
+          "finalVisibleEndExclusive": 115,
+          "lookbackBars": 60,
+          "totalBars": 120
+        },
+        "window": "a"
+      },
+      {
+        "asOf": {
+          "decisionEnd": "2026-06-17T08:30:00.000Z",
+          "decisionStart": "2026-03-09T08:30:00.000Z",
+          "outcomeEnd": "2026-06-26T08:30:00.000Z"
+        },
+        "evidence": {
+          "audit": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bear-a.json",
+            "sha256": "00d646d3ef95ac362303533c82eb57b03dc0b272195693934570e542ea6af354"
+          },
+          "candidatePayload": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/candidate/d4-gcn-equity-bear-a.json",
+            "sha256": "642e7c4c6c1d7ae5a502a43cf4b1faa9a5bbbff1f16496a40d9059edd5f65824"
+          },
+          "samplingPlan": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+            "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+          },
+          "selectedDerived": {
+            "barCount": 162,
+            "canonicalByteLength": 46889,
+            "ref": "derived:d4-gcn-equity-bear-a:selected",
+            "sha256": "846fe53151b2fd31fcd287e3e837f8bb52e28c90ddd42d401e4acd8cff6b61bc"
+          },
+          "selectedRaw": {
+            "barCount": 648,
+            "canonicalByteLength": 103881,
+            "ref": "remote:d4-gcn-equity-bear-a:selected",
+            "sha256": "8762e44d6d4a9e87b5e8c8fccf4114d2a7e30a63a8afafafb5953d91aa78cd5d"
+          },
+          "sourceReceipt": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bear-a.json#source-receipt",
+            "sha256": "362cbd40bab8b9ffc6a25386a5ed96b125789197d99af3c5126c388f7086734d"
+          },
+          "splitEvidence": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bear-a.json#split-evidence",
+            "sha256": "dd971bff643c363771d32571231148f6e06435808042d76982074cf99aa3e82d"
+          }
+        },
+        "id": "d4-gcn-equity-bear-a",
+        "instrument": {
+          "assetClass": "equity",
+          "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+          "d3AdjustmentMode": "unadjusted",
+          "datasetName": "4h-ohlcv-anonymized",
+          "exchangeCalendar": "XHKG",
+          "provider": "yahoo-chart-public",
+          "providerAdjustmentMode": "retrospective_split_adjusted",
+          "symbol": "0700.HK",
+          "timezone": "Asia/Hong_Kong"
+        },
+        "market": "gcn-equity",
+        "pairingKey": "d4-gcn-equity-bear-a",
+        "profile": "bear",
+        "split": "dev",
+        "stratum": "gcn-equity:bear",
+        "temporal": {
+          "barInterval": "4h",
+          "decisionCadenceBars": 6,
+          "decisionCount": 12,
+          "finalVisibleEndExclusive": 156,
+          "lookbackBars": 90,
+          "totalBars": 162
+        },
+        "window": "a"
+      },
+      {
+        "asOf": {
+          "decisionEnd": "2023-04-13T23:00:00.000Z",
+          "decisionStart": "2023-01-27T00:00:00.000Z",
+          "outcomeEnd": "2023-04-20T23:00:00.000Z"
+        },
+        "evidence": {
+          "audit": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bull-a.json",
+            "sha256": "020c50fd3d1f2857d51a8921f805d4a3c83064d929a0ed68ac7490377878f81d"
+          },
+          "candidatePayload": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/candidate/d4-fx-bull-a.json",
+            "sha256": "da1c4de806a61157e143a448386d3282b38c8ea40b8d60dab823ac3a074065c4"
+          },
+          "samplingPlan": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+            "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+          },
+          "selectedDerived": {
+            "barCount": 120,
+            "canonicalByteLength": 23513,
+            "ref": "derived:d4-fx-bull-a:selected",
+            "sha256": "6509e3e7eeb57207e5437ad938fd485efb5a800e53b9e0075fcef349f3d9fbc6"
+          },
+          "selectedRaw": {
+            "barCount": 120,
+            "canonicalByteLength": 23513,
+            "ref": "remote:d4-fx-bull-a:selected",
+            "sha256": "6509e3e7eeb57207e5437ad938fd485efb5a800e53b9e0075fcef349f3d9fbc6"
+          },
+          "sourceReceipt": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bull-a.json#source-receipt",
+            "sha256": "9150ee5af207adcae13e3b79256f0c3c81a87e8d33e20b4030866af2265cdff4"
+          },
+          "splitEvidence": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bull-a.json#split-evidence",
+            "sha256": "85ac97e4d203f092dec7211ab5ac4c4ef5fd93d8211fd4e7d39d308ad50f28c2"
+          }
+        },
+        "id": "d4-fx-bull-a",
+        "instrument": {
+          "assetClass": "fx",
+          "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+          "d3AdjustmentMode": "unadjusted",
+          "datasetName": "1d-ohlcv-anonymized",
+          "exchangeCalendar": "24/5",
+          "provider": "yahoo-chart-public",
+          "providerAdjustmentMode": "retrospective_split_adjusted",
+          "symbol": "EURUSD=X",
+          "timezone": "UTC"
+        },
+        "market": "fx",
+        "pairingKey": "d4-fx-bull-a",
+        "profile": "bull",
+        "split": "dev",
+        "stratum": "fx:bull",
+        "temporal": {
+          "barInterval": "1d",
+          "decisionCadenceBars": 5,
+          "decisionCount": 12,
+          "finalVisibleEndExclusive": 115,
+          "lookbackBars": 60,
+          "totalBars": 120
+        },
+        "window": "a"
+      },
+      {
+        "asOf": {
+          "decisionEnd": "2024-11-21T20:00:00.000Z",
+          "decisionStart": "2024-11-06T12:00:00.000Z",
+          "outcomeEnd": "2024-11-22T20:00:00.000Z"
+        },
+        "evidence": {
+          "audit": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json",
+            "sha256": "871a9a6914e51363a9e0de5aa227bf25be24f146ed2608483d67864ccc2d05f0"
+          },
+          "candidatePayload": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/candidate/d4-fx-bear-a.json",
+            "sha256": "1952365ba1f60ed0122444d9aa0fbb93aa0bef0ee8b7b969f5166bdf596d145a"
+          },
+          "samplingPlan": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+            "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+          },
+          "selectedDerived": {
+            "barCount": 162,
+            "canonicalByteLength": 52617,
+            "ref": "derived:d4-fx-bear-a:selected",
+            "sha256": "b2180c4965508c51aefccc60493bb155f4208c983d5c29b654981c04ae322c02"
+          },
+          "selectedRaw": {
+            "barCount": 648,
+            "canonicalByteLength": 126841,
+            "ref": "remote:d4-fx-bear-a:selected",
+            "sha256": "e67fa7d9f56afb32de2823d24078a0bd4731f7bc6b0a074669c4ec26f84cdfda"
+          },
+          "sourceReceipt": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#source-receipt",
+            "sha256": "253a331e0605de31eac9f04f2a04dd3bf935054c164bfc03075c65c7eef4801d"
+          },
+          "splitEvidence": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-fx-bear-a.json#split-evidence",
+            "sha256": "ac2726e860f13db198f0bb3a79ad7cdecd017e618f382a42b3500a8e7f34deab"
+          }
+        },
+        "id": "d4-fx-bear-a",
+        "instrument": {
+          "assetClass": "fx",
+          "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+          "d3AdjustmentMode": "unadjusted",
+          "datasetName": "4h-ohlcv-anonymized",
+          "exchangeCalendar": "24/5",
+          "provider": "yahoo-chart-public",
+          "providerAdjustmentMode": "retrospective_split_adjusted",
+          "symbol": "EURUSD=X",
+          "timezone": "UTC"
+        },
+        "market": "fx",
+        "pairingKey": "d4-fx-bear-a",
+        "profile": "bear",
+        "split": "dev",
+        "stratum": "fx:bear",
+        "temporal": {
+          "barInterval": "4h",
+          "decisionCadenceBars": 6,
+          "decisionCount": 12,
+          "finalVisibleEndExclusive": 156,
+          "lookbackBars": 90,
+          "totalBars": 162
+        },
+        "window": "a"
+      },
+      {
+        "asOf": {
+          "decisionEnd": "2022-06-04T13:30:00.000Z",
+          "decisionStart": "2022-03-17T13:30:00.000Z",
+          "outcomeEnd": "2022-06-11T13:30:00.000Z"
+        },
+        "evidence": {
+          "audit": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json",
+            "sha256": "41ef28b4707da93786e3aff59be8dc85dbc3dd35e1245a78d9175c1f0a20ea48"
+          },
+          "candidatePayload": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/candidate/d4-commodity-proxy-bull-a.json",
+            "sha256": "f18cc2ee92a2c4f65f43986e5f948807b5ac57a9d57c7fdf8cd556b05ba2665e"
+          },
+          "samplingPlan": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+            "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+          },
+          "selectedDerived": {
+            "barCount": 120,
+            "canonicalByteLength": 23551,
+            "ref": "derived:d4-commodity-proxy-bull-a:selected",
+            "sha256": "8878b8ad51626396e3ec2d2cbac6550ca69cf43a280c57fa9e6f3f7018015126"
+          },
+          "selectedRaw": {
+            "barCount": 120,
+            "canonicalByteLength": 23551,
+            "ref": "remote:d4-commodity-proxy-bull-a:selected",
+            "sha256": "8878b8ad51626396e3ec2d2cbac6550ca69cf43a280c57fa9e6f3f7018015126"
+          },
+          "sourceReceipt": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#source-receipt",
+            "sha256": "7c0de2b30f6b8778fa566730264c489f71f621dec7429e25cb125952b068ff79"
+          },
+          "splitEvidence": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bull-a.json#split-evidence",
+            "sha256": "69f843bac015b12b50fc7b332cb8915a8e2bfa0421c2a36f89866ffaf2f6bf6f"
+          }
+        },
+        "id": "d4-commodity-proxy-bull-a",
+        "instrument": {
+          "assetClass": "commodity-etf",
+          "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+          "d3AdjustmentMode": "unadjusted",
+          "datasetName": "1d-ohlcv-anonymized",
+          "exchangeCalendar": "XNYS",
+          "provider": "yahoo-chart-public",
+          "providerAdjustmentMode": "retrospective_split_adjusted",
+          "symbol": "USO",
+          "timezone": "America/New_York"
+        },
+        "market": "commodity-proxy",
+        "pairingKey": "d4-commodity-proxy-bull-a",
+        "profile": "bull",
+        "split": "dev",
+        "stratum": "commodity-proxy:bull",
+        "temporal": {
+          "barInterval": "1d",
+          "decisionCadenceBars": 5,
+          "decisionCount": 12,
+          "finalVisibleEndExclusive": 115,
+          "lookbackBars": 60,
+          "totalBars": 120
+        },
+        "window": "a"
+      },
+      {
+        "asOf": {
+          "decisionEnd": "2025-03-31T20:30:00.000Z",
+          "decisionStart": "2024-12-19T20:30:00.000Z",
+          "outcomeEnd": "2025-04-08T20:30:00.000Z"
+        },
+        "evidence": {
+          "audit": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bear-a.json",
+            "sha256": "d44ee6eacfb35d6e9679a05d52f3646381fe618c711741ced5fe58db243675d0"
+          },
+          "candidatePayload": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/candidate/d4-commodity-proxy-bear-a.json",
+            "sha256": "6504766e164737d110fac6d3a919d8b252e24b739987aa6fd79e528678e52e4e"
+          },
+          "samplingPlan": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+            "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+          },
+          "selectedDerived": {
+            "barCount": 162,
+            "canonicalByteLength": 52603,
+            "ref": "derived:d4-commodity-proxy-bear-a:selected",
+            "sha256": "7695cfb4a5886779979f89dbf6f3aa5aea0ebc5a19c43cbf02f004b32d07e57a"
+          },
+          "selectedRaw": {
+            "barCount": 648,
+            "canonicalByteLength": 126409,
+            "ref": "remote:d4-commodity-proxy-bear-a:selected",
+            "sha256": "3e3658c781199f0e73e9d97a129baa7477e961a1cd70813f200b64500a4f8647"
+          },
+          "sourceReceipt": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bear-a.json#source-receipt",
+            "sha256": "94a075e6a5ce3d21f8472691e9ef84b9eec87e97098094cdca8030eea1fd7e6e"
+          },
+          "splitEvidence": {
+            "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-commodity-proxy-bear-a.json#split-evidence",
+            "sha256": "2c2270cf46f0fcf818123af257f428179b12eb16e20b5d97cc9d43f85d4e9e2f"
+          }
+        },
+        "id": "d4-commodity-proxy-bear-a",
+        "instrument": {
+          "assetClass": "commodity-etf",
+          "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+          "d3AdjustmentMode": "unadjusted",
+          "datasetName": "4h-ohlcv-anonymized",
+          "exchangeCalendar": "XNYS",
+          "provider": "yahoo-chart-public",
+          "providerAdjustmentMode": "retrospective_split_adjusted",
+          "symbol": "USO",
+          "timezone": "America/New_York"
+        },
+        "market": "commodity-proxy",
+        "pairingKey": "d4-commodity-proxy-bear-a",
+        "profile": "bear",
+        "split": "dev",
+        "stratum": "commodity-proxy:bear",
+        "temporal": {
+          "barInterval": "4h",
+          "decisionCadenceBars": 6,
+          "decisionCount": 12,
+          "finalVisibleEndExclusive": 156,
+          "lookbackBars": 90,
+          "totalBars": 162
+        },
+        "window": "a"
+      }
+    ],
+    "credentialSources": [
+      {
+        "provider": "codex",
+        "sourceIdentity": "codex-subscription-oauth"
+      },
+      {
+        "provider": "claude",
+        "sourceIdentity": "claude-max-oauth"
+      }
+    ],
+    "proposalOnly": {
+      "accountId": "eval:d4-smoke:proposal-only",
+      "authzLevel": "read_only",
+      "configuredUta": false,
+      "forbiddenCapabilities": [
+        "account_create",
+        "account_edit",
+        "account_elevate",
+        "uta_mutation",
+        "execution_record_publish",
+        "stage",
+        "auto_push"
+      ],
+      "outputs": [
+        "decision_intent",
+        "information_snapshot"
+      ]
+    },
+    "repetitions": [
+      "r1"
+    ],
+    "split": "dev",
+    "stage": "Smoke"
+  },
+  "schema": "steward-d4-stage-manifest/1",
+  "version": 1
+}
