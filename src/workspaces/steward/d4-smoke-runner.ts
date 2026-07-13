@@ -101,10 +101,9 @@ export const D4_SMOKE_FICTIONAL_DEADLINE_OFFSET_MS = 60_000 as const;
 
 const execFileAsync = promisify(execFile);
 
-// Claude Code 2.1.202 turns CLAUDE_CODE_TMPDIR into
-// <CLAUDE_CODE_TMPDIR>/claude-<uid>. Its Bash sandbox only keeps that effective
-// directory when it is at most 44 bytes; otherwise it falls back to TMPDIR.
-// Keep both that native limit and Linux's sockaddr_un limit below their bounds.
+// Claude Code 2.1.202 uses CLAUDE_CODE_TMPDIR for its per-user Bash temp
+// directory, but its Linux bridge initializer calls os.tmpdir() directly for
+// the socat HTTP/SOCKS sockets. Keep both directories short.
 const D4_CLAUDE_BRIDGE_SOCKET_PATH_MAX_BYTES = 107;
 const D4_CLAUDE_BRIDGE_SOCKET_SUFFIX_RESERVE_BYTES = 64;
 const D4_CLAUDE_EFFECTIVE_TMP_MAX_BYTES = 44;
@@ -1965,6 +1964,7 @@ export async function runD4SmokeExecution(input: D4SmokeExecutionInput): Promise
   if (plan === undefined) {
     throw new D4SmokePlanError('coverage_invalid', `unknown execution ${input.executionId}`);
   }
+  const source = selectCredentialSource(plan.candidate.provider, input.credentialSources);
   input.auditLedger.assertZero();
   const forbiddenBoundaries = createD4SmokeForbiddenCapabilityBoundaries(input.auditLedger, now);
   const admissionPhase = { kind: 'layer_admission' } as const;
@@ -1977,7 +1977,6 @@ export async function runD4SmokeExecution(input: D4SmokeExecutionInput): Promise
 
   await createFreshSandbox(plan.paths, plan.candidate.provider);
   let auditCursor: D4SmokeAuditCursor | null = null;
-  const source = selectCredentialSource(plan.candidate.provider, input.credentialSources);
   const canonicalPaths = input.canonicalCredentialPaths ?? defaultD4SmokeCanonicalCredentialPaths();
   let credential: CredentialGuard;
   try {
@@ -2372,6 +2371,11 @@ function sandboxEnv(
   if (provider === 'claude') {
     assertD4ClaudeBridgeTempDirFits(paths.claudeBridgeTempDir);
     env.CLAUDE_CODE_TMPDIR = paths.claudeBridgeTempDir;
+    // The pinned native bridge uses os.tmpdir(), which honors TMPDIR rather
+    // than CLAUDE_CODE_TMPDIR, before bwrap starts the sandboxed command.
+    env.TMPDIR = paths.claudeBridgeTempDir;
+    env.TMP = paths.claudeBridgeTempDir;
+    env.TEMP = paths.claudeBridgeTempDir;
   }
   for (const key of ['LANG', 'LC_ALL', 'TERM']) {
     const value = process.env[key];
@@ -5003,12 +5007,12 @@ export async function runD4EngineeringShakedown(
   const officialPlan = d4EngineeringShakedownOfficialPlanView(plan);
   const provider = plan.candidate.provider;
   const decisionIndex = plan.decisionIndex;
+  const source = selectCredentialSource(provider, input.credentialSources);
   input.auditLedger.assertZero();
   const forbiddenBoundaries = createD4SmokeForbiddenCapabilityBoundaries(input.auditLedger, now);
 
   await createFreshSandbox(plan.paths, plan.candidate.provider);
   let auditCursor: D4SmokeAuditCursor | null = null;
-  const source = selectCredentialSource(provider, input.credentialSources);
   const canonicalPaths = input.canonicalCredentialPaths ?? defaultD4SmokeCanonicalCredentialPaths();
   let credential: CredentialGuard;
   try {
