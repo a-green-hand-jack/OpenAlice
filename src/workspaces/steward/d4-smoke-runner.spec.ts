@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { access, appendFile, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -94,6 +95,17 @@ type ProductionSeamKey = Extract<
   | 'forecastBounds'
 >;
 const PRODUCTION_INPUT_EXCLUDES_SEAMS: ProductionSeamKey extends never ? true : never = true;
+
+async function bindUnixSocket(path: string): Promise<void> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(path, resolve);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => error === undefined ? resolve() : reject(error));
+  });
+}
 
 function quotaEvidence(manifestSha256: string, phase: D4SmokeQuotaPhase) {
   const dispatchProvider = phase.kind === 'dispatch'
@@ -1545,6 +1557,12 @@ describe('D4 Smoke single-execution runner', () => {
         expect(bindings[0]!.env.TMPDIR).toBe(plan.paths.tempRoot);
         expect(bindings[0]!.env.TMP).toBe(plan.paths.tempRoot);
         expect(bindings[0]!.env.TEMP).toBe(plan.paths.tempRoot);
+        if (provider === 'claude') {
+          expect(bindings[0]!.env.CLAUDE_CODE_TMPDIR).toBe(plan.paths.claudeBridgeTempDir);
+          expect(bindings[0]!.env.CLAUDE_CODE_TMPDIR).not.toContain(plan.paths.root);
+        } else {
+          expect(bindings[0]!.env).not.toHaveProperty('CLAUDE_CODE_TMPDIR');
+        }
         await expect(access(join(plan.paths.root, '.quota-control'))).rejects.toThrow();
         await expect(access(provider === 'codex'
           ? join(plan.paths.claudeConfigDir, '.credentials.json')
@@ -2354,6 +2372,50 @@ describe('D4 engineering shakedown (issue #205)', () => {
       .toThrow(/selection_invalid/);
     expect(() => planD4EngineeringShakedown(stage, sandboxBase, { ...selector, decisionIndex: 12 }))
       .toThrow(/selection_invalid/);
+  });
+
+  it('uses a short private Claude bridge directory for the saved long D4 path shape', async () => {
+    const artifactTmpSocket = join(
+      '/home/user/.local/state/openalice/d4-engineering-shakedown/sandboxes',
+      'c7c3231ac811d4eb0589a771c07ee38034bc69227602c12df14fe1057baf143e',
+      'engineering-shakedown-dba3e23907f7b062',
+      'tmp',
+      'bridge.sock',
+    );
+    expect(Buffer.byteLength(artifactTmpSocket)).toBeGreaterThan(107);
+
+    const root = await mkdtemp(join(tmpdir(), 'openalice-d4-bridge-'));
+    try {
+      const longSocket = join(root, 'x'.repeat(128), 'bridge.sock');
+      await mkdir(dirname(longSocket), { recursive: true, mode: 0o700 });
+      await expect(bindUnixSocket(longSocket)).rejects.toMatchObject({ code: 'EINVAL' });
+
+      const fixture = await createD4SmokeTestFixture();
+      const stage = await validateD4SmokeStage({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+      });
+      const selector: D4EngineeringShakedownSelector = {
+        modelId: 'claude-fable-5',
+        cellId: stage.manifest.content.cells[0]!.id,
+        decisionIndex: 0,
+      };
+      const plan = planD4EngineeringShakedown(stage, join(root, 'sandboxes'), selector);
+      const bridgeSocket = join(plan.paths.claudeBridgeTempDir, 'x'.repeat(64));
+
+      expect(plan.env.CLAUDE_CODE_TMPDIR).toBe(plan.paths.claudeBridgeTempDir);
+      expect(plan.env.TMPDIR).toBe(plan.paths.tempRoot);
+      expect(Buffer.byteLength(bridgeSocket)).toBeLessThanOrEqual(107);
+      await mkdir(plan.paths.claudeBridgeTempDir, { recursive: false, mode: 0o700 });
+      try {
+        await expect(bindUnixSocket(bridgeSocket)).resolves.toBeUndefined();
+      } finally {
+        await rm(plan.paths.claudeBridgeTempDir, { recursive: true, force: true });
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('enforces single-turn quota math, the reserve gate, and fails closed', async () => {
