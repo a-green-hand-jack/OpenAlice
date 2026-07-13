@@ -3619,38 +3619,47 @@ function isStrictDescendant(parent: string, child: string): boolean {
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
-/* ===========================================================================
- * Engineering shakedown (issue #205)
- *
- * A bounded, explicitly NON-INFERENTIAL execution path that runs ONE frozen
- * decision turn for ONE frozen G2 candidate against ONE critic-approved dev
- * cell. It exists to shake the D4 runtime (frozen model binding, credential
- * isolation, sandbox, forbidden-capability ledger, proposal-only terminal
- * read) when the official 108-execution / 1296-turn Smoke layer cannot fit the
- * quota forecast — WITHOUT ever producing a ranking, survivor, winner,
- * profitability, or official-Smoke validity claim.
- *
- * Everything below reuses the vetted official primitives (`createFreshSandbox`,
- * `copyCredentialIntoSandbox`, `installD4SmokeAuditShims`,
- * `buildExactModelBinding`, `createD4SmokeFilesystemWorkspaceAdapter`, the
- * native quota readers, …). It deliberately does NOT touch
- * `runD4SmokeExecution` or the official 108/1296 surfaces, and its artifacts
- * are schema-marked so they can never be assigned to `D4SmokeExecutionResult`
- * or ingested by an official plan/result path.
- * =========================================================================== */
+/* Engineering shakedown (issue #205): a bounded, explicitly NON-INFERENTIAL
+ * path that runs ONE frozen decision turn for ONE frozen G2 candidate against
+ * ONE critic-approved dev cell to shake the D4 runtime when the official
+ * 108/1296 Smoke layer cannot fit the quota forecast. It reuses the vetted
+ * official primitives, never touches `runD4SmokeExecution`, and schema-marks
+ * its artifacts so they can never be assigned to `D4SmokeExecutionResult` nor
+ * ingested by an official plan/result path. */
 
 export const D4_ENGINEERING_SHAKEDOWN_PURPOSE = 'engineering_shakedown' as const;
 export const D4_ENGINEERING_SHAKEDOWN_EXECUTION_PREFIX = 'engineering-shakedown' as const;
 export const D4_ENGINEERING_SHAKEDOWN_ROOT_PREFIX = 'engineering-shakedown' as const;
 /** The shakedown forecasts exactly ONE next model turn — never the official
- * per-layer 1296. This literal is what makes the shakedown quota schema
- * non-assignable to the official one at both the type and runtime layers. */
+ * per-layer 1296. */
 export const D4_ENGINEERING_SHAKEDOWN_MODEL_TURN_COUNT = 1 as const;
 export const D4_ENGINEERING_SHAKEDOWN_FORECAST_BASIS = 'observed_delta_upper_bound_single_turn' as const;
 export const D4_ENGINEERING_SHAKEDOWN_QUOTA_SCHEMA = 'steward-d4-engineering-shakedown-quota/1' as const;
 export const D4_ENGINEERING_SHAKEDOWN_QUOTA_VERSION = 1 as const;
+export const D4_ENGINEERING_SHAKEDOWN_DIAGNOSTIC_REPORT_SCHEMA =
+  'steward-d4-engineering-shakedown-diagnostic-report/1' as const;
+export const D4_ENGINEERING_SHAKEDOWN_DIAGNOSTIC_REPORT_VERSION = 1 as const;
 export const D4_ENGINEERING_SHAKEDOWN_RESULT_SCHEMA = 'steward-d4-engineering-shakedown-result/1' as const;
 export const D4_ENGINEERING_SHAKEDOWN_RESULT_VERSION = 1 as const;
+
+/** The exact native subscription windows that a frozen model's turn actually
+ * charges, in canonical order. Admission evidence and reserve enforcement
+ * require exactly this ordered set per model — the native response may expose
+ * other windows, but a missing applicable window fails closed. */
+export const D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS: Readonly<Record<
+  typeof D4_SMOKE_CANDIDATES[number]['modelId'],
+  readonly D4SmokeQuotaWindowId[]
+>> = {
+  'gpt-5.6-sol': ['codex-general-weekly'],
+  'gpt-5.6-terra': ['codex-general-weekly'],
+  'gpt-5.6-luna': ['codex-general-weekly'],
+  'gpt-5.5': ['codex-general-weekly'],
+  'gpt-5.3-codex-spark': ['codex-spark'],
+  'claude-fable-5': ['claude-all-model-weekly', 'claude-fable-weekly', 'claude-current-short'],
+  'claude-sonnet-5': ['claude-all-model-weekly', 'claude-current-short'],
+  'claude-opus-4-8': ['claude-all-model-weekly', 'claude-current-short'],
+  'claude-haiku-4-5-20251001': ['claude-all-model-weekly', 'claude-current-short'],
+};
 
 export class D4EngineeringShakedownError extends Error {
   constructor(
@@ -3660,6 +3669,27 @@ export class D4EngineeringShakedownError extends Error {
     super(`D4 engineering shakedown ${code}: ${detail}`);
     this.name = 'D4EngineeringShakedownError';
   }
+}
+
+/** Resolve the frozen candidate for a model id and its applicable window
+ * descriptors in canonical order. Fails closed for any non-frozen model. */
+function d4EngineeringShakedownApplicableWindows(modelId: string): {
+  readonly provider: 'codex' | 'claude';
+  readonly windows: readonly typeof D4_SMOKE_QUOTA_WINDOWS[number][];
+} {
+  const candidate = D4_SMOKE_CANDIDATES.find((item) => item.modelId === modelId);
+  const applicable = (D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS as Record<string, readonly D4SmokeQuotaWindowId[]>)[modelId];
+  if (candidate === undefined || applicable === undefined) {
+    throw new D4SmokeQuotaError('invalid', `${modelId} is not a frozen shakedown candidate`);
+  }
+  const windows = applicable.map((id) => {
+    const descriptor = D4_SMOKE_QUOTA_WINDOWS.find((window) => window.id === id);
+    if (descriptor === undefined || descriptor.provider !== candidate.provider) {
+      throw new D4SmokeQuotaError('invalid', `${modelId}: applicable window ${id} is not a ${candidate.provider} window`);
+    }
+    return descriptor;
+  });
+  return { provider: candidate.provider, windows };
 }
 
 const shakedownQuotaWindowSchema = z.object({
@@ -3913,7 +3943,7 @@ export function validateD4EngineeringShakedownQuotaEvidence(input: {
   readonly evidence: unknown;
   readonly manifestSha256: string;
   readonly phase: D4ShakedownQuotaPhase;
-  readonly provider: 'codex' | 'claude';
+  readonly modelId: string;
   readonly now: Date;
 }): D4EngineeringShakedownQuotaEvidence {
   const parsed = d4EngineeringShakedownQuotaEvidenceSchema.safeParse(input.evidence);
@@ -3921,16 +3951,17 @@ export function validateD4EngineeringShakedownQuotaEvidence(input: {
     throw new D4SmokeQuotaError('invalid', formatZodIssues(parsed.error));
   }
   const evidence = parsed.data;
+  const { provider, windows: applicable } = d4EngineeringShakedownApplicableWindows(input.modelId);
   if (evidence.manifestSha256 !== input.manifestSha256) {
     throw new D4SmokeQuotaError(
       'invalid',
       `evidence binds ${evidence.manifestSha256}, manifest is ${input.manifestSha256}`,
     );
   }
-  if (evidence.provider !== input.provider) {
+  if (evidence.provider !== provider) {
     throw new D4SmokeQuotaError(
       'invalid',
-      `evidence provider ${evidence.provider} differs from the frozen candidate provider ${input.provider}`,
+      `evidence provider ${evidence.provider} differs from the ${input.modelId} provider ${provider}`,
     );
   }
   if (JSON.stringify(evidence.phase) !== JSON.stringify(input.phase)) {
@@ -3948,14 +3979,12 @@ export function validateD4EngineeringShakedownQuotaEvidence(input: {
       `${input.now.toISOString()} is outside ${evidence.capturedAt}..${evidence.validUntil}`,
     );
   }
-  const expectedIdentities = D4_SMOKE_QUOTA_WINDOWS
-    .filter(({ provider }) => provider === input.provider)
-    .map(({ id, provider }) => ({ id, provider }));
-  const identities = evidence.cost.subscriptionQuota.windows.map(({ id, provider }) => ({ id, provider }));
+  const expectedIdentities = applicable.map(({ id, provider: windowProvider }) => ({ id, provider: windowProvider }));
+  const identities = evidence.cost.subscriptionQuota.windows.map(({ id, provider: windowProvider }) => ({ id, provider: windowProvider }));
   if (JSON.stringify(identities) !== JSON.stringify(expectedIdentities)) {
     throw new D4SmokeQuotaError(
       'incomplete',
-      `shakedown dispatch requires exactly the selected ${input.provider} quota windows in canonical order`,
+      `${input.modelId} requires exactly its applicable quota windows [${applicable.map((window) => window.id).join(',')}] in canonical order`,
     );
   }
   const enforceReserve = input.phase.kind === 'shakedown_dispatch';
@@ -3986,41 +4015,40 @@ export function validateD4EngineeringShakedownQuotaEvidence(input: {
 function buildD4EngineeringShakedownEvidenceFromUsed(input: {
   readonly phase: D4ShakedownQuotaPhase;
   readonly plan: D4EngineeringShakedownPlan;
-  readonly provider: 'codex' | 'claude';
   readonly liveUsed: Readonly<Partial<Record<D4SmokeQuotaWindowId, number>>>;
   readonly forecastBounds: D4SmokeQuotaForecastBounds;
   readonly captured: Date;
   readonly validityMs: number;
 }): D4EngineeringShakedownQuotaEvidence {
-  const windows = D4_SMOKE_QUOTA_WINDOWS
-    .filter(({ provider }) => provider === input.provider)
-    .map(({ id, provider }) => {
-      const bound = input.forecastBounds[id];
-      if (bound === undefined) {
-        throw new D4SmokeQuotaError('incomplete', `${id} has no observed delta upper bound`);
-      }
-      const usedPercent = input.liveUsed[id];
-      if (usedPercent === undefined) {
-        throw new D4SmokeQuotaError('incomplete', `${id} live quota value is missing`);
-      }
-      return {
-        id,
-        provider,
-        usedPercent,
-        perTurnForecastAdditionalPercent: forecastD4EngineeringShakedownPerTurnPercent(bound),
-        sourceIdentity: provider === 'codex'
-          ? `codex:account/rateLimits/read:${id === 'codex-spark' ? 'codex_bengalfox' : 'codex'}`
-          : `claude:usage-control:${id}`,
-        forecast: {
-          basis: D4_ENGINEERING_SHAKEDOWN_FORECAST_BASIS,
-          observedDeltaUpperBoundPercentPerModelTurn: bound.observedDeltaUpperBoundPercentPerModelTurn,
-          forecastModelTurnCount: D4_ENGINEERING_SHAKEDOWN_MODEL_TURN_COUNT,
-          observationCount: bound.observationCount,
-          observedAt: bound.observedAt,
-          sourceIdentity: bound.sourceIdentity,
-        },
-      };
-    });
+  const modelId = input.plan.candidate.modelId;
+  const { provider, windows: applicable } = d4EngineeringShakedownApplicableWindows(modelId);
+  const windows = applicable.map(({ id }) => {
+    const bound = input.forecastBounds[id];
+    if (bound === undefined) {
+      throw new D4SmokeQuotaError('incomplete', `${id} has no observed delta upper bound`);
+    }
+    const usedPercent = input.liveUsed[id];
+    if (usedPercent === undefined) {
+      throw new D4SmokeQuotaError('incomplete', `${id} live quota value is missing`);
+    }
+    return {
+      id,
+      provider,
+      usedPercent,
+      perTurnForecastAdditionalPercent: forecastD4EngineeringShakedownPerTurnPercent(bound),
+      sourceIdentity: provider === 'codex'
+        ? `codex:account/rateLimits/read:${id === 'codex-spark' ? 'codex_bengalfox' : 'codex'}`
+        : `claude:usage-control:${id}`,
+      forecast: {
+        basis: D4_ENGINEERING_SHAKEDOWN_FORECAST_BASIS,
+        observedDeltaUpperBoundPercentPerModelTurn: bound.observedDeltaUpperBoundPercentPerModelTurn,
+        forecastModelTurnCount: D4_ENGINEERING_SHAKEDOWN_MODEL_TURN_COUNT,
+        observationCount: bound.observationCount,
+        observedAt: bound.observedAt,
+        sourceIdentity: bound.sourceIdentity,
+      },
+    };
+  });
   const evidence = {
     schema: D4_ENGINEERING_SHAKEDOWN_QUOTA_SCHEMA,
     version: D4_ENGINEERING_SHAKEDOWN_QUOTA_VERSION,
@@ -4031,7 +4059,7 @@ function buildD4EngineeringShakedownEvidenceFromUsed(input: {
     validForSurvivorSelection: false as const,
     validForOfficialSmoke: false as const,
     manifestSha256: input.plan.manifestSha256,
-    provider: input.provider,
+    provider,
     phase: input.phase,
     capturedAt: input.captured.toISOString(),
     validUntil: new Date(input.captured.getTime() + input.validityMs).toISOString(),
@@ -4047,13 +4075,13 @@ function buildD4EngineeringShakedownEvidenceFromUsed(input: {
     evidence,
     manifestSha256: input.plan.manifestSha256,
     phase: input.phase,
-    provider: input.provider,
+    modelId,
     now: input.captured,
   });
 }
 
-/** Native, per-dispatch shakedown quota reader. It reads only the selected
- * provider's live subscription windows (no cross-provider read, no layer
+/** Native, per-dispatch shakedown quota reader. It reads the selected model's
+ * applicable live subscription windows only (no cross-provider read, no layer
  * admission) immediately before each read, and forecasts exactly one next
  * model turn. */
 export function createD4EngineeringShakedownNativeQuotaReader(options: {
@@ -4092,7 +4120,6 @@ export function createD4EngineeringShakedownNativeQuotaReader(options: {
     return buildD4EngineeringShakedownEvidenceFromUsed({
       phase,
       plan,
-      provider,
       liveUsed,
       forecastBounds: options.forecastBounds,
       captured,
@@ -4109,11 +4136,106 @@ export interface D4EngineeringShakedownWindowDelta {
   readonly deltaPercent: number;
 }
 
+const shakedownVerdictSchema = z.enum(['pass', 'fail', 'not_evaluated']);
+
+/** The exported per-turn diagnostic report. It replaces the raw official
+ * `StewardWakeEvaluationReport` (which, being official-shaped, could be pushed
+ * into an official `reports[]`) with a distinct non-inferential object of its
+ * own schema/literals that carries only the verdicts. */
+export const d4EngineeringShakedownDiagnosticReportSchema = z.object({
+  schema: z.literal(D4_ENGINEERING_SHAKEDOWN_DIAGNOSTIC_REPORT_SCHEMA),
+  version: z.literal(D4_ENGINEERING_SHAKEDOWN_DIAGNOSTIC_REPORT_VERSION),
+  purpose: z.literal(D4_ENGINEERING_SHAKEDOWN_PURPOSE),
+  inferenceEligibility: z.literal('forbidden'),
+  eligibleForInference: z.literal(false),
+  validForRanking: z.literal(false),
+  validForSurvivorSelection: z.literal(false),
+  validForOfficialSmoke: z.literal(false),
+  wakeId: nonEmptyStringSchema,
+  protocolVerdict: shakedownVerdictSchema,
+  decisionVerdict: shakedownVerdictSchema,
+  executionVerdict: z.literal('not_evaluated'),
+}).strict();
+
+export type D4EngineeringShakedownDiagnosticReport = z.infer<typeof d4EngineeringShakedownDiagnosticReportSchema>;
+
+const shakedownWindowDeltaSchema = z.object({
+  id: nonEmptyStringSchema,
+  provider: z.enum(['codex', 'claude']),
+  beforePercent: percentageSchema,
+  afterPercent: percentageSchema,
+  deltaPercent: z.number().finite(),
+}).strict();
+
+const shakedownCredentialReceiptSchema = z.object({
+  provider: z.enum(['codex', 'claude']),
+  sourceIdentity: nonEmptyStringSchema,
+  sourcePathSha256: sha256Schema,
+  sourceSha256: sha256Schema,
+  byteLength: z.number().int().nonnegative(),
+  targetRelativePath: z.enum(['auth.json', '.credentials.json']),
+  unchangedAfterExecution: z.literal(true),
+}).strict();
+
+const shakedownCapabilityAttemptSchema = z.object({
+  sequence: z.number().int().positive(),
+  capability: z.enum(D4_SMOKE_FORBIDDEN_CAPABILITIES),
+  at: isoTimestampSchema,
+  detail: nonEmptyStringSchema.nullable(),
+}).strict();
+
+const shakedownTelemetrySchema = z.union([
+  z.null(),
+  z.object({
+    totalTokens: z.number(),
+    inputTokens: z.number(),
+    cachedInputTokens: z.number(),
+    outputTokens: z.number(),
+    contextWindow: z.number().nullable().optional(),
+    updatedAt: nonEmptyStringSchema,
+  }).passthrough(),
+]);
+
+/** Strict full artifact schema. Every top-level field, the nested quota
+ * evidence, the diagnostic report, telemetry, credential receipt, and
+ * capability attempts are validated — and because it is `.strict()`, any
+ * missing, extra, relabeled, or official-collection key (`status` / `reports`
+ * / `quotaEvidence`, or a raw `report`) is rejected. */
+export const d4EngineeringShakedownResultSchema = z.object({
+  schema: z.literal(D4_ENGINEERING_SHAKEDOWN_RESULT_SCHEMA),
+  version: z.literal(D4_ENGINEERING_SHAKEDOWN_RESULT_VERSION),
+  purpose: z.literal(D4_ENGINEERING_SHAKEDOWN_PURPOSE),
+  inferenceEligibility: z.literal('forbidden'),
+  eligibleForInference: z.literal(false),
+  validForRanking: z.literal(false),
+  validForSurvivorSelection: z.literal(false),
+  validForOfficialSmoke: z.literal(false),
+  shakedownExecutionId: nonEmptyStringSchema,
+  manifestSha256: sha256Schema,
+  provider: z.enum(['codex', 'claude']),
+  requestedModelId: nonEmptyStringSchema,
+  actualModelIds: z.array(nonEmptyStringSchema),
+  decisionIndex: z.number().int().min(0).max(D4_SMOKE_DECISION_COUNT - 1),
+  wakeId: nonEmptyStringSchema,
+  terminalStatus: nonEmptyStringSchema,
+  diagnosticReport: d4EngineeringShakedownDiagnosticReportSchema,
+  durationMs: z.number().nullable(),
+  latencyMs: z.number(),
+  tokenTelemetry: shakedownTelemetrySchema,
+  quota: z.object({
+    dispatch: d4EngineeringShakedownQuotaEvidenceSchema,
+    postTurn: d4EngineeringShakedownQuotaEvidenceSchema,
+    windowDeltas: z.array(shakedownWindowDeltaSchema),
+  }).strict(),
+  credential: shakedownCredentialReceiptSchema,
+  capabilityAttempts: z.array(shakedownCapabilityAttemptSchema),
+}).strict();
+
 /** The shakedown artifact. Structurally distinct from `D4SmokeExecutionResult`
- * (no `status`, no `reports[]`, no `quotaEvidence`) and carrying hard
- * non-inferential literals so it can never be relabeled as, or assigned to, an
- * official Smoke result. It records observations only — never a winner, score,
- * rank, survivor, profitability, or official-Smoke validity. */
+ * (no `status`, no `reports[]`, no `quotaEvidence`, no raw report) and carrying
+ * hard non-inferential literals so it can never be relabeled as, or assigned
+ * to, an official Smoke result. It records observations only — never a winner,
+ * score, rank, survivor, profitability, or official-Smoke validity. */
 export interface D4EngineeringShakedownResult {
   readonly schema: typeof D4_ENGINEERING_SHAKEDOWN_RESULT_SCHEMA;
   readonly version: typeof D4_ENGINEERING_SHAKEDOWN_RESULT_VERSION;
@@ -4131,11 +4253,8 @@ export interface D4EngineeringShakedownResult {
   readonly decisionIndex: number;
   readonly wakeId: string;
   readonly terminalStatus: string;
-  readonly protocolVerdict: StewardWakeEvaluationReport['protocol']['verdict'];
-  readonly decisionVerdict: StewardWakeEvaluationReport['decision']['verdict'];
-  readonly executionVerdict: 'not_evaluated';
-  /** Exactly one per-turn evaluation report — not the official `reports[]`. */
-  readonly report: StewardWakeEvaluationReport;
+  /** A distinct non-inferential diagnostic report — never the raw official report. */
+  readonly diagnosticReport: D4EngineeringShakedownDiagnosticReport;
   readonly durationMs: number | null;
   readonly latencyMs: number;
   readonly tokenTelemetry: ThreadTelemetry | null;
@@ -4147,17 +4266,6 @@ export interface D4EngineeringShakedownResult {
   readonly credential: D4SmokeCredentialReceipt;
   readonly capabilityAttempts: readonly D4SmokeCapabilityAttempt[];
 }
-
-const d4EngineeringShakedownResultLabelSchema = z.object({
-  schema: z.literal(D4_ENGINEERING_SHAKEDOWN_RESULT_SCHEMA),
-  version: z.literal(D4_ENGINEERING_SHAKEDOWN_RESULT_VERSION),
-  purpose: z.literal(D4_ENGINEERING_SHAKEDOWN_PURPOSE),
-  inferenceEligibility: z.literal('forbidden'),
-  eligibleForInference: z.literal(false),
-  validForRanking: z.literal(false),
-  validForSurvivorSelection: z.literal(false),
-  validForOfficialSmoke: z.literal(false),
-}).passthrough();
 
 /** Official-Smoke result collection keys the shakedown artifact must never
  * carry — the mechanical block against ingestion by an official result path. */
@@ -4175,7 +4283,7 @@ export function assertD4EngineeringShakedownNonInferential(result: unknown): D4E
       );
     }
   }
-  const parsed = d4EngineeringShakedownResultLabelSchema.safeParse(result);
+  const parsed = d4EngineeringShakedownResultSchema.safeParse(result);
   if (!parsed.success) {
     throw new D4EngineeringShakedownError('artifact_invalid', formatZodIssues(parsed.error));
   }
@@ -4376,8 +4484,8 @@ export async function runD4EngineeringShakedown(
       decisionIndex,
       values: [prompt, ...prepared.candidateVisibleBytes],
     });
-    // Fresh, reserve-gated read of every applicable native window for this exact
-    // model/provider, immediately before the single dispatch.
+    // Fresh, reserve-gated read of this exact model's applicable native windows,
+    // immediately before the single dispatch.
     const dispatchPhase = {
       kind: 'shakedown_dispatch',
       shakedownExecutionId: plan.shakedownExecutionId,
@@ -4388,7 +4496,7 @@ export async function runD4EngineeringShakedown(
       evidence: await input.quotaReader(dispatchPhase, plan),
       manifestSha256: stage.manifestSha256,
       phase: dispatchPhase,
-      provider,
+      modelId: plan.candidate.modelId,
       now: now(),
     });
     auditCursor = await syncD4SmokeAuditLedger(plan.paths.auditCallLedger, input.auditLedger, auditCursor);
@@ -4424,6 +4532,24 @@ export async function runD4EngineeringShakedown(
     }
     assertD4ActualModelIds(outcome.actualModelIds, plan.candidate.modelId, wakeId);
     auditCursor = await syncD4SmokeAuditLedger(plan.paths.auditCallLedger, input.auditLedger, auditCursor);
+    // The completed provider turn consumed quota: snapshot it now (fresh, NOT
+    // treated as admission — no reserve gate) so it is accounted before terminal
+    // parsing. A runtime defect below still throws and is preserved by the
+    // deterministic sandbox/operator artifact.
+    tokenTelemetry = driver.readTelemetry(thread.threadId) ?? tokenTelemetry;
+    const postTurnPhase = {
+      kind: 'shakedown_post_turn',
+      shakedownExecutionId: plan.shakedownExecutionId,
+      decisionIndex,
+      wakeId,
+    } as const;
+    postTurnQuota = validateD4EngineeringShakedownQuotaEvidence({
+      evidence: await input.quotaReader(postTurnPhase, plan),
+      manifestSha256: stage.manifestSha256,
+      phase: postTurnPhase,
+      modelId: plan.candidate.modelId,
+      now: now(),
+    });
     if (auditAppendFailure) {
       throw new D4SmokePolicyError(
         'terminal_artifact_invalid',
@@ -4437,22 +4563,6 @@ export async function runD4EngineeringShakedown(
       );
     }
     input.auditLedger.assertZero();
-    tokenTelemetry = driver.readTelemetry(thread.threadId) ?? tokenTelemetry;
-    // Fresh post-turn snapshot — reported for before/after/delta, NOT treated as
-    // admission (no reserve gate applies to the post-turn read).
-    const postTurnPhase = {
-      kind: 'shakedown_post_turn',
-      shakedownExecutionId: plan.shakedownExecutionId,
-      decisionIndex,
-      wakeId,
-    } as const;
-    postTurnQuota = validateD4EngineeringShakedownQuotaEvidence({
-      evidence: await input.quotaReader(postTurnPhase, plan),
-      manifestSha256: stage.manifestSha256,
-      phase: postTurnPhase,
-      provider,
-      now: now(),
-    });
     const terminal = await input.readTerminalArtifact({
       executionId: plan.shakedownExecutionId,
       wakeId,
@@ -4534,6 +4644,24 @@ export async function runD4EngineeringShakedown(
     },
   );
 
+  // Derive the exported diagnostic report from the internal official report,
+  // which is never itself exposed (an official-shaped report could be pushed
+  // into an official `reports[]`).
+  const diagnosticReport: D4EngineeringShakedownDiagnosticReport = {
+    schema: D4_ENGINEERING_SHAKEDOWN_DIAGNOSTIC_REPORT_SCHEMA,
+    version: D4_ENGINEERING_SHAKEDOWN_DIAGNOSTIC_REPORT_VERSION,
+    purpose: D4_ENGINEERING_SHAKEDOWN_PURPOSE,
+    inferenceEligibility: 'forbidden',
+    eligibleForInference: false,
+    validForRanking: false,
+    validForSurvivorSelection: false,
+    validForOfficialSmoke: false,
+    wakeId: wakeId!,
+    protocolVerdict: report!.protocol.verdict,
+    decisionVerdict: report!.decision.verdict,
+    executionVerdict: 'not_evaluated',
+  };
+
   const result: D4EngineeringShakedownResult = {
     schema: D4_ENGINEERING_SHAKEDOWN_RESULT_SCHEMA,
     version: D4_ENGINEERING_SHAKEDOWN_RESULT_VERSION,
@@ -4551,10 +4679,7 @@ export async function runD4EngineeringShakedown(
     decisionIndex,
     wakeId: wakeId!,
     terminalStatus: terminalStatus!,
-    protocolVerdict: report!.protocol.verdict,
-    decisionVerdict: report!.decision.verdict,
-    executionVerdict: 'not_evaluated',
-    report: report!,
+    diagnosticReport,
     durationMs,
     latencyMs,
     tokenTelemetry,

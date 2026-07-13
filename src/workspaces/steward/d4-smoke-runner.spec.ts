@@ -12,6 +12,7 @@ import {
   D4_SMOKE_QUOTA_WINDOWS,
   D4_SMOKE_CLAUDE_SETTINGS,
   D4_SMOKE_MODEL_TURN_COUNT,
+  D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS,
   D4_ENGINEERING_SHAKEDOWN_MODEL_TURN_COUNT,
   D4SmokeCapabilityAuditLedger,
   D4EngineeringShakedownError,
@@ -2109,9 +2110,11 @@ function shakedownPhase(
 function shakedownQuotaEvidence(
   manifestSha256: string,
   phase: D4ShakedownQuotaPhase,
-  provider: 'codex' | 'claude',
+  modelId: keyof typeof D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS,
   usedPercent = 10,
 ) {
+  const applicable = D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS[modelId];
+  const provider = modelId.startsWith('claude') ? 'claude' : 'codex';
   return {
     schema: 'steward-d4-engineering-shakedown-quota/1',
     version: 1,
@@ -2131,26 +2134,95 @@ function shakedownQuotaEvidence(
       actualIncrementalSpendUsd: 0,
       forecastIncrementalSpendUsd: 0,
       subscriptionQuota: {
-        windows: D4_SMOKE_QUOTA_WINDOWS
-          .filter((window) => window.provider === provider)
-          .map((window) => ({
-            id: window.id,
-            provider: window.provider,
-            usedPercent,
-            perTurnForecastAdditionalPercent: 0.5,
-            sourceIdentity: `fixture:${window.id}`,
-            forecast: {
-              basis: 'observed_delta_upper_bound_single_turn',
-              observedDeltaUpperBoundPercentPerModelTurn: 0.5,
-              forecastModelTurnCount: 1,
-              observationCount: 3,
-              observedAt: '2026-07-13T11:50:00.000Z',
-              sourceIdentity: `fixture-observed:${window.id}`,
-            },
-          })),
+        windows: applicable.map((id) => ({
+          id,
+          provider,
+          usedPercent,
+          perTurnForecastAdditionalPercent: 0.5,
+          sourceIdentity: `fixture:${id}`,
+          forecast: {
+            basis: 'observed_delta_upper_bound_single_turn',
+            observedDeltaUpperBoundPercentPerModelTurn: 0.5,
+            forecastModelTurnCount: 1,
+            observationCount: 3,
+            observedAt: '2026-07-13T11:50:00.000Z',
+            sourceIdentity: `fixture-observed:${id}`,
+          },
+        })),
       },
       shadowApiEquivalent: { status: 'unknown', amountUsd: null },
     },
+  };
+}
+
+function validShakedownResult(): D4EngineeringShakedownResult {
+  const shakedownExecutionId = 'engineering-shakedown:claude:claude-fable-5:d4-crypto-major-bull-a:d01';
+  const wakeId = `wake:${'a'.repeat(64)}`;
+  const manifestSha256 = 'a'.repeat(64);
+  return {
+    schema: 'steward-d4-engineering-shakedown-result/1',
+    version: 1,
+    purpose: 'engineering_shakedown',
+    inferenceEligibility: 'forbidden',
+    eligibleForInference: false,
+    validForRanking: false,
+    validForSurvivorSelection: false,
+    validForOfficialSmoke: false,
+    shakedownExecutionId,
+    manifestSha256,
+    provider: 'claude',
+    requestedModelId: 'claude-fable-5',
+    actualModelIds: ['claude-fable-5'],
+    decisionIndex: 0,
+    wakeId,
+    terminalStatus: 'completed',
+    diagnosticReport: {
+      schema: 'steward-d4-engineering-shakedown-diagnostic-report/1',
+      version: 1,
+      purpose: 'engineering_shakedown',
+      inferenceEligibility: 'forbidden',
+      eligibleForInference: false,
+      validForRanking: false,
+      validForSurvivorSelection: false,
+      validForOfficialSmoke: false,
+      wakeId,
+      protocolVerdict: 'pass',
+      decisionVerdict: 'pass',
+      executionVerdict: 'not_evaluated',
+    },
+    durationMs: 1,
+    latencyMs: 0,
+    tokenTelemetry: null,
+    quota: {
+      dispatch: shakedownQuotaEvidence(
+        manifestSha256,
+        shakedownPhase(shakedownExecutionId, 'shakedown_dispatch'),
+        'claude-fable-5',
+      ) as unknown as D4EngineeringShakedownQuotaEvidence,
+      postTurn: shakedownQuotaEvidence(
+        manifestSha256,
+        shakedownPhase(shakedownExecutionId, 'shakedown_post_turn'),
+        'claude-fable-5',
+        11,
+      ) as unknown as D4EngineeringShakedownQuotaEvidence,
+      windowDeltas: D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS['claude-fable-5'].map((id) => ({
+        id,
+        provider: 'claude' as const,
+        beforePercent: 10,
+        afterPercent: 11,
+        deltaPercent: 1,
+      })),
+    },
+    credential: {
+      provider: 'claude',
+      sourceIdentity: 'claude-max-oauth',
+      sourcePathSha256: 'b'.repeat(64),
+      sourceSha256: 'c'.repeat(64),
+      byteLength: 100,
+      targetRelativePath: '.credentials.json',
+      unchangedAfterExecution: true,
+    },
+    capabilityAttempts: [],
   };
 }
 
@@ -2166,7 +2238,7 @@ describe('D4 engineering shakedown (issue #205)', () => {
     const shakedown = shakedownQuotaEvidence(
       fixture.manifestSha256,
       shakedownPhase(executionId, 'shakedown_dispatch'),
-      'claude',
+      'claude-fable-5',
     );
     // The official quota schema/validator can never ingest a shakedown artifact.
     expect(d4SmokeQuotaEvidenceSchema.safeParse(shakedown).success).toBe(false);
@@ -2208,21 +2280,21 @@ describe('D4 engineering shakedown (issue #205)', () => {
       .toThrow(/selection_invalid/);
   });
 
-  it('enforces single-turn quota math, exact windows, the reserve gate, and fails closed', async () => {
+  it('enforces single-turn quota math, the reserve gate, and fails closed', async () => {
     const fixture = await createD4SmokeTestFixture();
     const executionId = 'engineering-shakedown:claude:claude-fable-5:d4-crypto-major-bull-a:d01';
     const dispatchPhase = shakedownPhase(executionId, 'shakedown_dispatch');
-    const base = shakedownQuotaEvidence(fixture.manifestSha256, dispatchPhase, 'claude');
+    const base = shakedownQuotaEvidence(fixture.manifestSha256, dispatchPhase, 'claude-fable-5');
     const validate = (overrides: {
       evidence?: unknown;
       phase?: D4ShakedownQuotaPhase;
-      provider?: 'codex' | 'claude';
+      modelId?: keyof typeof D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS;
       now?: Date;
     } = {}) => validateD4EngineeringShakedownQuotaEvidence({
       evidence: overrides.evidence ?? base,
       manifestSha256: fixture.manifestSha256,
       phase: overrides.phase ?? dispatchPhase,
-      provider: overrides.provider ?? 'claude',
+      modelId: overrides.modelId ?? 'claude-fable-5',
       now: overrides.now ?? NOW,
     });
 
@@ -2231,12 +2303,9 @@ describe('D4 engineering shakedown (issue #205)', () => {
       window.forecast.forecastModelTurnCount === 1
       && window.perTurnForecastAdditionalPercent
         === window.forecast.observedDeltaUpperBoundPercentPerModelTurn)).toBe(true);
-    // Only the selected provider's windows are read.
-    expect(validate().cost.subscriptionQuota.windows.map((window) => window.provider)).toEqual([
-      'claude', 'claude', 'claude',
-    ]);
     expect(() => validate({ now: new Date('2026-07-13T12:06:00.000Z') })).toThrow(/stale/);
-    expect(() => validate({ provider: 'codex' })).toThrow(/invalid|incomplete/);
+    // Evidence built for one model does not satisfy another model's window set.
+    expect(() => validate({ modelId: 'claude-sonnet-5' })).toThrow(/invalid|incomplete/);
 
     const mismatched = clone(base);
     mismatched.cost.subscriptionQuota.windows[0]!.perTurnForecastAdditionalPercent = 5;
@@ -2249,7 +2318,7 @@ describe('D4 engineering shakedown (issue #205)', () => {
 
     // The fresh post-turn snapshot is reported, never treated as admission.
     const postPhase = shakedownPhase(executionId, 'shakedown_post_turn');
-    const postExhausted = shakedownQuotaEvidence(fixture.manifestSha256, postPhase, 'claude', 79.6);
+    const postExhausted = shakedownQuotaEvidence(fixture.manifestSha256, postPhase, 'claude-fable-5', 79.6);
     expect(() => validate({ evidence: postExhausted, phase: postPhase })).not.toThrow();
 
     // The official full-run 1296 forecast is never admissible here.
@@ -2258,25 +2327,71 @@ describe('D4 engineering shakedown (issue #205)', () => {
     expect(() => validate({ evidence: officialTurnCount })).toThrow(/invalid/);
   });
 
-  it('marks shakedown artifacts non-inferential and rejects relabeling or official keys', () => {
-    const label = {
-      schema: 'steward-d4-engineering-shakedown-result/1',
-      version: 1,
-      purpose: 'engineering_shakedown',
-      inferenceEligibility: 'forbidden',
-      eligibleForInference: false,
-      validForRanking: false,
-      validForSurvivorSelection: false,
-      validForOfficialSmoke: false,
-    };
-    expect(assertD4EngineeringShakedownNonInferential(label)).toBe(label);
-    expect(() => assertD4EngineeringShakedownNonInferential({ ...label, validForOfficialSmoke: true }))
+  it.each(
+    Object.entries(D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS) as Array<
+      [keyof typeof D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS, readonly string[]]
+    >,
+  )('requires exactly %s\'s applicable windows and fails closed on drift', (modelId, expectedIds) => {
+    const manifestSha256 = 'a'.repeat(64);
+    const executionId = `engineering-shakedown:x:${modelId}:d4-crypto-major-bull-a:d01`;
+    const phase = shakedownPhase(executionId, 'shakedown_dispatch');
+    const validate = (evidence: unknown) => validateD4EngineeringShakedownQuotaEvidence({
+      evidence,
+      manifestSha256,
+      phase,
+      modelId,
+      now: NOW,
+    });
+
+    const base = shakedownQuotaEvidence(manifestSha256, phase, modelId);
+    // The applicable ordered set, exactly.
+    expect(validate(base).cost.subscriptionQuota.windows.map((window) => window.id)).toEqual(expectedIds);
+
+    // A missing applicable window fails closed.
+    const missing = clone(base);
+    missing.cost.subscriptionQuota.windows.pop();
+    expect(() => validate(missing)).toThrow(/incomplete|invalid/);
+
+    // An extra, non-applicable window fails closed.
+    const extraId = D4_SMOKE_QUOTA_WINDOWS.map((window) => window.id).find((id) => !expectedIds.includes(id))!;
+    const extra = clone(base);
+    extra.cost.subscriptionQuota.windows.push({
+      ...clone(base.cost.subscriptionQuota.windows[0]!),
+      id: extraId,
+    });
+    expect(() => validate(extra)).toThrow(/incomplete|invalid/);
+  });
+
+  it('validates the full result strictly and rejects label-only, relabeled, or official-key artifacts', () => {
+    const valid = validShakedownResult();
+    expect(assertD4EngineeringShakedownNonInferential(valid)).toBe(valid);
+
+    // A label-only object no longer passes: the strict schema needs every field.
+    const {
+      schema, version, purpose, inferenceEligibility, eligibleForInference,
+      validForRanking, validForSurvivorSelection, validForOfficialSmoke,
+    } = valid;
+    expect(() => assertD4EngineeringShakedownNonInferential({
+      schema, version, purpose, inferenceEligibility, eligibleForInference,
+      validForRanking, validForSurvivorSelection, validForOfficialSmoke,
+    })).toThrow(/artifact_invalid/);
+
+    // Missing a required field.
+    const { manifestSha256: _dropped, ...missing } = valid;
+    expect(() => assertD4EngineeringShakedownNonInferential(missing)).toThrow(/artifact_invalid/);
+    // An unknown/extra field (strict schema).
+    expect(() => assertD4EngineeringShakedownNonInferential({ ...valid, extra: true })).toThrow(/artifact_invalid/);
+    // A raw official-shaped report is not an allowed property.
+    expect(() => assertD4EngineeringShakedownNonInferential({ ...valid, report: {} })).toThrow(/artifact_invalid/);
+    // Relabeling attempts.
+    expect(() => assertD4EngineeringShakedownNonInferential({ ...valid, validForOfficialSmoke: true }))
       .toThrow(D4EngineeringShakedownError);
-    expect(() => assertD4EngineeringShakedownNonInferential({ ...label, purpose: 'official_smoke' }))
+    expect(() => assertD4EngineeringShakedownNonInferential({ ...valid, purpose: 'official_smoke' }))
       .toThrow(/artifact_invalid/);
-    expect(() => assertD4EngineeringShakedownNonInferential({ ...label, reports: [] })).toThrow(/reports/);
-    expect(() => assertD4EngineeringShakedownNonInferential({ ...label, status: 'valid' })).toThrow(/status/);
-    expect(() => assertD4EngineeringShakedownNonInferential({ ...label, quotaEvidence: {} })).toThrow(/quotaEvidence/);
+    // Official-Smoke result collection keys are rejected with a targeted message.
+    expect(() => assertD4EngineeringShakedownNonInferential({ ...valid, reports: [] })).toThrow(/reports/);
+    expect(() => assertD4EngineeringShakedownNonInferential({ ...valid, status: 'valid' })).toThrow(/status/);
+    expect(() => assertD4EngineeringShakedownNonInferential({ ...valid, quotaEvidence: {} })).toThrow(/quotaEvidence/);
   });
 
   it('rejects test seams on the shakedown filesystem entrypoint before any dispatch', async () => {
@@ -2330,7 +2445,7 @@ describe('D4 engineering shakedown (issue #205)', () => {
           return shakedownQuotaEvidence(
             fixture.manifestSha256,
             phase,
-            quotaPlan.candidate.provider,
+            quotaPlan.candidate.modelId as keyof typeof D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS,
             phase.kind === 'shakedown_post_turn' ? 11 : 10,
           );
         },
@@ -2364,7 +2479,7 @@ describe('D4 engineering shakedown (issue #205)', () => {
       // One pre-dispatch read + one fresh post-turn read.
       expect(phases.map((phase) => phase.kind)).toEqual(['shakedown_dispatch', 'shakedown_post_turn']);
 
-      // Non-inferential, single-report artifact — NOT the official collection shape.
+      // Non-inferential artifact — NOT the official collection shape and NO raw report.
       expect(result.purpose).toBe('engineering_shakedown');
       expect(result.inferenceEligibility).toBe('forbidden');
       expect(result.eligibleForInference).toBe(false);
@@ -2373,11 +2488,17 @@ describe('D4 engineering shakedown (issue #205)', () => {
       expect(result.validForOfficialSmoke).toBe(false);
       expect(result).not.toHaveProperty('status');
       expect(result).not.toHaveProperty('reports');
+      expect(result).not.toHaveProperty('report');
       expect(result).not.toHaveProperty('quotaEvidence');
-      expect(result.report.wakeId).toBe(result.wakeId);
-      expect(result.protocolVerdict).toBe('pass');
-      expect(result.decisionVerdict).toBe('pass');
-      expect(result.executionVerdict).toBe('not_evaluated');
+      // Verdicts live only in the distinct diagnostic report, carrying its own literals.
+      expect(result.diagnosticReport.schema).toBe('steward-d4-engineering-shakedown-diagnostic-report/1');
+      expect(result.diagnosticReport.purpose).toBe('engineering_shakedown');
+      expect(result.diagnosticReport.eligibleForInference).toBe(false);
+      expect(result.diagnosticReport.validForOfficialSmoke).toBe(false);
+      expect(result.diagnosticReport.wakeId).toBe(result.wakeId);
+      expect(result.diagnosticReport.protocolVerdict).toBe('pass');
+      expect(result.diagnosticReport.decisionVerdict).toBe('pass');
+      expect(result.diagnosticReport.executionVerdict).toBe('not_evaluated');
       expect(result.terminalStatus).toBe('completed');
       expect(result.durationMs).toBe(1);
       expect(result.latencyMs).toBe(0);
@@ -2390,11 +2511,11 @@ describe('D4 engineering shakedown (issue #205)', () => {
       expect(result.credential).toMatchObject({ provider: 'claude', unchangedAfterExecution: true });
       expect(result.capabilityAttempts).toEqual([]);
 
-      // Per-window before/after/delta for exactly the selected provider's windows.
+      // Per-window before/after/delta for exactly claude-fable-5's applicable windows.
       expect(result.quota.dispatch.phase.kind).toBe('shakedown_dispatch');
       expect(result.quota.postTurn.phase.kind).toBe('shakedown_post_turn');
       expect(result.quota.windowDeltas.map((delta) => delta.id)).toEqual(
-        D4_SMOKE_QUOTA_WINDOWS.filter((window) => window.provider === 'claude').map((window) => window.id),
+        D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS['claude-fable-5'],
       );
       expect(result.quota.windowDeltas.every((delta) =>
         delta.beforePercent === 10 && delta.afterPercent === 11 && delta.deltaPercent === 1)).toBe(true);
