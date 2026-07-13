@@ -1,8 +1,0 @@
-{
-  "schema": "steward-d4-critic-receipt/1",
-  "version": 1,
-  "manifestSha256": "c7c3231ac811d4eb0589a771c07ee38034bc69227602c12df14fe1057baf143e",
-  "reviewerIdentity": "paseo-cleanroom-claude-runtime-critic:752cf7b0-cf9f-4e26-b41a-a66303d01d46",
-  "verdict": "APPROVE",
-  "reviewedCommit": "72dd3fd93e05083df93488c739a3d0197b2d3eb3"
-}
