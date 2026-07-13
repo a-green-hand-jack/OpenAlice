@@ -11,32 +11,48 @@ import { createStewardEvaluationProvenanceStore } from './evaluation-provenance-
 import {
   D4_SMOKE_QUOTA_WINDOWS,
   D4_SMOKE_CLAUDE_SETTINGS,
+  D4_SMOKE_MODEL_TURN_COUNT,
+  D4_ENGINEERING_SHAKEDOWN_MODEL_TURN_COUNT,
   D4SmokeCapabilityAuditLedger,
+  D4EngineeringShakedownError,
   assertD4ActualModelIds,
   assertD4CandidateVisibleBytes,
+  assertD4EngineeringShakedownNonInferential,
   classifyD4SmokeShimAttempt,
   captureD4SmokeIsolatedPreflightQuota,
   createD4SmokeForbiddenCapabilityBoundaries,
   createD4SmokeFilesystemWorkspaceAdapter,
   createD4SmokeNativeDriverFactory,
   createD4SmokeLiveQuotaReader,
+  d4EngineeringShakedownQuotaEvidenceSchema,
+  d4SmokeQuotaEvidenceSchema,
   deriveD4SmokeQuotaForecastBounds,
   dryRunD4Smoke,
   fictionalD4SmokeTimeline,
   installD4SmokeAuditShims,
+  planD4EngineeringShakedown,
   planD4SmokeExecutions,
+  runD4EngineeringShakedown,
+  runD4EngineeringShakedownFilesystem,
   runD4SmokeExecution,
   runD4SmokeFilesystemExecution,
   resolveD4CodexNativeRuntime,
+  validateD4EngineeringShakedownQuotaEvidence,
   validateD4SmokeExecutionPlan,
   validateD4SmokeQuotaEvidence,
+  type D4EngineeringShakedownQuotaEvidence,
+  type D4EngineeringShakedownResult,
+  type D4EngineeringShakedownSelector,
+  type D4ShakedownQuotaPhase,
   type D4SmokeDriverBinding,
   type D4SmokeExecutionPlan,
+  type D4SmokeExecutionResult,
   type D4SmokeFilesystemExecutionInput,
+  type D4SmokeQuotaEvidence,
   type D4SmokeQuotaPhase,
   type D4SmokeQuotaForecastBounds,
 } from './d4-smoke-runner.js';
-import { validateD4SmokeStage } from './d4-smoke-stage-manifest.js';
+import { D4_SMOKE_EXECUTION_COUNT, validateD4SmokeStage } from './d4-smoke-stage-manifest.js';
 import {
   D4_SMOKE_TEST_GIT_VERIFIER,
   createD4SmokeTestFixture,
@@ -2073,3 +2089,322 @@ function d3Manifest(wakeId: string): StewardEvaluationDataManifest {
     },
   };
 }
+
+// Compile-time proof (issue #205 invariant 2/6): the shakedown artifact and
+// quota types are NOT assignable to their official Smoke counterparts. If a
+// future edit made either assignable, the conditional type resolves to `false`
+// and this assignment fails to compile.
+type ShakedownResultNotOfficial = D4EngineeringShakedownResult extends D4SmokeExecutionResult ? false : true;
+type ShakedownQuotaNotOfficial = D4EngineeringShakedownQuotaEvidence extends D4SmokeQuotaEvidence ? false : true;
+const SHAKEDOWN_RESULT_NOT_OFFICIAL: ShakedownResultNotOfficial = true;
+const SHAKEDOWN_QUOTA_NOT_OFFICIAL: ShakedownQuotaNotOfficial = true;
+
+function shakedownPhase(
+  shakedownExecutionId: string,
+  kind: 'shakedown_dispatch' | 'shakedown_post_turn',
+): D4ShakedownQuotaPhase {
+  return { kind, shakedownExecutionId, decisionIndex: 0, wakeId: 'wake:fixture' };
+}
+
+function shakedownQuotaEvidence(
+  manifestSha256: string,
+  phase: D4ShakedownQuotaPhase,
+  provider: 'codex' | 'claude',
+  usedPercent = 10,
+) {
+  return {
+    schema: 'steward-d4-engineering-shakedown-quota/1',
+    version: 1,
+    purpose: 'engineering_shakedown',
+    eligibleForInference: false,
+    inferenceEligibility: 'forbidden',
+    validForRanking: false,
+    validForSurvivorSelection: false,
+    validForOfficialSmoke: false,
+    manifestSha256,
+    provider,
+    phase,
+    capturedAt: '2026-07-13T11:59:30.000Z',
+    validUntil: '2026-07-13T12:05:00.000Z',
+    forecastModelTurnCount: 1,
+    cost: {
+      actualIncrementalSpendUsd: 0,
+      forecastIncrementalSpendUsd: 0,
+      subscriptionQuota: {
+        windows: D4_SMOKE_QUOTA_WINDOWS
+          .filter((window) => window.provider === provider)
+          .map((window) => ({
+            id: window.id,
+            provider: window.provider,
+            usedPercent,
+            perTurnForecastAdditionalPercent: 0.5,
+            sourceIdentity: `fixture:${window.id}`,
+            forecast: {
+              basis: 'observed_delta_upper_bound_single_turn',
+              observedDeltaUpperBoundPercentPerModelTurn: 0.5,
+              forecastModelTurnCount: 1,
+              observationCount: 3,
+              observedAt: '2026-07-13T11:50:00.000Z',
+              sourceIdentity: `fixture-observed:${window.id}`,
+            },
+          })),
+      },
+      shadowApiEquivalent: { status: 'unknown', amountUsd: null },
+    },
+  };
+}
+
+describe('D4 engineering shakedown (issue #205)', () => {
+  it('keeps 108/1296 official counts intact and blocks shakedown/official schema crossover', async () => {
+    const fixture = await createD4SmokeTestFixture();
+    expect(D4_SMOKE_EXECUTION_COUNT).toBe(108);
+    expect(D4_SMOKE_MODEL_TURN_COUNT).toBe(1296);
+    expect(D4_ENGINEERING_SHAKEDOWN_MODEL_TURN_COUNT).toBe(1);
+    expect(SHAKEDOWN_RESULT_NOT_OFFICIAL && SHAKEDOWN_QUOTA_NOT_OFFICIAL).toBe(true);
+
+    const executionId = 'engineering-shakedown:claude:claude-fable-5:d4-crypto-major-bull-a:d01';
+    const shakedown = shakedownQuotaEvidence(
+      fixture.manifestSha256,
+      shakedownPhase(executionId, 'shakedown_dispatch'),
+      'claude',
+    );
+    // The official quota schema/validator can never ingest a shakedown artifact.
+    expect(d4SmokeQuotaEvidenceSchema.safeParse(shakedown).success).toBe(false);
+    expect(() => validateD4SmokeQuotaEvidence({
+      evidence: shakedown,
+      manifestSha256: fixture.manifestSha256,
+      phase: { kind: 'layer_admission' },
+      now: NOW,
+    })).toThrow();
+    // And the shakedown schema rejects an official-Smoke evidence artifact.
+    const official = quotaEvidence(fixture.manifestSha256, { kind: 'layer_admission' });
+    expect(d4EngineeringShakedownQuotaEvidenceSchema.safeParse(official).success).toBe(false);
+  });
+
+  it('namespaces shakedown execution ids and sandbox roots away from official Smoke', async () => {
+    const fixture = await createD4SmokeTestFixture();
+    const stage = await validateD4SmokeStage({
+      ...fixture,
+      repoRoot: process.cwd(),
+      gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+    });
+    const sandboxBase = '/tmp/d4-shakedown-plan';
+    const officialPlans = planD4SmokeExecutions(stage, sandboxBase);
+    const cellId = stage.manifest.content.cells[0]!.id;
+    const selector: D4EngineeringShakedownSelector = { modelId: 'claude-fable-5', cellId, decisionIndex: 0 };
+    const plan = planD4EngineeringShakedown(stage, sandboxBase, selector);
+
+    expect(plan.purpose).toBe('engineering_shakedown');
+    expect(plan.decisionIndex).toBe(0);
+    expect(plan.shakedownExecutionId.startsWith('engineering-shakedown:')).toBe(true);
+    expect(officialPlans.map((official) => official.executionId)).not.toContain(plan.shakedownExecutionId);
+    expect(new Set(officialPlans.map((official) => official.paths.root)).has(plan.paths.root)).toBe(false);
+    expect(plan.paths.root.includes('engineering-shakedown-')).toBe(true);
+    expect(() => planD4EngineeringShakedown(stage, sandboxBase, { ...selector, modelId: 'gpt-not-real' }))
+      .toThrow(/selection_invalid/);
+    expect(() => planD4EngineeringShakedown(stage, sandboxBase, { ...selector, cellId: 'no-such-cell' }))
+      .toThrow(/selection_invalid/);
+    expect(() => planD4EngineeringShakedown(stage, sandboxBase, { ...selector, decisionIndex: 12 }))
+      .toThrow(/selection_invalid/);
+  });
+
+  it('enforces single-turn quota math, exact windows, the reserve gate, and fails closed', async () => {
+    const fixture = await createD4SmokeTestFixture();
+    const executionId = 'engineering-shakedown:claude:claude-fable-5:d4-crypto-major-bull-a:d01';
+    const dispatchPhase = shakedownPhase(executionId, 'shakedown_dispatch');
+    const base = shakedownQuotaEvidence(fixture.manifestSha256, dispatchPhase, 'claude');
+    const validate = (overrides: {
+      evidence?: unknown;
+      phase?: D4ShakedownQuotaPhase;
+      provider?: 'codex' | 'claude';
+      now?: Date;
+    } = {}) => validateD4EngineeringShakedownQuotaEvidence({
+      evidence: overrides.evidence ?? base,
+      manifestSha256: fixture.manifestSha256,
+      phase: overrides.phase ?? dispatchPhase,
+      provider: overrides.provider ?? 'claude',
+      now: overrides.now ?? NOW,
+    });
+
+    // Valid: per-window per-turn forecast is exactly the observed delta * one turn.
+    expect(validate().cost.subscriptionQuota.windows.every((window) =>
+      window.forecast.forecastModelTurnCount === 1
+      && window.perTurnForecastAdditionalPercent
+        === window.forecast.observedDeltaUpperBoundPercentPerModelTurn)).toBe(true);
+    // Only the selected provider's windows are read.
+    expect(validate().cost.subscriptionQuota.windows.map((window) => window.provider)).toEqual([
+      'claude', 'claude', 'claude',
+    ]);
+    expect(() => validate({ now: new Date('2026-07-13T12:06:00.000Z') })).toThrow(/stale/);
+    expect(() => validate({ provider: 'codex' })).toThrow(/invalid|incomplete/);
+
+    const mismatched = clone(base);
+    mismatched.cost.subscriptionQuota.windows[0]!.perTurnForecastAdditionalPercent = 5;
+    expect(() => validate({ evidence: mismatched })).toThrow(/single-turn forecast/);
+
+    // Reserve: stop before current + one-turn forecast can reach 80%.
+    const exhausted = clone(base);
+    exhausted.cost.subscriptionQuota.windows[0]!.usedPercent = 79.6;
+    expect(() => validate({ evidence: exhausted })).toThrow(/reserve_exhausted/);
+
+    // The fresh post-turn snapshot is reported, never treated as admission.
+    const postPhase = shakedownPhase(executionId, 'shakedown_post_turn');
+    const postExhausted = shakedownQuotaEvidence(fixture.manifestSha256, postPhase, 'claude', 79.6);
+    expect(() => validate({ evidence: postExhausted, phase: postPhase })).not.toThrow();
+
+    // The official full-run 1296 forecast is never admissible here.
+    const officialTurnCount = clone(base) as unknown as { forecastModelTurnCount: number };
+    officialTurnCount.forecastModelTurnCount = 1296;
+    expect(() => validate({ evidence: officialTurnCount })).toThrow(/invalid/);
+  });
+
+  it('marks shakedown artifacts non-inferential and rejects relabeling or official keys', () => {
+    const label = {
+      schema: 'steward-d4-engineering-shakedown-result/1',
+      version: 1,
+      purpose: 'engineering_shakedown',
+      inferenceEligibility: 'forbidden',
+      eligibleForInference: false,
+      validForRanking: false,
+      validForSurvivorSelection: false,
+      validForOfficialSmoke: false,
+    };
+    expect(assertD4EngineeringShakedownNonInferential(label)).toBe(label);
+    expect(() => assertD4EngineeringShakedownNonInferential({ ...label, validForOfficialSmoke: true }))
+      .toThrow(D4EngineeringShakedownError);
+    expect(() => assertD4EngineeringShakedownNonInferential({ ...label, purpose: 'official_smoke' }))
+      .toThrow(/artifact_invalid/);
+    expect(() => assertD4EngineeringShakedownNonInferential({ ...label, reports: [] })).toThrow(/reports/);
+    expect(() => assertD4EngineeringShakedownNonInferential({ ...label, status: 'valid' })).toThrow(/status/);
+    expect(() => assertD4EngineeringShakedownNonInferential({ ...label, quotaEvidence: {} })).toThrow(/quotaEvidence/);
+  });
+
+  it('rejects test seams on the shakedown filesystem entrypoint before any dispatch', async () => {
+    const driverFactory = vi.fn();
+    await expect(runD4EngineeringShakedownFilesystem({
+      driverFactory,
+    } as unknown as Parameters<typeof runD4EngineeringShakedownFilesystem>[0])).rejects.toThrow(
+      /production_seam_forbidden/,
+    );
+    expect(driverFactory).not.toHaveBeenCalled();
+  });
+
+  it('runs exactly one non-inferential frozen turn and never yields an official-Smoke result', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-d4-shakedown-'));
+    try {
+      const fixture = await createD4SmokeTestFixture();
+      const stage = await validateD4SmokeStage({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+      });
+      const sandboxBase = join(root, 'sandboxes');
+      const selector: D4EngineeringShakedownSelector = {
+        modelId: 'claude-fable-5',
+        cellId: stage.manifest.content.cells[0]!.id,
+        decisionIndex: 0,
+      };
+      const plan = planD4EngineeringShakedown(stage, sandboxBase, selector);
+      const credentialSource = join(root, '.credentials.json');
+      await writeFile(credentialSource, subscriptionOAuthFixture('claude'), { mode: 0o600 });
+      const driver = new FakeDriver();
+      const phases: D4ShakedownQuotaPhase[] = [];
+      const auditLedger = new D4SmokeCapabilityAuditLedger();
+
+      const result: D4EngineeringShakedownResult = await runD4EngineeringShakedown({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+        contentByRef: fixture.contentByRef,
+        sandboxBase,
+        selector,
+        credentialSources: [{
+          provider: 'claude',
+          sourceIdentity: 'claude-max-oauth',
+          sourcePath: credentialSource,
+        }],
+        canonicalCredentialPaths: canonicalCredentialPaths(credentialSource),
+        quotaReader: async (phase, quotaPlan) => {
+          phases.push(phase);
+          expect(quotaPlan.shakedownExecutionId).toBe(plan.shakedownExecutionId);
+          return shakedownQuotaEvidence(
+            fixture.manifestSha256,
+            phase,
+            quotaPlan.candidate.provider,
+            phase.kind === 'shakedown_post_turn' ? 11 : 10,
+          );
+        },
+        driverFactory: async (binding) => ({
+          driver,
+          resolvedModelId: binding.modelId,
+          runtimeVersion: binding.runtimeVersion,
+        }),
+        bootstrapWorkspace: async () => {
+          await mkdir(join(plan.paths.workspace, '.alice', 'steward'), { recursive: true, mode: 0o700 });
+          await writeFile(
+            join(plan.paths.workspace, '.alice', 'steward', 'validate-ledger.mjs'),
+            'process.exit(0)\n',
+            { mode: 0o600 },
+          );
+        },
+        prepareDecision: async (decision) => {
+          const record = wakeRecord(decision.wakeId, decision.fictionalAsOf);
+          return { record, candidateVisibleBytes: [JSON.stringify(record)] };
+        },
+        readTerminalArtifact: async (terminal) => terminalArtifact(plan.paths.workspace, terminal.wakeId),
+        auditLedger,
+        now: () => NOW,
+        deadlineMs: 10_000,
+      });
+
+      // Exactly one frozen turn dispatched.
+      expect(driver.ensureCalls).toHaveLength(1);
+      expect(driver.turnCalls).toHaveLength(1);
+      expect(driver.turnCalls[0]!.options.model).toBe('claude-fable-5');
+      // One pre-dispatch read + one fresh post-turn read.
+      expect(phases.map((phase) => phase.kind)).toEqual(['shakedown_dispatch', 'shakedown_post_turn']);
+
+      // Non-inferential, single-report artifact — NOT the official collection shape.
+      expect(result.purpose).toBe('engineering_shakedown');
+      expect(result.inferenceEligibility).toBe('forbidden');
+      expect(result.eligibleForInference).toBe(false);
+      expect(result.validForRanking).toBe(false);
+      expect(result.validForSurvivorSelection).toBe(false);
+      expect(result.validForOfficialSmoke).toBe(false);
+      expect(result).not.toHaveProperty('status');
+      expect(result).not.toHaveProperty('reports');
+      expect(result).not.toHaveProperty('quotaEvidence');
+      expect(result.report.wakeId).toBe(result.wakeId);
+      expect(result.protocolVerdict).toBe('pass');
+      expect(result.decisionVerdict).toBe('pass');
+      expect(result.executionVerdict).toBe('not_evaluated');
+      expect(result.terminalStatus).toBe('completed');
+      expect(result.durationMs).toBe(1);
+      expect(result.latencyMs).toBe(0);
+
+      // Exact model identity, credential receipt, and clean capability ledger.
+      expect(result.requestedModelId).toBe('claude-fable-5');
+      expect(result.actualModelIds).toEqual(['claude-fable-5']);
+      expect(result.provider).toBe('claude');
+      expect(result.shakedownExecutionId).toBe(plan.shakedownExecutionId);
+      expect(result.credential).toMatchObject({ provider: 'claude', unchangedAfterExecution: true });
+      expect(result.capabilityAttempts).toEqual([]);
+
+      // Per-window before/after/delta for exactly the selected provider's windows.
+      expect(result.quota.dispatch.phase.kind).toBe('shakedown_dispatch');
+      expect(result.quota.postTurn.phase.kind).toBe('shakedown_post_turn');
+      expect(result.quota.windowDeltas.map((delta) => delta.id)).toEqual(
+        D4_SMOKE_QUOTA_WINDOWS.filter((window) => window.provider === 'claude').map((window) => window.id),
+      );
+      expect(result.quota.windowDeltas.every((delta) =>
+        delta.beforePercent === 10 && delta.afterPercent === 11 && delta.deltaPercent === 1)).toBe(true);
+
+      // The artifact cannot be relabeled as, or assigned to, an official Smoke result.
+      expect(assertD4EngineeringShakedownNonInferential(result)).toBe(result);
+      expect(d4SmokeQuotaEvidenceSchema.safeParse(result.quota.dispatch).success).toBe(false);
+      expect(d4EngineeringShakedownQuotaEvidenceSchema.safeParse(result.quota.dispatch).success).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
