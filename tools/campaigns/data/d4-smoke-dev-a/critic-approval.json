@@ -1,8 +1,8 @@
 {
   "schema": "steward-d4-critic-receipt/1",
   "version": 1,
-  "manifestSha256": "b13a6f014fd2b87f768f02cf402cf49d184bd97dbb8f0b18e26306d7eec8ee1b",
-  "reviewerIdentity": "paseo-issue-209-independent-critic:537de2f8-1170-4c83-9f78-a8d6fbfa6027",
+  "manifestSha256": "406bb1f5e888b36874116e132b2ab220d7aa564c02862fc53307df5afadc3750",
+  "reviewerIdentity": "paseo-issue-215-independent-critic:19305f14-71a1-4712-a612-5822164a197a",
   "verdict": "APPROVE",
-  "reviewedCommit": "890efc8ac41146c17383ff4069257b072bb14364"
+  "reviewedCommit": "ce5f63690e399c2f8a5386f54451ada39b322825"
 }

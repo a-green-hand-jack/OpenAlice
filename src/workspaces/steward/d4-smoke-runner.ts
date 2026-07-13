@@ -101,13 +101,14 @@ export const D4_SMOKE_FICTIONAL_DEADLINE_OFFSET_MS = 60_000 as const;
 
 const execFileAsync = promisify(execFile);
 
-// Linux's sockaddr_un permits at most 107 bytes of pathname payload. Claude
-// creates bridge sockets below CLAUDE_CODE_TMPDIR, so reserve space for its
-// per-user directory and socket names rather than letting a long D4 root make
-// required sandbox initialization fail.
+// Claude Code 2.1.202 turns CLAUDE_CODE_TMPDIR into
+// <CLAUDE_CODE_TMPDIR>/claude-<uid>. Its Bash sandbox only keeps that effective
+// directory when it is at most 44 bytes; otherwise it falls back to TMPDIR.
+// Keep both that native limit and Linux's sockaddr_un limit below their bounds.
 const D4_CLAUDE_BRIDGE_SOCKET_PATH_MAX_BYTES = 107;
 const D4_CLAUDE_BRIDGE_SOCKET_SUFFIX_RESERVE_BYTES = 64;
-const D4_CLAUDE_BRIDGE_TMP_PREFIX = 'openalice-d4-bridge-';
+const D4_CLAUDE_EFFECTIVE_TMP_MAX_BYTES = 44;
+const D4_CLAUDE_BRIDGE_TMP_PREFIX = 'oa-d4-';
 
 export const D4_SMOKE_CLAUDE_SETTINGS: Exclude<
   ClaudeAgentSdkDriverOptions['settings'],
@@ -2333,12 +2334,18 @@ function d4ClaudeBridgeTempDir(root: string): string {
   return join(resolve(tmpdir()), `${D4_CLAUDE_BRIDGE_TMP_PREFIX}${digest}`);
 }
 
+function d4ClaudeEffectiveBashTempDir(directory: string): string {
+  return join(directory, `claude-${process.getuid?.() ?? 0}`);
+}
+
 function assertD4ClaudeBridgeTempDirFits(directory: string): void {
+  const effectiveDirectory = d4ClaudeEffectiveBashTempDir(directory);
   if (
-    Buffer.byteLength(directory) + D4_CLAUDE_BRIDGE_SOCKET_SUFFIX_RESERVE_BYTES
+    Buffer.byteLength(effectiveDirectory) > D4_CLAUDE_EFFECTIVE_TMP_MAX_BYTES
+    || Buffer.byteLength(effectiveDirectory) + D4_CLAUDE_BRIDGE_SOCKET_SUFFIX_RESERVE_BYTES
     > D4_CLAUDE_BRIDGE_SOCKET_PATH_MAX_BYTES
   ) {
-    throw new D4SmokePlanError('shared_writable_root', 'Claude bridge temp directory exceeds Unix socket budget');
+    throw new D4SmokePlanError('shared_writable_root', 'Claude effective Bash bridge temp directory exceeds native socket budget');
   }
 }
 
