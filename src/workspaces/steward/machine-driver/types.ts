@@ -83,6 +83,25 @@ export interface TurnOutcome {
    * Callers with a frozen exact-model contract must reject a missing, extra,
    * aliased, or fallback identity rather than trusting the requested model. */
   readonly actualModelIds?: readonly string[];
+  /** Direct main-loop assistant identities, when the provider exposes them.
+   * Claude supplies this from assistant frames only; it deliberately excludes
+   * init, fallback, usage-table, and subagent identities. */
+  readonly primaryModelIds?: readonly string[];
+  /** Exact provider per-model usage entries, when exposed by the driver. */
+  readonly modelUsage?: readonly ProviderModelUsage[];
+}
+
+/** Lossless common representation of a provider's per-model usage record. */
+export interface ProviderModelUsage {
+  readonly modelId: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadInputTokens: number;
+  readonly cacheCreationInputTokens: number;
+  readonly webSearchRequests: number;
+  readonly costUSD: number;
+  readonly contextWindow: number;
+  readonly maxOutputTokens: number;
 }
 
 export interface ThreadTelemetry {

@@ -193,6 +193,7 @@ class FakeDriver implements StewardMachineDriver {
       durationMs: 1,
       interrupted: false,
       actualModelIds: options.model === undefined ? [] : [options.model],
+      primaryModelIds: options.model === undefined ? [] : [options.model],
     };
   }
 
@@ -2282,7 +2283,12 @@ function validShakedownResult(): D4EngineeringShakedownResult {
     manifestSha256,
     provider: 'claude',
     requestedModelId: 'claude-fable-5',
-    actualModelIds: ['claude-fable-5'],
+    modelAttestation: {
+      primaryAuthorModelId: 'claude-fable-5',
+      primaryModelUsage: null,
+      auxiliaryModels: [],
+      providerReportedModelIds: ['claude-fable-5'],
+    },
     decisionIndex: 0,
     wakeId,
     terminalStatus: 'completed',
@@ -2586,8 +2592,44 @@ describe('D4 engineering shakedown (issue #205)', () => {
       .toThrow(D4EngineeringShakedownError);
     expect(() => assertD4EngineeringShakedownNonInferential({ ...valid, purpose: 'official_smoke' }))
       .toThrow(/artifact_invalid/);
-    expect(() => assertD4EngineeringShakedownNonInferential({ ...valid, actualModelIds: ['fallback'] }))
-      .toThrow(/actual model set/);
+    expect(() => assertD4EngineeringShakedownNonInferential({
+      ...valid,
+      modelAttestation: { ...valid.modelAttestation, primaryAuthorModelId: 'fallback' },
+    })).toThrow(/sole primary author/);
+    const { primaryAuthorModelId: _missingPrimary, ...missingPrimary } = valid.modelAttestation;
+    expect(() => assertD4EngineeringShakedownNonInferential({
+      ...valid,
+      modelAttestation: missingPrimary,
+    })).toThrow(/primaryAuthorModelId/);
+    expect(() => assertD4EngineeringShakedownNonInferential({
+      ...valid,
+      modelAttestation: {
+        ...valid.modelAttestation,
+        auxiliaryModels: [{ modelId: 'claude-fable-5', modelUsage: null }],
+        providerReportedModelIds: ['claude-fable-5', 'claude-fable-5'],
+      },
+    })).toThrow(/sole primary author/);
+    expect(() => assertD4EngineeringShakedownNonInferential({
+      ...valid,
+      modelAttestation: {
+        ...valid.modelAttestation,
+        auxiliaryModels: [{
+          modelId: 'claude-haiku-4-5-20251001',
+          modelUsage: {
+            modelId: 'claude-haiku-4-5-20251001',
+            inputTokens: 11,
+            outputTokens: 5,
+            cacheReadInputTokens: 2,
+            cacheCreationInputTokens: 1,
+            webSearchRequests: 0,
+            costUSD: 0.01,
+            contextWindow: 200_000,
+            maxOutputTokens: 8_192,
+          },
+        }],
+        providerReportedModelIds: ['claude-fable-5'],
+      },
+    })).toThrow(/role-accounted/);
     expect(() => assertD4EngineeringShakedownNonInferential({
       ...valid,
       diagnosticReport: { ...valid.diagnosticReport, wakeId: 'wake:mismatch' },
@@ -2649,6 +2691,19 @@ describe('D4 engineering shakedown (issue #205)', () => {
         durationMs: 42,
         interrupted: false,
         actualModelIds: ['claude-fable-5', 'claude-haiku-4-5-20251001'],
+        primaryModelIds: ['claude-fable-5'],
+        modelUsage: [
+          {
+            modelId: 'claude-fable-5', inputTokens: 13, outputTokens: 5_400,
+            cacheReadInputTokens: 188_581, cacheCreationInputTokens: 2, webSearchRequests: 0,
+            costUSD: 0.42, contextWindow: 200_000, maxOutputTokens: 8_192,
+          },
+          {
+            modelId: 'claude-haiku-4-5-20251001', inputTokens: 0, outputTokens: 1,
+            cacheReadInputTokens: 2, cacheCreationInputTokens: 0, webSearchRequests: 0,
+            costUSD: 0.01, contextWindow: 200_000, maxOutputTokens: 8_192,
+          },
+        ],
       });
       vi.spyOn(driver, 'readTelemetry').mockReturnValue({
         totalTokens: 193_997,
@@ -2697,7 +2752,16 @@ describe('D4 engineering shakedown (issue #205)', () => {
           const record = wakeRecord(decision.wakeId, decision.fictionalAsOf);
           return { record, candidateVisibleBytes: [JSON.stringify(record)] };
         },
-        readTerminalArtifact: async (terminal) => terminalArtifact(plan.paths.workspace, terminal.wakeId),
+        readTerminalArtifact: async (terminal) => {
+          const artifact = await terminalArtifact(plan.paths.workspace, terminal.wakeId);
+          return {
+            ...artifact,
+            evaluationInput: {
+              ...artifact.evaluationInput,
+              execution: { ...artifact.evaluationInput.execution, requested: true },
+            },
+          };
+        },
         auditLedger: new D4SmokeCapabilityAuditLedger(),
         now: () => NOW,
       }).catch((error: unknown) => error);
@@ -2712,14 +2776,22 @@ describe('D4 engineering shakedown (issue #205)', () => {
         failureValidity: 'invalid',
         provider: 'claude',
         requestedModelId: 'claude-fable-5',
-        providerReportedModelIds: ['claude-fable-5', 'claude-haiku-4-5-20251001'],
+        modelAttestation: {
+          primaryAuthorModelId: 'claude-fable-5',
+          primaryModelUsage: expect.objectContaining({ modelId: 'claude-fable-5', costUSD: 0.42 }),
+          auxiliaryModels: [expect.objectContaining({
+            modelId: 'claude-haiku-4-5-20251001',
+            modelUsage: expect.objectContaining({ inputTokens: 0, costUSD: 0.01 }),
+          })],
+          providerReportedModelIds: ['claude-fable-5', 'claude-haiku-4-5-20251001'],
+        },
         terminal: { providerReportedStatus: 'completed', interrupted: false },
         durationMs: 42,
         latencyMs: 0,
         tokenTelemetry: { totalTokens: 193_997 },
         credential: { provider: 'claude', unchangedAfterExecution: true },
         capabilityAttempts: [],
-        error: { kind: 'policy', code: 'model_binding_invalid' },
+        error: { kind: 'policy', code: 'terminal_artifact_invalid' },
       });
       expect(artifact.quota.dispatch.phase.kind).toBe('shakedown_dispatch');
       expect(artifact.quota.postTurn.phase.kind).toBe('shakedown_post_turn');
@@ -2728,6 +2800,10 @@ describe('D4 engineering shakedown (issue #205)', () => {
       expect(artifact).not.toHaveProperty('quotaEvidence');
       expect(() => assertD4EngineeringShakedownFailureNonInferential({ ...artifact, status: 'invalid' }))
         .toThrow(/status/);
+      expect(() => assertD4EngineeringShakedownFailureNonInferential({
+        ...artifact,
+        modelAttestation: { ...artifact.modelAttestation, primaryAuthorModelId: 'fallback' },
+      })).toThrow(/sole primary author/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -2752,6 +2828,38 @@ describe('D4 engineering shakedown (issue #205)', () => {
       const credentialSource = join(root, '.credentials.json');
       await writeFile(credentialSource, subscriptionOAuthFixture('claude'), { mode: 0o600 });
       const driver = new FakeDriver();
+      vi.spyOn(driver, 'runTurn').mockImplementation(async (_threadId, input, options = {}) => {
+        driver.turnCalls.push({ input, options });
+        return {
+          turnId: 'turn-fable-with-haiku',
+          status: 'completed',
+          agentMessage: 'terminal artifact is read from the isolated workspace',
+          durationMs: 1,
+          interrupted: false,
+          actualModelIds: ['claude-fable-5', 'claude-haiku-4-5-20251001'],
+          primaryModelIds: ['claude-fable-5'],
+          modelUsage: [
+            {
+              modelId: 'claude-fable-5', inputTokens: 100, outputTokens: 50,
+              cacheReadInputTokens: 10, cacheCreationInputTokens: 5, webSearchRequests: 0,
+              costUSD: 0.42, contextWindow: 200_000, maxOutputTokens: 8_192,
+            },
+            {
+              modelId: 'claude-haiku-4-5-20251001', inputTokens: 10, outputTokens: 5,
+              cacheReadInputTokens: 2, cacheCreationInputTokens: 1, webSearchRequests: 0,
+              costUSD: 0.01, contextWindow: 200_000, maxOutputTokens: 8_192,
+            },
+          ],
+        };
+      });
+      vi.spyOn(driver, 'readTelemetry').mockReturnValue({
+        totalTokens: 183,
+        inputTokens: 128,
+        cachedInputTokens: 12,
+        outputTokens: 55,
+        contextWindow: 200_000,
+        updatedAt: NOW.toISOString(),
+      });
       const phases: D4ShakedownQuotaPhase[] = [];
       const auditLedger = new D4SmokeCapabilityAuditLedger();
 
@@ -2834,7 +2942,16 @@ describe('D4 engineering shakedown (issue #205)', () => {
 
       // Exact model identity, credential receipt, and clean capability ledger.
       expect(result.requestedModelId).toBe('claude-fable-5');
-      expect(result.actualModelIds).toEqual(['claude-fable-5']);
+      expect(result.modelAttestation).toEqual({
+        primaryAuthorModelId: 'claude-fable-5',
+        primaryModelUsage: expect.objectContaining({ modelId: 'claude-fable-5', costUSD: 0.42 }),
+        auxiliaryModels: [expect.objectContaining({
+          modelId: 'claude-haiku-4-5-20251001',
+          modelUsage: expect.objectContaining({ costUSD: 0.01 }),
+        })],
+        providerReportedModelIds: ['claude-fable-5', 'claude-haiku-4-5-20251001'],
+      });
+      expect(result.tokenTelemetry).toMatchObject({ totalTokens: 183, outputTokens: 55 });
       expect(result.provider).toBe('claude');
       expect(result.shakedownExecutionId).toBe(plan.shakedownExecutionId);
       expect(result.credential).toMatchObject({ provider: 'claude', unchangedAfterExecution: true });

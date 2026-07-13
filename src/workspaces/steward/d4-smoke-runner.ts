@@ -73,7 +73,13 @@ import {
 } from './d4-smoke-stage-manifest.js';
 export { D4_SMOKE_QUOTA_WINDOWS } from './d4-smoke-stage-manifest.js';
 import { JsonRpcStdioClient } from './machine-driver/jsonrpc-stdio.js';
-import type { MachineTransport, StewardMachineDriver, ThreadTelemetry } from './machine-driver/types.js';
+import type {
+  MachineTransport,
+  ProviderModelUsage,
+  StewardMachineDriver,
+  ThreadTelemetry,
+  TurnOutcome,
+} from './machine-driver/types.js';
 import {
   ClaudeAgentSdkDriver,
   type ClaudeAgentSdkDriverOptions,
@@ -4422,6 +4428,122 @@ const shakedownTelemetrySchema = z.union([
   }).strict(),
 ]);
 
+const shakedownProviderModelUsageSchema = z.object({
+  modelId: nonEmptyStringSchema,
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  cacheReadInputTokens: z.number().int().nonnegative(),
+  cacheCreationInputTokens: z.number().int().nonnegative(),
+  webSearchRequests: z.number().int().nonnegative(),
+  costUSD: z.number().finite().nonnegative(),
+  contextWindow: z.number().int().nonnegative(),
+  maxOutputTokens: z.number().int().nonnegative(),
+}).strict();
+
+const shakedownRoleAttestationSchema = z.object({
+  /** The decision-producing direct main-loop identity, never an auxiliary. */
+  primaryAuthorModelId: nonEmptyStringSchema,
+  primaryModelUsage: shakedownProviderModelUsageSchema.nullable(),
+  /** Every non-primary provider identity, with its native usage when reported. */
+  auxiliaryModels: z.array(z.object({
+    modelId: nonEmptyStringSchema,
+    modelUsage: shakedownProviderModelUsageSchema.nullable(),
+  }).strict()),
+  providerReportedModelIds: z.array(nonEmptyStringSchema),
+}).strict();
+
+type D4EngineeringShakedownRoleAttestation = z.infer<typeof shakedownRoleAttestationSchema>;
+
+function addD4ShakedownRoleAttestationIssues(
+  attestation: D4EngineeringShakedownRoleAttestation,
+  requestedModelId: string,
+  ctx: z.RefinementCtx,
+): void {
+  const providerReported = new Set(attestation.providerReportedModelIds);
+  const auxiliary = new Set(attestation.auxiliaryModels.map(({ modelId }) => modelId));
+  if (
+    attestation.primaryAuthorModelId !== requestedModelId
+    || providerReported.size !== attestation.providerReportedModelIds.length
+    || auxiliary.size !== attestation.auxiliaryModels.length
+    || auxiliary.has(attestation.primaryAuthorModelId)
+  ) {
+    ctx.addIssue({ code: 'custom', path: ['primaryAuthorModelId'], message: 'requested model must be the sole primary author, disjoint from auxiliaries' });
+  }
+  const accounted = new Set([attestation.primaryAuthorModelId, ...auxiliary]);
+  if (
+    accounted.size !== providerReported.size
+    || [...accounted].some((modelId) => !providerReported.has(modelId))
+  ) {
+    ctx.addIssue({ code: 'custom', path: ['providerReportedModelIds'], message: 'every provider-reported model identity must be role-accounted' });
+  }
+  if (
+    attestation.primaryModelUsage !== null
+    && attestation.primaryModelUsage.modelId !== attestation.primaryAuthorModelId
+  ) {
+    ctx.addIssue({ code: 'custom', path: ['primaryModelUsage'], message: 'primary usage must belong to the primary author' });
+  }
+  for (const [index, auxiliaryModel] of attestation.auxiliaryModels.entries()) {
+    if (auxiliaryModel.modelUsage !== null && auxiliaryModel.modelUsage.modelId !== auxiliaryModel.modelId) {
+      ctx.addIssue({ code: 'custom', path: ['auxiliaryModels', index, 'modelUsage'], message: 'auxiliary usage must belong to its auxiliary identity' });
+    }
+  }
+}
+
+function normalizedD4ModelIds(values: readonly string[] | undefined): string[] {
+  return [...new Set((values ?? [])
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter((value) => value !== ''))].sort();
+}
+
+function attestD4EngineeringShakedownModelRoles(input: {
+  readonly outcome: TurnOutcome;
+  readonly provider: 'codex' | 'claude';
+  readonly requestedModelId: string;
+  readonly wakeId: string;
+}): D4EngineeringShakedownRoleAttestation {
+  const providerReportedModelIds = normalizedD4ModelIds(input.outcome.actualModelIds);
+  const directPrimaryModelIds = normalizedD4ModelIds(input.outcome.primaryModelIds);
+  if (input.provider === 'codex') {
+    // Codex has no direct-assistant model frame. Preserve its established
+    // exact-union behavior rather than treating an extra identity as auxiliary.
+    assertD4ActualModelIds(providerReportedModelIds, input.requestedModelId, input.wakeId);
+  } else if (
+    input.outcome.primaryModelIds === undefined
+    || directPrimaryModelIds.length !== 1
+    || directPrimaryModelIds[0] !== input.requestedModelId
+  ) {
+    throw new D4SmokePolicyError(
+      'model_binding_invalid',
+      `${input.wakeId}: settled Claude turn requires direct main-loop assistant evidence for ${input.requestedModelId}`,
+    );
+  }
+  const primaryAuthorModelId = input.provider === 'codex'
+    ? input.requestedModelId
+    : directPrimaryModelIds[0]!;
+  const usageByModelId = new Map<string, ProviderModelUsage>();
+  for (const usage of input.outcome.modelUsage ?? []) {
+    if (usageByModelId.has(usage.modelId)) {
+      throw new D4SmokePolicyError('model_binding_invalid', `${input.wakeId}: duplicate model usage for ${usage.modelId}`);
+    }
+    if (!providerReportedModelIds.includes(usage.modelId)) {
+      throw new D4SmokePolicyError('model_binding_invalid', `${input.wakeId}: model usage identity ${usage.modelId} was not provider-reported`);
+    }
+    usageByModelId.set(usage.modelId, usage);
+  }
+  if (!providerReportedModelIds.includes(primaryAuthorModelId)) {
+    throw new D4SmokePolicyError('model_binding_invalid', `${input.wakeId}: direct primary ${primaryAuthorModelId} was not provider-reported`);
+  }
+  return {
+    primaryAuthorModelId,
+    primaryModelUsage: usageByModelId.get(primaryAuthorModelId) ?? null,
+    auxiliaryModels: providerReportedModelIds
+      .filter((modelId) => modelId !== primaryAuthorModelId)
+      .map((modelId) => ({ modelId, modelUsage: usageByModelId.get(modelId) ?? null })),
+    providerReportedModelIds,
+  };
+}
+
 /** Strict full artifact schema. Every top-level field, the nested quota
  * evidence, the diagnostic report, telemetry, credential receipt, and
  * capability attempts are validated — and because it is `.strict()`, any
@@ -4440,7 +4562,7 @@ export const d4EngineeringShakedownResultSchema = z.object({
   manifestSha256: sha256Schema,
   provider: z.enum(['codex', 'claude']),
   requestedModelId: nonEmptyStringSchema,
-  actualModelIds: z.array(nonEmptyStringSchema),
+  modelAttestation: shakedownRoleAttestationSchema,
   decisionIndex: z.number().int().min(0).max(D4_SMOKE_DECISION_COUNT - 1),
   wakeId: nonEmptyStringSchema,
   terminalStatus: nonEmptyStringSchema,
@@ -4461,10 +4583,7 @@ export const d4EngineeringShakedownResultSchema = z.object({
     ctx.addIssue({ code: 'custom', path: ['requestedModelId'], message: 'requested model/provider is not frozen' });
     return;
   }
-  const actual = new Set(artifact.actualModelIds);
-  if (actual.size !== 1 || !actual.has(artifact.requestedModelId)) {
-    ctx.addIssue({ code: 'custom', path: ['actualModelIds'], message: 'actual model set must equal requestedModelId' });
-  }
+  addD4ShakedownRoleAttestationIssues(artifact.modelAttestation, artifact.requestedModelId, ctx);
   if (!artifact.shakedownExecutionId.startsWith(
     `${D4_ENGINEERING_SHAKEDOWN_EXECUTION_PREFIX}:${artifact.provider}:${artifact.requestedModelId}:`,
   )) {
@@ -4551,7 +4670,7 @@ export const d4EngineeringShakedownFailureSchema = z.object({
   manifestSha256: sha256Schema,
   provider: z.enum(['codex', 'claude']),
   requestedModelId: nonEmptyStringSchema,
-  providerReportedModelIds: z.array(nonEmptyStringSchema),
+  modelAttestation: shakedownRoleAttestationSchema,
   decisionIndex: z.number().int().min(0).max(D4_SMOKE_DECISION_COUNT - 1),
   wakeId: nonEmptyStringSchema,
   terminal: z.object({
@@ -4580,6 +4699,7 @@ export const d4EngineeringShakedownFailureSchema = z.object({
   )) {
     ctx.addIssue({ code: 'custom', path: ['shakedownExecutionId'], message: 'execution namespace/model mismatch' });
   }
+  addD4ShakedownRoleAttestationIssues(artifact.modelAttestation, artifact.requestedModelId, ctx);
   const applicable = D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS[
     artifact.requestedModelId as keyof typeof D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS
   ];
@@ -4836,7 +4956,7 @@ export async function runD4EngineeringShakedown(
   let dispatchQuota: D4EngineeringShakedownQuotaEvidence | null = null;
   let postTurnQuota: D4EngineeringShakedownQuotaEvidence | null = null;
   let terminalStatus: string | null = null;
-  let actualModelIds: readonly string[] = [];
+  let modelAttestation: D4EngineeringShakedownRoleAttestation | null = null;
   let durationMs: number | null = null;
   let latencyMs = 0;
   let tokenTelemetry: ThreadTelemetry | null = null;
@@ -4961,7 +5081,6 @@ export async function runD4EngineeringShakedown(
     terminalStatus = outcome.status;
     turnInterrupted = outcome.interrupted;
     durationMs = outcome.durationMs;
-    actualModelIds = [...(outcome.actualModelIds ?? [])];
     if (outcome.agentMessage?.includes('D4_SMOKE_AUDIT_APPEND_FAILED')) {
       auditAppendFailure = true;
     }
@@ -4982,7 +5101,12 @@ export async function runD4EngineeringShakedown(
       now: now(),
     });
     tokenTelemetry = driver.readTelemetry(thread.threadId) ?? tokenTelemetry;
-    assertD4ActualModelIds(outcome.actualModelIds, plan.candidate.modelId, wakeId);
+    modelAttestation = attestD4EngineeringShakedownModelRoles({
+      outcome,
+      provider,
+      requestedModelId: plan.candidate.modelId,
+      wakeId,
+    });
     auditCursor = await syncD4SmokeAuditLedger(plan.paths.auditCallLedger, input.auditLedger, auditCursor);
     if (auditAppendFailure) {
       throw new D4SmokePolicyError(
@@ -5067,6 +5191,7 @@ export async function runD4EngineeringShakedown(
       && wakeId !== null
       && terminalStatus === 'completed'
       && turnInterrupted === false
+      && modelAttestation !== null
     ) {
       const artifact = assertD4EngineeringShakedownFailureNonInferential({
         schema: D4_ENGINEERING_SHAKEDOWN_FAILURE_SCHEMA,
@@ -5082,7 +5207,7 @@ export async function runD4EngineeringShakedown(
         manifestSha256: plan.manifestSha256,
         provider,
         requestedModelId: plan.candidate.modelId,
-        providerReportedModelIds: [...actualModelIds],
+        modelAttestation,
         decisionIndex,
         wakeId,
         terminal: {
@@ -5148,7 +5273,7 @@ export async function runD4EngineeringShakedown(
     manifestSha256: plan.manifestSha256,
     provider,
     requestedModelId: plan.candidate.modelId,
-    actualModelIds: [...actualModelIds],
+    modelAttestation: modelAttestation!,
     decisionIndex,
     wakeId: wakeId!,
     terminalStatus: terminalStatus!,
