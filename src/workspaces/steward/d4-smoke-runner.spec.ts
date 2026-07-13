@@ -2196,12 +2196,12 @@ function validShakedownResult(): D4EngineeringShakedownResult {
     quota: {
       dispatch: shakedownQuotaEvidence(
         manifestSha256,
-        shakedownPhase(shakedownExecutionId, 'shakedown_dispatch'),
+        { kind: 'shakedown_dispatch', shakedownExecutionId, decisionIndex: 0, wakeId },
         'claude-fable-5',
       ) as unknown as D4EngineeringShakedownQuotaEvidence,
       postTurn: shakedownQuotaEvidence(
         manifestSha256,
-        shakedownPhase(shakedownExecutionId, 'shakedown_post_turn'),
+        { kind: 'shakedown_post_turn', shakedownExecutionId, decisionIndex: 0, wakeId },
         'claude-fable-5',
         11,
       ) as unknown as D4EngineeringShakedownQuotaEvidence,
@@ -2388,6 +2388,27 @@ describe('D4 engineering shakedown (issue #205)', () => {
       .toThrow(D4EngineeringShakedownError);
     expect(() => assertD4EngineeringShakedownNonInferential({ ...valid, purpose: 'official_smoke' }))
       .toThrow(/artifact_invalid/);
+    expect(() => assertD4EngineeringShakedownNonInferential({ ...valid, actualModelIds: ['fallback'] }))
+      .toThrow(/actual model set/);
+    expect(() => assertD4EngineeringShakedownNonInferential({
+      ...valid,
+      diagnosticReport: { ...valid.diagnosticReport, wakeId: 'wake:mismatch' },
+    })).toThrow(/diagnostic wakeId mismatch/);
+    expect(() => assertD4EngineeringShakedownNonInferential({
+      ...valid,
+      quota: {
+        ...valid.quota,
+        dispatch: { ...valid.quota.dispatch, manifestSha256: 'b'.repeat(64) },
+      },
+    })).toThrow(/quota evidence is not bound/);
+    expect(() => assertD4EngineeringShakedownNonInferential({
+      ...valid,
+      quota: {
+        ...valid.quota,
+        windowDeltas: valid.quota.windowDeltas.map((delta, index) =>
+          index === 0 ? { ...delta, deltaPercent: 99 } : delta),
+      },
+    })).toThrow(/quota delta is not bound/);
     // Official-Smoke result collection keys are rejected with a targeted message.
     expect(() => assertD4EngineeringShakedownNonInferential({ ...valid, reports: [] })).toThrow(/reports/);
     expect(() => assertD4EngineeringShakedownNonInferential({ ...valid, status: 'valid' })).toThrow(/status/);
