@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { access, appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, appendFile, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -1119,6 +1119,100 @@ describe('D4 Smoke single-execution runner', () => {
         auditLedger: new D4SmokeCapabilityAuditLedger(),
         now: () => NOW,
       })).rejects.toThrow(/audit append failed/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects when Claude swallows a guard-side audit append failure and yields success', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-d4-claude-guard-append-failure-'));
+    try {
+      const fixture = await createD4SmokeTestFixture();
+      const stage = await validateD4SmokeStage({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+      });
+      const sandboxBase = join(root, 'sandboxes');
+      const plan = planD4SmokeExecutions(stage, sandboxBase).find(
+        (candidate) => candidate.candidate.provider === 'claude',
+      )!;
+      const credentialSource = join(root, '.credentials.json');
+      await writeFile(credentialSource, subscriptionOAuthFixture('claude'), { mode: 0o600 });
+      let swallowedControlFailure: unknown;
+      const nativeFactory = createD4SmokeNativeDriverFactory({
+        versionProbe: async () => plan.candidate.runtimeVersion,
+        makeClaudeDriver: (options) => new ClaudeAgentSdkDriver({
+          ...options,
+          queryFn: ({ options: queryOptions }) => (async function* () {
+            yield {
+              type: 'system',
+              subtype: 'init',
+              model: plan.candidate.modelId,
+              session_id: 'fixture',
+            } as never;
+            await chmod(plan.paths.auditCallLedger, 0o400);
+            try {
+              await queryOptions.canUseTool!(
+                'Bash',
+                { command: '/usr/bin/git push' },
+                {
+                  signal: queryOptions.abortController!.signal,
+                  toolUseID: 'guard-audit-failure',
+                  requestId: 'guard-audit-failure',
+                },
+              );
+            } catch (error) {
+              swallowedControlFailure = error;
+            }
+            yield {
+              type: 'result',
+              subtype: 'success',
+              duration_ms: 1,
+              result: 'SDK swallowed guard failure',
+              modelUsage: {},
+              session_id: 'fixture',
+            } as never;
+          })(),
+        }),
+      });
+      const auditLedger = new D4SmokeCapabilityAuditLedger();
+
+      const error = await runD4SmokeExecution({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+        contentByRef: fixture.contentByRef,
+        sandboxBase,
+        executionId: plan.executionId,
+        credentialSources: [{
+          provider: 'claude',
+          sourceIdentity: 'claude-max-oauth',
+          sourcePath: credentialSource,
+        }],
+        canonicalCredentialPaths: canonicalCredentialPaths(credentialSource),
+        quotaReader: async (phase) => quotaEvidence(fixture.manifestSha256, phase),
+        driverFactory: nativeFactory,
+        prepareDecision: async (decision) => {
+          const record = wakeRecord(decision.wakeId, decision.fictionalAsOf);
+          return { record, candidateVisibleBytes: [JSON.stringify(record)] };
+        },
+        readTerminalArtifact: async () => { throw new Error('guard failure must precede terminal read'); },
+        auditLedger,
+        now: () => NOW,
+      }).then(
+        () => null,
+        (caught: unknown) => caught,
+      );
+
+      expect(swallowedControlFailure).toBeInstanceOf(Error);
+      expect(String((swallowedControlFailure as Error).message)).toContain(
+        'Claude authorization boundary could not record',
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect(String((error as Error).message)).toContain('claude canUseTool failed');
+      expect(String((error as Error).message)).not.toContain('interrupted');
+      expect(auditLedger.snapshot()).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

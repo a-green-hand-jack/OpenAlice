@@ -117,6 +117,9 @@ interface ClaudeInFlightTurn {
   /** Set when the turn's `result` message reported an error subtype; surfaced as
    *  a rejected `runTurn` (fatal) once the stream ends. */
   resultError: string | null;
+  /** The pinned SDK can swallow `canUseTool` exceptions into a control-response
+   * error. Latch the first callback failure so no later success frame can hide it. */
+  fatalControlFailure: { readonly cause: unknown } | null;
   readonly actualModelIds: Set<string>;
   readonly bashCommandsByToolUseId: Map<string, string>;
   readonly onEvent: ((ev: DriverEvent) => void) | undefined;
@@ -208,6 +211,7 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
       durationMs: null,
       status: 'completed',
       resultError: null,
+      fatalControlFailure: null,
       actualModelIds: new Set<string>(),
       bashCommandsByToolUseId: new Map<string, string>(),
       onEvent: opts.onEvent,
@@ -220,6 +224,17 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
     const useResume = state.resumedFromStore || state.hasRun;
     const model = opts.model ?? state.model;
     const effort = opts.effort !== undefined && EFFORT_LEVELS.has(opts.effort) ? opts.effort : undefined;
+    const guardedCanUseTool: Options['canUseTool'] = this.canUseTool === undefined
+      ? undefined
+      : async (toolName, toolInput, callbackOptions) => {
+          try {
+            return await this.canUseTool!(toolName, toolInput, callbackOptions);
+          } catch (cause) {
+            turn.fatalControlFailure ??= { cause };
+            turn.abort.abort();
+            throw cause;
+          }
+        };
     const options: Options = {
       cwd: this.cwd,
       // `Options.env` REPLACES the subprocess env entirely — and the driver's
@@ -254,7 +269,7 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
       ...(this.tools !== undefined ? { tools: this.tools } : {}),
       ...(this.skills !== undefined ? { skills: this.skills } : {}),
       ...(this.systemPrompt !== undefined ? { systemPrompt: this.systemPrompt } : {}),
-      ...(this.canUseTool !== undefined ? { canUseTool: this.canUseTool } : {}),
+      ...(guardedCanUseTool !== undefined ? { canUseTool: guardedCanUseTool } : {}),
       ...(useResume ? { resume: threadId } : { sessionId: threadId }),
       ...(model !== undefined ? { model } : {}),
       ...(effort !== undefined ? { effort: effort as Options['effort'] } : {}),
@@ -277,6 +292,7 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
         this.handleMessage(turn, message);
       }
       state.hasRun = true;
+      if (turn.fatalControlFailure !== null) throw turn.fatalControlFailure.cause;
       if (turn.interrupted) return this.interruptedOutcome(turn);
       if (turn.resultError !== null) {
         throw new MachineDriverProtocolError(`claude turn failed: ${turn.resultError}`);
@@ -290,6 +306,14 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
         actualModelIds: [...turn.actualModelIds].sort(),
       };
     } catch (err) {
+      if (turn.fatalControlFailure !== null) {
+        state.hasRun = true;
+        const cause = turn.fatalControlFailure.cause;
+        throw new MachineDriverProtocolError(
+          `claude canUseTool failed: ${errText(cause)}`,
+          { cause },
+        );
+      }
       // A dispose mid-turn is fatal (reject); a deadline/interruptInFlight abort
       // resolves `interrupted`. The abort surfaces here as a thrown AbortError OR
       // as a clean stream end (handled above) — both routes honor `interrupted`.

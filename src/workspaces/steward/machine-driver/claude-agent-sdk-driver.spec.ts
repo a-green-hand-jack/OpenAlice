@@ -240,6 +240,51 @@ describe('ClaudeAgentSdkDriver', () => {
     }));
   });
 
+  it('rejects a latched canUseTool failure even when the SDK swallows it and yields success', async () => {
+    const marker = new Error('D4_GUARD_AUDIT_APPEND_FAILED');
+    let sdkCaughtControlFailure: unknown;
+    let queryWasAborted = false;
+    const queryFn: ClaudeQueryFn = ({ options }) => (async function* () {
+      yield initMsg('s');
+      try {
+        await options.canUseTool!(
+          'Bash',
+          { command: '/usr/bin/git push' },
+          {
+            signal: options.abortController!.signal,
+            toolUseID: 'guard-audit-failure',
+            requestId: 'control-request-audit-failure',
+          },
+        );
+      } catch (error) {
+        // SDK 0.3.206 converts this path into a control_response error and can
+        // continue emitting an ordinary result, so the driver must own fatality.
+        sdkCaughtControlFailure = error;
+      }
+      queryWasAborted = options.abortController!.signal.aborted;
+      yield successResult({ sessionId: 's', text: 'SDK SWALLOWED CONTROL FAILURE' });
+    })();
+    const driver = new ClaudeAgentSdkDriver({
+      cwd: '/tmp/scratch',
+      queryFn,
+      canUseTool: async () => { throw marker; },
+    });
+    const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch' });
+
+    const error = await driver.runTurn(threadId, 'x').then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+
+    expect(sdkCaughtControlFailure).toBe(marker);
+    expect(queryWasAborted).toBe(true);
+    expect(error).toBeInstanceOf(MachineDriverProtocolError);
+    expect((error as Error).message).toContain('D4_GUARD_AUDIT_APPEND_FAILED');
+    expect((error as Error & { cause?: unknown }).cause).toBe(marker);
+    expect((error as Error).message).not.toContain('interrupted');
+    expect(driver.isThreadLive(threadId)).toBe(false);
+  });
+
   it('resumes a prior-process thread via resume and reports resumed:true', async () => {
     const { fn, captured } = makeFakeQuery({
       messages: [initMsg('prior'), successResult({ sessionId: 'prior' })],

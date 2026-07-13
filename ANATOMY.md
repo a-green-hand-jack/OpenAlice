@@ -142,7 +142,9 @@ state, or ownership.
   curated executable/library set, and `/usr/bin/git` overlaid by the audit shim;
   Claude uses the fail-closed SDK sandbox. Structured forbidden Git attempts are
   recorded at both the Claude authorization guard and CLI/absolute wrapper
-  boundaries, and audit append failures surface as command events. The runner also
+  boundaries; the Claude driver latches authorization callback failures as fatal
+  even if the SDK emits a success result, and audit append failures also surface
+  as command events. The runner also
   owns deterministic wakes, exact model attestation, proposal-only audit checks,
   and terminal report validation. This is corruption-evident inside one
   agent-writable trust domain, not tamper-proof account truth; UTA and the venue
