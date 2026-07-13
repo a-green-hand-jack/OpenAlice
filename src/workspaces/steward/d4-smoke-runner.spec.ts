@@ -37,6 +37,7 @@ import {
   runD4EngineeringShakedownFilesystem,
   runD4SmokeExecution,
   runD4SmokeFilesystemExecution,
+  resolveD4ClaudeNativeRuntime,
   resolveD4CodexNativeRuntime,
   validateD4EngineeringShakedownQuotaEvidence,
   validateD4SmokeExecutionPlan,
@@ -845,6 +846,76 @@ describe('D4 Smoke quota and planner', () => {
       await expect(execFileAsync(pinned.executable, ['--version'])).resolves.toMatchObject({
         stdout: expect.stringContaining(expectedVersion),
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('pins frozen Claude Code despite global CLI drift and rejects a changed runtime identity', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-d4-claude-runtime-'));
+    try {
+      const expectedVersion = '2.1.202';
+      const versionsRoot = join(root, 'versions');
+      const globalBin = join(root, 'global-bin');
+      const exactExecutable = join(versionsRoot, expectedVersion);
+      await mkdir(globalBin, { recursive: true, mode: 0o700 });
+      await mkdir(versionsRoot, { recursive: true, mode: 0o700 });
+      await writeFile(
+        join(globalBin, 'claude'),
+        '#!/bin/sh\nprintf "2.1.207 (Claude Code)\\n"\n',
+        { mode: 0o700 },
+      );
+      await writeFile(
+        exactExecutable,
+        `#!/bin/sh\nprintf "${expectedVersion} (Claude Code)\\n"\n`,
+        { mode: 0o700 },
+      );
+
+      const pinned = await resolveD4ClaudeNativeRuntime(expectedVersion, versionsRoot);
+      const driverOptions: ClaudeAgentSdkDriverOptions[] = [];
+      const factory = createD4SmokeNativeDriverFactory({
+        claudeRuntime: pinned,
+        versionProbe: async (probe) => {
+          expect(probe.binary).toBe(exactExecutable);
+          expect(probe.binary).not.toBe(join(globalBin, 'claude'));
+          return expectedVersion;
+        },
+        makeClaudeDriver: (options) => {
+          driverOptions.push(options);
+          return new FakeDriver();
+        },
+      });
+      const binding: D4SmokeDriverBinding = {
+        provider: 'claude',
+        runtime: 'Claude Code',
+        runtimeVersion: expectedVersion,
+        modelId: 'claude-fable-5',
+        cwd: root,
+        env: {},
+        filesystemSandbox: 'workspace-write',
+        networkAccess: false,
+        hostCredentialDenyPaths: [join(root, 'host-a'), join(root, 'host-b')],
+        approvedInstruction: 'fixture instruction',
+        toolPolicy: {
+          account: 'not_exposed',
+          uta: 'not_exposed',
+          executionRecord: 'not_exposed',
+          stage: 'not_exposed',
+          autoPush: 'not_exposed',
+        },
+      };
+
+      await expect(factory(binding)).resolves.toMatchObject({ runtimeVersion: expectedVersion });
+      expect(driverOptions).toHaveLength(1);
+      expect(driverOptions[0]!.pathToClaudeCodeExecutable).toBe(exactExecutable);
+
+      await writeFile(
+        exactExecutable,
+        '#!/bin/sh\nprintf "2.1.207 (Claude Code)\\n"\n',
+        { mode: 0o700 },
+      );
+      await expect(factory(binding)).rejects.toThrow(/pinned Claude Code runtime identity diverged/);
+      expect(driverOptions).toHaveLength(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

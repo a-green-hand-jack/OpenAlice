@@ -410,6 +410,7 @@ export interface D4SmokePreflightQuotaSnapshot {
   readonly codexRaw: unknown;
   readonly claudeRaw: unknown;
   readonly codexRuntime: D4SmokeCodexNativeRuntime | null;
+  readonly claudeRuntime: D4SmokeClaudeNativeRuntime | null;
 }
 
 export type D4SmokeNativeQuotaProbe = (
@@ -425,6 +426,8 @@ export async function captureD4SmokeIsolatedPreflightQuota(input: {
   readonly canonical: D4SmokeCanonicalCredentialPaths;
   readonly expectedCodexRuntimeVersion?: string;
   readonly resolveCodexRuntime?: (expectedVersion: string) => Promise<D4SmokeCodexNativeRuntime>;
+  readonly expectedClaudeRuntimeVersion?: string;
+  readonly resolveClaudeRuntime?: (expectedVersion: string) => Promise<D4SmokeClaudeNativeRuntime>;
   readonly readCodex?: D4SmokeCodexQuotaProbe;
   readonly readClaude?: D4SmokeNativeQuotaProbe;
   readonly now?: () => Date;
@@ -441,6 +444,14 @@ export async function captureD4SmokeIsolatedPreflightQuota(input: {
       'model_binding_invalid',
       'Codex quota preflight requires the frozen native runtime',
     );
+  }
+  const claudeRuntime = input.expectedClaudeRuntimeVersion === undefined
+    ? null
+    : await (input.resolveClaudeRuntime ?? resolveD4ClaudeNativeRuntime)(
+        input.expectedClaudeRuntimeVersion,
+      );
+  if (claudeRuntime !== null) {
+    await assertD4ClaudeNativeRuntimeIdentity(claudeRuntime, input.expectedClaudeRuntimeVersion!);
   }
   const codexRaw = await withD4SmokeEphemeralQuotaCredential(
     'codex',
@@ -462,7 +473,12 @@ export async function captureD4SmokeIsolatedPreflightQuota(input: {
   const claudeRaw = await withD4SmokeEphemeralQuotaCredential(
     'claude',
     input.canonical.claude,
-    input.readClaude ?? readNativeClaudeQuota,
+    async (context) => {
+      if (claudeRuntime !== null) {
+        await assertD4ClaudeNativeRuntimeIdentity(claudeRuntime, claudeRuntime.version);
+      }
+      return input.readClaude?.(context) ?? readNativeClaudeQuota(context, claudeRuntime ?? undefined);
+    },
   );
   readD4SmokeLiveQuotaWindows(codexRaw, claudeRaw);
   return {
@@ -470,6 +486,7 @@ export async function captureD4SmokeIsolatedPreflightQuota(input: {
     codexRaw,
     claudeRaw,
     codexRuntime,
+    claudeRuntime,
   };
 }
 
@@ -509,7 +526,14 @@ function createD4SmokeNativeExecutionQuotaReader(
         context,
       ));
     } else {
-      liveUsed = readD4SmokeClaudeQuotaWindows(await readNativeClaudeQuota(context));
+      if (snapshot.claudeRuntime === null) {
+        throw new D4SmokePolicyError(
+          'model_binding_invalid',
+          'Claude dispatch quota reader is missing the preflight runtime attestation',
+        );
+      }
+      await assertD4ClaudeNativeRuntimeIdentity(snapshot.claudeRuntime, plan.candidate.runtimeVersion);
+      liveUsed = readD4SmokeClaudeQuotaWindows(await readNativeClaudeQuota(context, snapshot.claudeRuntime));
     }
     return buildD4SmokeQuotaEvidenceFromUsed({
       phase,
@@ -567,7 +591,13 @@ async function readNativeCodexQuota(
   }
 }
 
-async function readNativeClaudeQuota(controlContext: D4SmokeNativeQuotaControlContext): Promise<unknown> {
+async function readNativeClaudeQuota(
+  controlContext: D4SmokeNativeQuotaControlContext,
+  runtime?: D4SmokeClaudeNativeRuntime,
+): Promise<unknown> {
+  if (runtime !== undefined) {
+    await assertD4ClaudeNativeRuntimeIdentity(runtime, runtime.version);
+  }
   let releasePrompt!: () => void;
   const promptGate = new Promise<void>((resolvePrompt) => { releasePrompt = resolvePrompt; });
   const prompt = (async function* (): AsyncGenerator<SDKUserMessage> {
@@ -578,6 +608,7 @@ async function readNativeClaudeQuota(controlContext: D4SmokeNativeQuotaControlCo
     options: {
       cwd: controlContext.cwd,
       env: { ...controlContext.env },
+      ...(runtime === undefined ? {} : { pathToClaudeCodeExecutable: runtime.executable }),
       permissionMode: 'dontAsk',
       settingSources: [],
       strictMcpConfig: true,
@@ -1205,6 +1236,9 @@ export type D4SmokeDriverFactory = (binding: D4SmokeDriverBinding) => Promise<D4
 
 export interface D4SmokeNativeDriverFactoryOptions {
   readonly claudeBin?: string;
+  /** Production passes the exact version-managed Claude executable here,
+   * instead of accepting the host-global `claude` launcher. */
+  readonly claudeRuntime?: D4SmokeClaudeNativeRuntime;
   readonly versionProbe?: (input: {
     readonly provider: 'codex' | 'claude';
     readonly binary: string;
@@ -1230,7 +1264,10 @@ export function createD4SmokeNativeDriverFactory(
     assertNativeBindingPolicy(binding);
     const binary = binding.provider === 'codex'
       ? resolve(binding.cwd, '..', 'runtime', 'codex-launch.mjs')
-      : options.claudeBin ?? 'claude';
+      : options.claudeRuntime?.executable ?? options.claudeBin ?? 'claude';
+    if (binding.provider === 'claude' && options.claudeRuntime !== undefined) {
+      await assertD4ClaudeNativeRuntimeIdentity(options.claudeRuntime, binding.runtimeVersion);
+    }
     const runtimeVersion = await versionProbe({
       provider: binding.provider,
       binary,
@@ -1826,6 +1863,21 @@ function frozenD4SmokeCodexRuntimeVersion(): string {
   return [...versions][0]!;
 }
 
+function frozenD4SmokeClaudeRuntimeVersion(): string {
+  const versions = new Set(
+    D4_SMOKE_CANDIDATES
+      .filter((candidate) => candidate.provider === 'claude')
+      .map((candidate) => candidate.runtimeVersion),
+  );
+  if (versions.size !== 1) {
+    throw new D4SmokePolicyError(
+      'model_binding_invalid',
+      `D4 Claude matrix must freeze one runtime version, found ${[...versions].join(',')}`,
+    );
+  }
+  return [...versions][0]!;
+}
+
 /** Watchdog-facing, single-execution production entrypoint. */
 export async function runD4SmokeFilesystemExecution(
   input: D4SmokeFilesystemExecutionInput,
@@ -1856,9 +1908,13 @@ export async function runD4SmokeFilesystemExecution(
   const preflightQuota = await captureD4SmokeIsolatedPreflightQuota({
     canonical,
     expectedCodexRuntimeVersion: frozenD4SmokeCodexRuntimeVersion(),
+    expectedClaudeRuntimeVersion: frozenD4SmokeClaudeRuntimeVersion(),
   });
   if (preflightQuota.codexRuntime === null) {
     throw new D4SmokePolicyError('model_binding_invalid', 'production preflight did not pin Codex');
+  }
+  if (preflightQuota.claudeRuntime === null) {
+    throw new D4SmokePolicyError('model_binding_invalid', 'production preflight did not pin Claude Code');
   }
   const adapter = createD4SmokeFilesystemWorkspaceAdapter(input.filesystemAdapterOptions);
   return runD4SmokeExecution({
@@ -1874,7 +1930,7 @@ export async function runD4SmokeFilesystemExecution(
     })),
     canonicalCredentialPaths: canonical,
     quotaReader: createD4SmokeNativeExecutionQuotaReader(preflightQuota, forecastBounds),
-    driverFactory: createD4SmokeNativeDriverFactory(),
+    driverFactory: createD4SmokeNativeDriverFactory({ claudeRuntime: preflightQuota.claudeRuntime }),
     codexRuntime: preflightQuota.codexRuntime,
     bootstrapWorkspace: adapter.bootstrapWorkspace,
     prepareDecision: adapter.prepareDecision,
@@ -2724,6 +2780,101 @@ export interface D4SmokeCodexNativeRuntime {
     readonly mtimeNs: bigint;
     readonly ctimeNs: bigint;
   };
+}
+
+export interface D4SmokeClaudeNativeRuntime {
+  readonly root: string;
+  readonly executable: string;
+  readonly version: string;
+  readonly identity: {
+    readonly dev: bigint;
+    readonly ino: bigint;
+    readonly size: bigint;
+    readonly mtimeNs: bigint;
+    readonly ctimeNs: bigint;
+  };
+}
+
+/** Resolve the exact version-managed Claude Code executable rather than the
+ * mutable host-global `claude` launcher. */
+export async function resolveD4ClaudeNativeRuntime(
+  expectedVersion: string,
+  versionsRoot = join(homedir(), '.local', 'share', 'claude', 'versions'),
+): Promise<D4SmokeClaudeNativeRuntime> {
+  const candidate = join(versionsRoot, expectedVersion);
+  let executable: string;
+  let metadata: Awaited<ReturnType<typeof lstat>>;
+  try {
+    await access(candidate, constants.X_OK);
+    metadata = await lstat(candidate, { bigint: true });
+    executable = await realpath(candidate);
+  } catch (error) {
+    throw new D4SmokePolicyError(
+      'sandbox_not_fresh',
+      `D4 requires version-managed Claude Code ${expectedVersion}`,
+      { cause: error },
+    );
+  }
+  if (!metadata.isFile() || metadata.isSymbolicLink() || executable !== candidate) {
+    throw new D4SmokePolicyError(
+      'model_binding_invalid',
+      `version-managed Claude Code ${expectedVersion} is not a regular executable`,
+    );
+  }
+  const version = await readD4ExecutableVersion(executable);
+  if (version !== expectedVersion) {
+    throw new D4SmokePolicyError(
+      'model_binding_invalid',
+      `Claude Code must be ${expectedVersion}, found ${version ?? 'unknown'}`,
+    );
+  }
+  return {
+    root: dirname(executable),
+    executable,
+    version,
+    identity: {
+      dev: metadata.dev,
+      ino: metadata.ino,
+      size: metadata.size,
+      mtimeNs: metadata.mtimeNs,
+      ctimeNs: metadata.ctimeNs,
+    },
+  };
+}
+
+async function assertD4ClaudeNativeRuntimeIdentity(
+  runtime: D4SmokeClaudeNativeRuntime,
+  expectedVersion: string,
+): Promise<void> {
+  let executable: string;
+  let metadata: Awaited<ReturnType<typeof lstat>>;
+  try {
+    executable = await realpath(runtime.executable);
+    metadata = await lstat(runtime.executable, { bigint: true });
+  } catch (error) {
+    throw new D4SmokePolicyError(
+      'model_binding_invalid',
+      'pinned Claude Code runtime disappeared',
+      { cause: error },
+    );
+  }
+  if (
+    runtime.version !== expectedVersion
+    || runtime.root !== dirname(runtime.executable)
+    || executable !== runtime.executable
+    || !metadata.isFile()
+    || metadata.isSymbolicLink()
+    || metadata.dev !== runtime.identity.dev
+    || metadata.ino !== runtime.identity.ino
+    || metadata.size !== runtime.identity.size
+    || metadata.mtimeNs !== runtime.identity.mtimeNs
+    || metadata.ctimeNs !== runtime.identity.ctimeNs
+  ) {
+    throw new D4SmokePolicyError(
+      'model_binding_invalid',
+      `pinned Claude Code runtime identity diverged from ${expectedVersion}`,
+    );
+  }
 }
 
 interface D4SmokeCodexPlatformTarget {
@@ -4087,6 +4238,7 @@ function buildD4EngineeringShakedownEvidenceFromUsed(input: {
 export function createD4EngineeringShakedownNativeQuotaReader(options: {
   readonly forecastBounds: D4SmokeQuotaForecastBounds;
   readonly codexRuntime: D4SmokeCodexNativeRuntime | null;
+  readonly claudeRuntime: D4SmokeClaudeNativeRuntime | null;
   readonly now?: () => Date;
   readonly validityMs?: number;
 }): D4ShakedownQuotaReader {
@@ -4115,7 +4267,14 @@ export function createD4EngineeringShakedownNativeQuotaReader(options: {
         context,
       ));
     } else {
-      liveUsed = readD4SmokeClaudeQuotaWindows(await readNativeClaudeQuota(context));
+      if (options.claudeRuntime === null) {
+        throw new D4SmokePolicyError(
+          'model_binding_invalid',
+          'shakedown Claude quota reader is missing the pinned native runtime',
+        );
+      }
+      await assertD4ClaudeNativeRuntimeIdentity(options.claudeRuntime, plan.candidate.runtimeVersion);
+      liveUsed = readD4SmokeClaudeQuotaWindows(await readNativeClaudeQuota(context, options.claudeRuntime));
     }
     return buildD4EngineeringShakedownEvidenceFromUsed({
       phase,
@@ -4357,7 +4516,7 @@ export interface D4EngineeringShakedownFilesystemInput {
 }
 
 /** Watchdog-facing, serial single-execution production entrypoint. It pins the
- * frozen native Codex runtime (for a Codex candidate only), reads live
+ * frozen native runtime for the selected candidate, reads live
  * subscription quota per-dispatch, and never accepts a test seam. */
 export async function runD4EngineeringShakedownFilesystem(
   input: D4EngineeringShakedownFilesystemInput,
@@ -4381,10 +4540,15 @@ export async function runD4EngineeringShakedownFilesystem(
   const forecastBounds = deriveD4SmokeQuotaForecastBounds({ stage, contentByRef: input.contentByRef });
   const canonical = defaultD4SmokeCanonicalCredentialPaths();
   let codexRuntime: D4SmokeCodexNativeRuntime | undefined;
+  let claudeRuntime: D4SmokeClaudeNativeRuntime | undefined;
   if (plan.candidate.provider === 'codex') {
     const version = frozenD4SmokeCodexRuntimeVersion();
     codexRuntime = await resolveD4CodexNativeRuntime(version);
     await assertD4CodexNativeRuntimeIdentity(codexRuntime, version);
+  } else {
+    const version = frozenD4SmokeClaudeRuntimeVersion();
+    claudeRuntime = await resolveD4ClaudeNativeRuntime(version);
+    await assertD4ClaudeNativeRuntimeIdentity(claudeRuntime, version);
   }
   const adapter = createD4SmokeFilesystemWorkspaceAdapter(input.filesystemAdapterOptions);
   return runD4EngineeringShakedown({
@@ -4402,8 +4566,9 @@ export async function runD4EngineeringShakedownFilesystem(
     quotaReader: createD4EngineeringShakedownNativeQuotaReader({
       forecastBounds,
       codexRuntime: codexRuntime ?? null,
+      claudeRuntime: claudeRuntime ?? null,
     }),
-    driverFactory: createD4SmokeNativeDriverFactory(),
+    driverFactory: createD4SmokeNativeDriverFactory({ claudeRuntime }),
     ...(codexRuntime !== undefined ? { codexRuntime } : {}),
     bootstrapWorkspace: adapter.bootstrapWorkspace,
     prepareDecision: adapter.prepareDecision,
