@@ -1,6 +1,5 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { access, appendFile, chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -112,15 +111,34 @@ type ProductionSeamKey = Extract<
 >;
 const PRODUCTION_INPUT_EXCLUDES_SEAMS: ProductionSeamKey extends never ? true : never = true;
 
-async function bindUnixSocket(path: string): Promise<void> {
-  const server = createServer();
+async function startPinnedClaudeBridgeSocket(path: string): Promise<() => Promise<void>> {
+  // Exact Claude Code 2.1.202 Linux bridge initializer seam: sfa() spawns
+  // `socat UNIX-LISTEN:<os.tmpdir()>/claude-http-<16 hex>.sock,fork,reuseaddr
+  // TCP:localhost:<port>,keepalive,keepidle=10,keepintvl=5,keepcnt=3`.
+  const child = spawn('socat', [
+    `UNIX-LISTEN:${path},fork,reuseaddr`,
+    'TCP:localhost:1,keepalive,keepidle=10,keepintvl=5,keepcnt=3',
+  ], { stdio: 'ignore' });
   await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(path, resolve);
+    child.once('spawn', resolve);
+    child.once('error', reject);
   });
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => error === undefined ? resolve() : reject(error));
-  });
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      if ((await stat(path)).isSocket()) {
+        return async () => {
+          if (child.exitCode === null) child.kill('SIGTERM');
+          if (child.exitCode === null) await new Promise<void>((resolve) => child.once('exit', resolve));
+        };
+      }
+    } catch {
+      // The native initializer checks readiness five times too.
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, attempt * 100));
+  }
+  if (child.exitCode === null) child.kill('SIGTERM');
+  if (child.exitCode === null) await new Promise<void>((resolve) => child.once('exit', resolve));
+  throw new Error(`pinned Claude bridge did not create ${path}`);
 }
 
 function quotaEvidence(manifestSha256: string, phase: D4SmokeQuotaPhase) {
@@ -1572,14 +1590,17 @@ describe('D4 Smoke single-execution runner', () => {
         expect(bindings[0]!.env).not.toHaveProperty('OPENALICE_UTA_INTERNAL_TOKEN');
         expect(bindings[0]!.env).not.toHaveProperty('OPENALICE_MCP_URL');
         expect(bindings[0]!.env.HOME).toContain(plan.paths.root);
-        expect(bindings[0]!.env.TMPDIR).toBe(plan.paths.tempRoot);
-        expect(bindings[0]!.env.TMP).toBe(plan.paths.tempRoot);
-        expect(bindings[0]!.env.TEMP).toBe(plan.paths.tempRoot);
         if (provider === 'claude') {
           expect(bindings[0]!.env.CLAUDE_CODE_TMPDIR).toBe(plan.paths.claudeBridgeTempDir);
           expect(bindings[0]!.env.CLAUDE_CODE_TMPDIR).not.toContain(plan.paths.root);
+          expect(bindings[0]!.env.TMPDIR).toBe(plan.paths.claudeBridgeTempDir);
+          expect(bindings[0]!.env.TMP).toBe(plan.paths.claudeBridgeTempDir);
+          expect(bindings[0]!.env.TEMP).toBe(plan.paths.claudeBridgeTempDir);
         } else {
           expect(bindings[0]!.env).not.toHaveProperty('CLAUDE_CODE_TMPDIR');
+          expect(bindings[0]!.env.TMPDIR).toBe(plan.paths.tempRoot);
+          expect(bindings[0]!.env.TMP).toBe(plan.paths.tempRoot);
+          expect(bindings[0]!.env.TEMP).toBe(plan.paths.tempRoot);
         }
         await expect(access(join(plan.paths.root, '.quota-control'))).rejects.toThrow();
         await expect(access(provider === 'codex'
@@ -2400,23 +2421,18 @@ describe('D4 engineering shakedown (issue #205)', () => {
       .toThrow(/selection_invalid/);
   });
 
-  it('uses Claude 2.1.202\'s effective per-user Bash temp directory for the saved bridge failure', async () => {
-    const artifactEffectiveTemp = join(
+  it('uses Claude 2.1.202\'s os.tmpdir bridge socket path for the saved failure', async () => {
+    const artifactTmpDir = join(
       '/home/user/.local/state/openalice/d4-engineering-shakedown/sandboxes',
-      'b13a6f014fd2b87f768f02cf402cf49d184bd97dbb8f0b18e26306d7eec8ee1b',
+      '406bb1f5e888b36874116e132b2ab220d7aa564c02862fc53307df5afadc3750',
       'engineering-shakedown-dba3e23907f7b062',
       'tmp',
-      'claude-1000',
     );
-    expect(Buffer.byteLength(artifactEffectiveTemp)).toBeGreaterThan(44);
-    expect(Buffer.byteLength(join(artifactEffectiveTemp, 'bridge.sock'))).toBeGreaterThan(107);
+    const artifactSocket = join(artifactTmpDir, 'claude-http-0123456789abcdef.sock');
+    expect(Buffer.byteLength(artifactSocket)).toBeGreaterThan(107);
 
     const root = await mkdtemp(join(tmpdir(), 'openalice-d4-bridge-'));
     try {
-      const longSocket = join(root, 'x'.repeat(128), 'bridge.sock');
-      await mkdir(dirname(longSocket), { recursive: true, mode: 0o700 });
-      await expect(bindUnixSocket(longSocket)).rejects.toMatchObject({ code: 'EINVAL' });
-
       const fixture = await createD4SmokeTestFixture();
       const stage = await validateD4SmokeStage({
         ...fixture,
@@ -2429,31 +2445,22 @@ describe('D4 engineering shakedown (issue #205)', () => {
         decisionIndex: 0,
       };
       const plan = planD4EngineeringShakedown(stage, join(root, 'sandboxes'), selector);
-      const effectiveBashTemp = join(
-        plan.paths.claudeBridgeTempDir,
-        `claude-${process.getuid?.() ?? 0}`,
-      );
-      const bridgeSocket = join(effectiveBashTemp, 'x'.repeat(64));
+      const bridgeSocket = join(plan.env.TMPDIR!, 'claude-http-0123456789abcdef.sock');
 
       expect(plan.env.CLAUDE_CODE_TMPDIR).toBe(plan.paths.claudeBridgeTempDir);
-      // Claude 2.1.202 derives its Bash child's TMPDIR from this per-uid path.
-      // The runner's long sandbox TMPDIR remains for non-Claude containment.
-      expect(plan.env.TMPDIR).toBe(plan.paths.tempRoot);
-      expect(Buffer.byteLength(effectiveBashTemp)).toBeLessThanOrEqual(44);
+      expect(plan.env.TMPDIR).toBe(plan.paths.claudeBridgeTempDir);
+      expect(plan.env.TMP).toBe(plan.paths.claudeBridgeTempDir);
+      expect(plan.env.TEMP).toBe(plan.paths.claudeBridgeTempDir);
       expect(Buffer.byteLength(bridgeSocket)).toBeLessThanOrEqual(107);
       await mkdir(plan.paths.claudeBridgeTempDir, { recursive: false, mode: 0o700 });
-      await mkdir(effectiveBashTemp, { recursive: false, mode: 0o700 });
       try {
-        const [bridgeStat, effectiveStat] = await Promise.all([
-          stat(plan.paths.claudeBridgeTempDir),
-          stat(effectiveBashTemp),
-        ]);
+        const bridgeStat = await stat(plan.paths.claudeBridgeTempDir);
         expect(bridgeStat.mode & 0o777).toBe(0o700);
-        expect(effectiveStat.mode & 0o777).toBe(0o700);
         if (typeof process.getuid === 'function') {
-          expect(effectiveStat.uid).toBe(process.getuid());
+          expect(bridgeStat.uid).toBe(process.getuid());
         }
-        await expect(bindUnixSocket(bridgeSocket)).resolves.toBeUndefined();
+        const stopBridge = await startPinnedClaudeBridgeSocket(bridgeSocket);
+        await stopBridge();
       } finally {
         await rm(plan.paths.claudeBridgeTempDir, { recursive: true, force: true });
       }
