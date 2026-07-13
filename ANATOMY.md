@@ -125,8 +125,30 @@ state, or ownership.
   read-only; the agent writes only a draft,
   `validate-ledger.mjs` is the supported atomic ledger writer and publishes the
   commit marker, and the supervisor retains receipts to detect later semantic
-  deletion or mutation. This is corruption-evident inside one agent-writable
-  trust domain, not tamper-proof account truth; UTA and the venue stay authoritative.
+  deletion or mutation. The versioned D4 smoke stage manifest freezes the
+  explicit repo-local runtime dependency closure, D3 dataset identity,
+  provider-specific raw quota observations (including exact calibration turns,
+  display resolution, and per-window future-turn counts), and model matrix.
+  `d4-smoke-runner.ts` first resolves and attests the frozen native Codex
+  runtime, then reads both subscription controls sequentially through
+  one-provider ephemeral credential roots that are source-checked and removed
+  before candidate setup. Codex preflight, dispatch quota reads, and the candidate
+  launcher retain that same executable identity; each dispatch rechecks only the
+  selected provider through that execution's selected OAuth copy. The bootstrap
+  moves the ledger
+  validator, command shims, and audit append helper into a host runtime outside
+  the workspace that is non-writable while the candidate runs. Codex runs inside
+  a fail-closed bubblewrap filesystem with a replacement-only environment,
+  curated executable/library set, and `/usr/bin/git` overlaid by the audit shim;
+  Claude uses the fail-closed SDK sandbox. Structured forbidden Git attempts are
+  recorded at both the Claude authorization guard and CLI/absolute wrapper
+  boundaries; the Claude driver latches authorization callback failures as fatal
+  even if the SDK emits a success result, and audit append failures also surface
+  as command events. The runner also
+  owns deterministic wakes, exact model attestation, proposal-only audit checks,
+  and terminal report validation. This is corruption-evident inside one
+  agent-writable trust domain, not tamper-proof account truth; UTA and the venue
+  stay authoritative.
   The default root is `src/workspaces/config.ts:107-109`.
 
 - Secrets are not stored in plaintext data files after sealing. The machine key

@@ -90,6 +90,9 @@ const INTERRUPT_GRACE_MS = 2000;
 export interface CodexAppServerDriverOptions {
   readonly cwd: string;
   readonly env?: Record<string, string>;
+  /** `inherit` preserves the historical parent-env merge. Security-sensitive
+   * callers can select `replace` to launch from only the supplied environment. */
+  readonly envInheritance?: 'inherit' | 'replace';
   readonly codexBin?: string;
   readonly logger?: Logger;
   /** Test seam: override how the app-server child is created. Production leaves
@@ -101,8 +104,24 @@ export interface CodexAppServerDriverOptions {
   readonly versionProbe?: (bin: string) => Promise<string | null>;
 }
 
+export function resolveCodexAppServerEnvironment(
+  configured: Readonly<Record<string, string>> | undefined,
+  inheritance: 'inherit' | 'replace',
+  parent: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  if (inheritance === 'replace') return configured === undefined ? {} : { ...configured };
+  return configured === undefined ? parent : { ...parent, ...configured };
+}
+
 interface ThreadState {
   alive: boolean;
+  /** Exact model reported by the app-server at the top level of the
+   * `thread/start` / `thread/resume` response. Requested config is not proof. */
+  resolvedModelId?: string;
+  /** Every provider-reported identity observed for this thread. The app-server
+   * can reroute a model between turns (or during one), so this set is
+   * deliberately thread-persistent and never replaced by the latest value. */
+  readonly reportedModelIds: Set<string>;
   /** Set from `EnsureThreadOptions.networkAccess` (issue #146 MAJOR-1); read by
    *  `runTurn` to attach a `sandboxPolicy` override so every turn on this
    *  thread gets network-enabled workspace-write, mirroring the PTY codex
@@ -195,7 +214,11 @@ export class CodexAppServerDriver implements StewardMachineDriver {
     );
   }
 
-  async ensureThread(opts: EnsureThreadOptions): Promise<{ threadId: string; resumed: boolean }> {
+  async ensureThread(opts: EnsureThreadOptions): Promise<{
+    threadId: string;
+    resumed: boolean;
+    resolvedModelId?: string;
+  }> {
     const client = await this.connect();
     const sandbox = opts.sandbox ?? 'workspace-write';
     if (opts.threadId) {
@@ -209,10 +232,21 @@ export class CodexAppServerDriver implements StewardMachineDriver {
       // field `thread/start` already honors below — `ThreadResumeParams.model`
       // carries "Configuration overrides for the resumed thread, if any."
       if (opts.model !== undefined) resumeParams.model = opts.model;
-      const result = (await client.request('thread/resume', resumeParams)) as { thread?: { id?: string } };
+      const result = (await client.request('thread/resume', resumeParams)) as {
+        thread?: { id?: string };
+        model?: string;
+      };
       const threadId = result?.thread?.id ?? opts.threadId;
-      this.threads.set(threadId, { alive: true, networkAccess: opts.networkAccess });
-      return { threadId, resumed: true };
+      const resolvedModelId = typeof result.model === 'string' && result.model.trim() !== ''
+        ? result.model
+        : undefined;
+      this.threads.set(threadId, {
+        alive: true,
+        networkAccess: opts.networkAccess,
+        reportedModelIds: new Set(resolvedModelId === undefined ? [] : [resolvedModelId]),
+        ...(resolvedModelId !== undefined ? { resolvedModelId } : {}),
+      });
+      return { threadId, resumed: true, ...(resolvedModelId !== undefined ? { resolvedModelId } : {}) };
     }
     const startParams: Record<string, unknown> = {
       cwd: opts.cwd,
@@ -221,11 +255,22 @@ export class CodexAppServerDriver implements StewardMachineDriver {
       ephemeral: false,
     };
     if (opts.model !== undefined) startParams.model = opts.model;
-    const result = (await client.request('thread/start', startParams)) as { thread?: { id?: string } };
+    const result = (await client.request('thread/start', startParams)) as {
+      thread?: { id?: string };
+      model?: string;
+    };
     const threadId = result?.thread?.id;
     if (!threadId) throw new MachineDriverProtocolError('thread/start response missing thread.id');
-    this.threads.set(threadId, { alive: true, networkAccess: opts.networkAccess });
-    return { threadId, resumed: false };
+    const resolvedModelId = typeof result.model === 'string' && result.model.trim() !== ''
+      ? result.model
+      : undefined;
+    this.threads.set(threadId, {
+      alive: true,
+      networkAccess: opts.networkAccess,
+      reportedModelIds: new Set(resolvedModelId === undefined ? [] : [resolvedModelId]),
+      ...(resolvedModelId !== undefined ? { resolvedModelId } : {}),
+    });
+    return { threadId, resumed: false, ...(resolvedModelId !== undefined ? { resolvedModelId } : {}) };
   }
 
   async runTurn(threadId: string, input: string, opts: RunTurnOptions = {}): Promise<TurnOutcome> {
@@ -380,7 +425,10 @@ export class CodexAppServerDriver implements StewardMachineDriver {
     const bin = this.options.codexBin ?? 'codex';
     const child = spawn(bin, ['app-server'], {
       cwd: this.options.cwd,
-      env: this.options.env ? { ...process.env, ...this.options.env } : process.env,
+      env: resolveCodexAppServerEnvironment(
+        this.options.env,
+        this.options.envInheritance ?? 'inherit',
+      ),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     if (!child.stdin || !child.stdout) {
@@ -401,6 +449,9 @@ export class CodexAppServerDriver implements StewardMachineDriver {
         break;
       case 'item/completed':
         this.onItemCompleted(params);
+        break;
+      case 'model/rerouted':
+        this.onModelRerouted(params);
         break;
       case 'thread/tokenUsage/updated':
         this.onTokenUsage(params);
@@ -447,7 +498,39 @@ export class CodexAppServerDriver implements StewardMachineDriver {
       turnId: p.turnId ?? waiter?.turnId ?? '',
       itemType: item.type ?? 'unknown',
       text,
+      ...(typeof (item as { command?: unknown }).command === 'string'
+        ? { command: (item as { command: string }).command }
+        : {}),
+      ...(typeof (item as { aggregatedOutput?: unknown }).aggregatedOutput === 'string'
+        ? { aggregatedOutput: (item as { aggregatedOutput: string }).aggregatedOutput }
+        : {}),
+      ...(typeof (item as { exitCode?: unknown }).exitCode === 'number'
+        ? { exitCode: (item as { exitCode: number }).exitCode }
+        : {}),
     });
+  }
+
+  private onModelRerouted(params: unknown): void {
+    const p = params as {
+      threadId?: string;
+      turnId?: string;
+      fromModel?: string;
+      toModel?: string;
+      reason?: string;
+    };
+    if (
+      !p.threadId
+      || !p.turnId
+      || typeof p.reason !== 'string'
+      || typeof p.fromModel !== 'string'
+      || typeof p.toModel !== 'string'
+    ) return;
+    const state = this.threads.get(p.threadId);
+    if (!state) return;
+    for (const model of [p.fromModel, p.toModel]) {
+      const normalized = model.trim();
+      if (normalized !== '') state.reportedModelIds.add(normalized);
+    }
   }
 
   private onTokenUsage(params: unknown): void {
@@ -499,6 +582,7 @@ export class CodexAppServerDriver implements StewardMachineDriver {
         agentMessage: waiter.agentMessage,
         durationMs,
         interrupted: true,
+        actualModelIds: this.actualModelIds(waiter.threadId),
       });
       return;
     }
@@ -508,6 +592,7 @@ export class CodexAppServerDriver implements StewardMachineDriver {
       agentMessage: waiter.agentMessage,
       durationMs,
       interrupted: false,
+      actualModelIds: this.actualModelIds(waiter.threadId),
     });
   }
 
@@ -584,6 +669,7 @@ export class CodexAppServerDriver implements StewardMachineDriver {
         agentMessage: waiter.agentMessage,
         durationMs: null,
         interrupted: true,
+        actualModelIds: this.actualModelIds(waiter.threadId),
       });
     }, INTERRUPT_GRACE_MS);
   }
@@ -595,7 +681,11 @@ export class CodexAppServerDriver implements StewardMachineDriver {
   private markAlive(threadId: string): void {
     const state = this.threads.get(threadId);
     if (state) state.alive = true;
-    else this.threads.set(threadId, { alive: true });
+    else this.threads.set(threadId, { alive: true, reportedModelIds: new Set<string>() });
+  }
+
+  private actualModelIds(threadId: string): readonly string[] {
+    return [...(this.threads.get(threadId)?.reportedModelIds ?? [])].sort();
   }
 
   private clearTimers(waiter: TurnWaiter): void {

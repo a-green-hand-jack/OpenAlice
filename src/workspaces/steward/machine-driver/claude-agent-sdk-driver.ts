@@ -36,7 +36,7 @@ import { randomUUID } from 'node:crypto';
 import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import type { ModelUsage, Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 
-import { AUTOTRUST_SETTINGS_OBJECT } from '../../adapters/claude.js';
+import { AUTOTRUST_SETTINGS_OBJECT } from '../../claude-autotrust-settings.js';
 import type { Logger } from '../../logger.js';
 import { NOOP_LOGGER } from './jsonrpc-stdio.js';
 import {
@@ -74,6 +74,22 @@ export interface ClaudeAgentSdkDriverOptions {
   readonly cwd: string;
   readonly env?: Record<string, string>;
   readonly logger?: Logger;
+  /** Optional narrower policy for a bounded caller such as the D4 proposal-only
+   * runner. Ordinary steward dispatch keeps the established autotrust default. */
+  readonly settings?: Options['settings'];
+  readonly permissionMode?: Options['permissionMode'];
+  /** Pin the Claude Code executable after a caller has verified its version.
+   * Otherwise the SDK launches its bundled Claude Code binary. */
+  readonly pathToClaudeCodeExecutable?: Options['pathToClaudeCodeExecutable'];
+  /** D4-only containment knobs. They are omitted for ordinary steward
+   * dispatch, preserving the SDK's established workspace behavior. */
+  readonly sandbox?: Options['sandbox'];
+  readonly settingSources?: Options['settingSources'];
+  readonly strictMcpConfig?: Options['strictMcpConfig'];
+  readonly tools?: Options['tools'];
+  readonly skills?: Options['skills'];
+  readonly systemPrompt?: Options['systemPrompt'];
+  readonly canUseTool?: Options['canUseTool'];
   /** Test seam: replace the SDK `query`. Production leaves this undefined. */
   readonly queryFn?: ClaudeQueryFn;
 }
@@ -101,6 +117,11 @@ interface ClaudeInFlightTurn {
   /** Set when the turn's `result` message reported an error subtype; surfaced as
    *  a rejected `runTurn` (fatal) once the stream ends. */
   resultError: string | null;
+  /** The pinned SDK can swallow `canUseTool` exceptions into a control-response
+   * error. Latch the first callback failure so no later success frame can hide it. */
+  fatalControlFailure: { readonly cause: unknown } | null;
+  readonly actualModelIds: Set<string>;
+  readonly bashCommandsByToolUseId: Map<string, string>;
   readonly onEvent: ((ev: DriverEvent) => void) | undefined;
 }
 
@@ -116,6 +137,16 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
   private readonly env: Record<string, string> | undefined;
   private readonly logger: Logger;
   private readonly queryFn: ClaudeQueryFn;
+  private readonly settings: Options['settings'];
+  private readonly permissionMode: Options['permissionMode'];
+  private readonly pathToClaudeCodeExecutable: Options['pathToClaudeCodeExecutable'];
+  private readonly sandbox: Options['sandbox'];
+  private readonly settingSources: Options['settingSources'];
+  private readonly strictMcpConfig: Options['strictMcpConfig'];
+  private readonly tools: Options['tools'];
+  private readonly skills: Options['skills'];
+  private readonly systemPrompt: Options['systemPrompt'];
+  private readonly canUseTool: Options['canUseTool'];
   private readonly threads = new Map<string, ClaudeThreadState>();
   private readonly telemetry = new Map<string, ThreadTelemetry>();
   private readonly inflight = new Map<string, ClaudeInFlightTurn>();
@@ -126,6 +157,16 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
     this.env = options.env;
     this.logger = options.logger ?? NOOP_LOGGER;
     this.queryFn = options.queryFn ?? ((params) => sdkQuery(params));
+    this.settings = options.settings ?? AUTOTRUST_SETTINGS_OBJECT;
+    this.permissionMode = options.permissionMode ?? 'dontAsk';
+    this.pathToClaudeCodeExecutable = options.pathToClaudeCodeExecutable;
+    this.sandbox = options.sandbox;
+    this.settingSources = options.settingSources;
+    this.strictMcpConfig = options.strictMcpConfig;
+    this.tools = options.tools;
+    this.skills = options.skills;
+    this.systemPrompt = options.systemPrompt;
+    this.canUseTool = options.canUseTool;
   }
 
   async ensureThread(opts: EnsureThreadOptions): Promise<{ threadId: string; resumed: boolean }> {
@@ -170,6 +211,9 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
       durationMs: null,
       status: 'completed',
       resultError: null,
+      fatalControlFailure: null,
+      actualModelIds: new Set<string>(),
+      bashCommandsByToolUseId: new Map<string, string>(),
       onEvent: opts.onEvent,
     };
     this.inflight.set(threadId, turn);
@@ -180,6 +224,17 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
     const useResume = state.resumedFromStore || state.hasRun;
     const model = opts.model ?? state.model;
     const effort = opts.effort !== undefined && EFFORT_LEVELS.has(opts.effort) ? opts.effort : undefined;
+    const guardedCanUseTool: Options['canUseTool'] = this.canUseTool === undefined
+      ? undefined
+      : async (toolName, toolInput, callbackOptions) => {
+          try {
+            return await this.canUseTool!(toolName, toolInput, callbackOptions);
+          } catch (cause) {
+            turn.fatalControlFailure ??= { cause };
+            turn.abort.abort();
+            throw cause;
+          }
+        };
     const options: Options = {
       cwd: this.cwd,
       // `Options.env` REPLACES the subprocess env entirely — and the driver's
@@ -203,8 +258,18 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
       // `env: undefined`).
       ...(this.env !== undefined ? { env: this.env } : {}),
       abortController: abort,
-      permissionMode: 'dontAsk',
-      settings: AUTOTRUST_SETTINGS_OBJECT,
+      permissionMode: this.permissionMode,
+      settings: this.settings,
+      ...(this.pathToClaudeCodeExecutable !== undefined
+        ? { pathToClaudeCodeExecutable: this.pathToClaudeCodeExecutable }
+        : {}),
+      ...(this.sandbox !== undefined ? { sandbox: this.sandbox } : {}),
+      ...(this.settingSources !== undefined ? { settingSources: this.settingSources } : {}),
+      ...(this.strictMcpConfig !== undefined ? { strictMcpConfig: this.strictMcpConfig } : {}),
+      ...(this.tools !== undefined ? { tools: this.tools } : {}),
+      ...(this.skills !== undefined ? { skills: this.skills } : {}),
+      ...(this.systemPrompt !== undefined ? { systemPrompt: this.systemPrompt } : {}),
+      ...(guardedCanUseTool !== undefined ? { canUseTool: guardedCanUseTool } : {}),
       ...(useResume ? { resume: threadId } : { sessionId: threadId }),
       ...(model !== undefined ? { model } : {}),
       ...(effort !== undefined ? { effort: effort as Options['effort'] } : {}),
@@ -227,6 +292,7 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
         this.handleMessage(turn, message);
       }
       state.hasRun = true;
+      if (turn.fatalControlFailure !== null) throw turn.fatalControlFailure.cause;
       if (turn.interrupted) return this.interruptedOutcome(turn);
       if (turn.resultError !== null) {
         throw new MachineDriverProtocolError(`claude turn failed: ${turn.resultError}`);
@@ -237,8 +303,17 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
         agentMessage: turn.agentMessage,
         durationMs: turn.durationMs,
         interrupted: false,
+        actualModelIds: [...turn.actualModelIds].sort(),
       };
     } catch (err) {
+      if (turn.fatalControlFailure !== null) {
+        state.hasRun = true;
+        const cause = turn.fatalControlFailure.cause;
+        throw new MachineDriverProtocolError(
+          `claude canUseTool failed: ${errText(cause)}`,
+          { cause },
+        );
+      }
       // A dispose mid-turn is fatal (reject); a deadline/interruptInFlight abort
       // resolves `interrupted`. The abort surfaces here as a thrown AbortError OR
       // as a clean stream end (handled above) — both routes honor `interrupted`.
@@ -305,7 +380,21 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
   // --- message handling ---------------------------------------------------
 
   private handleMessage(turn: ClaudeInFlightTurn, message: SDKMessage): void {
+    if (message.type === 'system' && message.subtype === 'init') {
+      addActualClaudeModel(turn, message.model);
+    } else if (message.type === 'system' && message.subtype === 'model_refusal_fallback') {
+      addActualClaudeModel(turn, message.original_model);
+      addActualClaudeModel(turn, message.fallback_model);
+    } else if (message.type === 'system' && message.subtype === 'model_refusal_no_fallback') {
+      addActualClaudeModel(turn, message.original_model);
+    }
+    if (message.type === 'assistant') {
+      captureClaudeBashCommands(turn, message.message.content);
+    } else if (message.type === 'user') {
+      emitClaudeAuditAppendFailures(turn, message.message.content);
+    }
     if (message.type !== 'result') return;
+    for (const modelId of Object.keys(message.modelUsage)) addActualClaudeModel(turn, modelId);
     turn.durationMs = typeof message.duration_ms === 'number' ? message.duration_ms : turn.durationMs;
     const telemetry = telemetryFromModelUsage(message.modelUsage);
     if (telemetry) {
@@ -331,8 +420,62 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
       agentMessage: turn.agentMessage,
       durationMs: turn.durationMs,
       interrupted: true,
+      actualModelIds: [...turn.actualModelIds].sort(),
     };
   }
+}
+
+function captureClaudeBashCommands(turn: ClaudeInFlightTurn, content: unknown): void {
+  if (!Array.isArray(content)) return;
+  for (const block of content) {
+    if (block === null || typeof block !== 'object') continue;
+    const value = block as Record<string, unknown>;
+    if (value['type'] !== 'tool_use' || value['name'] !== 'Bash' || typeof value['id'] !== 'string') continue;
+    const input = value['input'];
+    if (input === null || typeof input !== 'object') continue;
+    const command = (input as Record<string, unknown>)['command'];
+    if (typeof command === 'string') turn.bashCommandsByToolUseId.set(value['id'], command);
+  }
+}
+
+function emitClaudeAuditAppendFailures(turn: ClaudeInFlightTurn, content: unknown): void {
+  if (!Array.isArray(content)) return;
+  for (const block of content) {
+    if (block === null || typeof block !== 'object') continue;
+    const value = block as Record<string, unknown>;
+    if (value['type'] !== 'tool_result' || typeof value['tool_use_id'] !== 'string') continue;
+    const output = claudeToolResultText(value['content']);
+    const command = turn.bashCommandsByToolUseId.get(value['tool_use_id']);
+    turn.bashCommandsByToolUseId.delete(value['tool_use_id']);
+    if (!output.includes('D4_SMOKE_AUDIT_APPEND_FAILED')) continue;
+    turn.onEvent?.({
+      type: 'item-completed',
+      threadId: turn.threadId,
+      turnId: turn.turnId,
+      itemType: 'commandExecution',
+      text: null,
+      ...(command !== undefined ? { command } : {}),
+      aggregatedOutput: output,
+      exitCode: 125,
+    });
+  }
+}
+
+function claudeToolResultText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.flatMap((item) => {
+    if (typeof item === 'string') return [item];
+    if (item === null || typeof item !== 'object') return [];
+    const text = (item as Record<string, unknown>)['text'];
+    return typeof text === 'string' ? [text] : [];
+  }).join('\n');
+}
+
+function addActualClaudeModel(turn: ClaudeInFlightTurn, value: unknown): void {
+  if (typeof value !== 'string') return;
+  const modelId = value.trim();
+  if (modelId !== '') turn.actualModelIds.add(modelId);
 }
 
 /**

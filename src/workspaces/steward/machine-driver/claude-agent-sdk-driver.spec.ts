@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { AUTOTRUST_SETTINGS_OBJECT } from '../../adapters/claude.js';
+import { AUTOTRUST_SETTINGS_OBJECT } from '../../claude-autotrust-settings.js';
 import {
   ClaudeAgentSdkDriver,
   SUPPORTED_CLAUDE_AGENT_SDK_VERSION,
@@ -19,8 +19,13 @@ const require_ = createRequire(import.meta.url);
 
 /** Minimal `system/init` frame — the driver only reads `type` to mark the turn
  *  started, so the rest is inert fixture. */
-function initMsg(sessionId: string): SDKMessage {
-  return { type: 'system', subtype: 'init', session_id: sessionId } as unknown as SDKMessage;
+function initMsg(sessionId: string, model?: string): SDKMessage {
+  return {
+    type: 'system',
+    subtype: 'init',
+    session_id: sessionId,
+    ...(model !== undefined ? { model } : {}),
+  } as unknown as SDKMessage;
 }
 
 interface ModelUsageLike {
@@ -140,8 +145,143 @@ describe('ClaudeAgentSdkDriver', () => {
     // Unattended permission surface: same auto-trust settings, dontAsk (not bypass).
     expect(opts.settings).toBe(AUTOTRUST_SETTINGS_OBJECT);
     expect(opts.permissionMode).toBe('dontAsk');
+    expect(opts.sandbox).toBeUndefined();
+    expect(opts.settingSources).toBeUndefined();
+    expect(opts.strictMcpConfig).toBeUndefined();
 
     // Liveness clears the moment the turn settles (no daemon).
+    expect(driver.isThreadLive(threadId)).toBe(false);
+  });
+
+  it('forwards an explicit fail-closed sandbox without changing ordinary defaults', async () => {
+    const { fn, captured } = makeFakeQuery({
+      messages: [initMsg('s'), successResult({ sessionId: 's' })],
+    });
+    const sandbox: NonNullable<Options['sandbox']> = {
+      enabled: true,
+      failIfUnavailable: true,
+      allowUnsandboxedCommands: false,
+      network: {
+        allowedDomains: [],
+        deniedDomains: ['*'],
+        allowUnixSockets: [],
+        allowAllUnixSockets: false,
+        allowLocalBinding: false,
+      },
+      filesystem: { allowWrite: ['/tmp/scratch'] },
+    };
+    const driver = new ClaudeAgentSdkDriver({
+      cwd: '/tmp/scratch',
+      queryFn: fn,
+      sandbox,
+      settingSources: [],
+      strictMcpConfig: true,
+      tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
+      skills: [],
+    });
+    const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch' });
+    await driver.runTurn(threadId, 'x');
+
+    expect(captured[0].options.sandbox).toEqual(sandbox);
+    expect(captured[0].options.settingSources).toEqual([]);
+    expect(captured[0].options.strictMcpConfig).toBe(true);
+    expect(captured[0].options.tools).toEqual(['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep']);
+    expect(captured[0].options.skills).toEqual([]);
+  });
+
+  it('surfaces a Bash audit-append failure as a fail-closed command event', async () => {
+    const { fn } = makeFakeQuery({
+      messages: [
+        initMsg('s'),
+        {
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{
+              type: 'tool_use',
+              id: 'tool-bash-1',
+              name: 'Bash',
+              input: { command: 'git push' },
+            }],
+          },
+          parent_tool_use_id: null,
+          uuid: 'assistant-1',
+          session_id: 's',
+        } as unknown as SDKMessage,
+        {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [{
+              type: 'tool_result',
+              tool_use_id: 'tool-bash-1',
+              is_error: true,
+              content: 'D4_SMOKE_AUDIT_APPEND_FAILED EACCES',
+            }],
+          },
+          parent_tool_use_id: null,
+          session_id: 's',
+        } as unknown as SDKMessage,
+        successResult({ sessionId: 's' }),
+      ],
+    });
+    const driver = makeDriver(fn);
+    const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch' });
+    const events: DriverEvent[] = [];
+
+    await driver.runTurn(threadId, 'x', { onEvent: (event) => events.push(event) });
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'item-completed',
+      itemType: 'commandExecution',
+      command: 'git push',
+      aggregatedOutput: 'D4_SMOKE_AUDIT_APPEND_FAILED EACCES',
+      exitCode: 125,
+    }));
+  });
+
+  it('rejects a latched canUseTool failure even when the SDK swallows it and yields success', async () => {
+    const marker = new Error('D4_GUARD_AUDIT_APPEND_FAILED');
+    let sdkCaughtControlFailure: unknown;
+    let queryWasAborted = false;
+    const queryFn: ClaudeQueryFn = ({ options }) => (async function* () {
+      yield initMsg('s');
+      try {
+        await options.canUseTool!(
+          'Bash',
+          { command: '/usr/bin/git push' },
+          {
+            signal: options.abortController!.signal,
+            toolUseID: 'guard-audit-failure',
+            requestId: 'control-request-audit-failure',
+          },
+        );
+      } catch (error) {
+        // SDK 0.3.206 converts this path into a control_response error and can
+        // continue emitting an ordinary result, so the driver must own fatality.
+        sdkCaughtControlFailure = error;
+      }
+      queryWasAborted = options.abortController!.signal.aborted;
+      yield successResult({ sessionId: 's', text: 'SDK SWALLOWED CONTROL FAILURE' });
+    })();
+    const driver = new ClaudeAgentSdkDriver({
+      cwd: '/tmp/scratch',
+      queryFn,
+      canUseTool: async () => { throw marker; },
+    });
+    const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch' });
+
+    const error = await driver.runTurn(threadId, 'x').then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+
+    expect(sdkCaughtControlFailure).toBe(marker);
+    expect(queryWasAborted).toBe(true);
+    expect(error).toBeInstanceOf(MachineDriverProtocolError);
+    expect((error as Error).message).toContain('D4_GUARD_AUDIT_APPEND_FAILED');
+    expect((error as Error & { cause?: unknown }).cause).toBe(marker);
+    expect((error as Error).message).not.toContain('interrupted');
     expect(driver.isThreadLive(threadId)).toBe(false);
   });
 
@@ -200,6 +340,34 @@ describe('ClaudeAgentSdkDriver', () => {
     expect(telemetry?.totalTokens).toBe(1350);
     expect(telemetry?.contextWindow).toBe(200_000);
     expect(events.some((e) => e.type === 'token-usage')).toBe(true);
+  });
+
+  it('collects actual models from init, result usage keys, and fallback events', async () => {
+    const usage = {
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      contextWindow: 200_000,
+    };
+    const { fn } = makeFakeQuery({
+      messages: [
+        initMsg('s', 'claude-fable-5'),
+        {
+          type: 'system',
+          subtype: 'model_refusal_fallback',
+          original_model: 'claude-fable-5',
+          fallback_model: 'claude-sonnet-5',
+          session_id: 's',
+        } as unknown as SDKMessage,
+        successResult({ sessionId: 's', modelUsage: { 'claude-sonnet-5': usage } }),
+      ],
+    });
+    const driver = makeDriver(fn);
+    const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch', model: 'claude-fable-5' });
+
+    const outcome = await driver.runTurn(threadId, 'x', { model: 'claude-fable-5' });
+    expect(outcome.actualModelIds).toEqual(['claude-fable-5', 'claude-sonnet-5']);
   });
 
   it('forwards cwd + the auto-trust settings, and passes a composed env EXACTLY (issue #146 S5 review MAJOR-1)', async () => {

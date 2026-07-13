@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import type { CliAdapter, SpawnContext, WorkspaceAiCred } from '../cli-adapter.js';
+import { AUTOTRUST_SETTINGS_OBJECT } from '../claude-autotrust-settings.js';
 import { readWorkspaceFile, writeWorkspaceFile } from '../file-service.js';
 
 const SESSION_FILE_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
@@ -68,9 +69,6 @@ const CLAUDE_SETTINGS_PATH = '.claude/settings.local.json';
  * agent to use the Write/Edit tool for this step rather than a Bash
  * heredoc, or the permission grant sits unused.
  */
-const PRETRUSTED_BASH_TOOLS = ['alice', 'alice-analysis', 'alice-uta', 'alice-workspace', 'traderhub'];
-const PRETRUSTED_FILE_TOOLS = ['Write', 'Edit'];
-
 /**
  * Claude Code can park project-scoped MCP servers at "⏸ Pending approval" when
  * a workspace does provide them. New built-in OpenAlice templates no longer
@@ -87,15 +85,7 @@ const PRETRUSTED_FILE_TOOLS = ['Write', 'Edit'];
  * is structurally a claude-agent-sdk `Settings`, but kept SDK-import-free here so
  * the PTY adapter carries no SDK dependency.
  */
-export const AUTOTRUST_SETTINGS_OBJECT = {
-  enableAllProjectMcpServers: true,
-  permissions: {
-    allow: [
-      ...PRETRUSTED_BASH_TOOLS.map((bin) => `Bash(${bin} *)`),
-      ...PRETRUSTED_FILE_TOOLS,
-    ],
-  },
-};
+export { AUTOTRUST_SETTINGS_OBJECT } from '../claude-autotrust-settings.js';
 
 const AUTOTRUST_SETTINGS = JSON.stringify(AUTOTRUST_SETTINGS_OBJECT);
 
