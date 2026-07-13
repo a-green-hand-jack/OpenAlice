@@ -37,19 +37,15 @@
       "can_purchase_credits": false
     }
   },
-  "provenance": {
-    "control": "Claude Code native /usage JSON result",
-    "capturedAt": "2026-07-13T08:23:06.841Z",
-    "normalization": "Integer utilization and reset text from the native result are projected into the later SDK usage-control response shape required by the frozen runner.",
-    "nativeResult": {
-      "total_cost_usd": 0,
-      "num_turns": 0,
-      "modelUsage": {},
-      "currentSession": "16% used; resets Jul 13, 4pm (Asia/Riyadh)",
-      "currentWeekAllModels": "59% used; resets Jul 18, 6am (Asia/Riyadh)",
-      "currentWeekFable": "54% used; resets Jul 18, 6am (Asia/Riyadh)"
+  "nativeEvidence": {
+    "capture": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/captures/claude-after.native.txt",
+      "sha256": "7c415576b2c0d8632ba54ef6445293079bad7bf5468731167e1f7ff729919037"
     },
-    "calibration": "G2 reachability probes: four all-model/short-window model turns, including one Fable-window model turn",
-    "incrementalSpendUsd": 0
+    "calibrationReceipt": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/calibration-receipt.json",
+      "sha256": "2ac9f27ef3da92aa8d2e4a83b3d17a2c05128490fad993aae6ae339e17f76529"
+    },
+    "normalization": "Integer utilization and Asia/Riyadh reset text are projected into the SDK usage-control shape required by the frozen runner."
   }
 }

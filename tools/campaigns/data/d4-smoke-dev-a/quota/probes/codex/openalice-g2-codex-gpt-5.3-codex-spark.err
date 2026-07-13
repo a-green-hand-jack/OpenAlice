@@ -1,0 +1,19 @@
+Reading additional input from stdin...
+OpenAI Codex v0.144.0
+--------
+workdir: /tmp
+model: gpt-5.3-codex-spark
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: low
+reasoning summaries: none
+session id: 019f5a92-3598-7220-a1c3-eba5f3a64217
+--------
+user
+Reply with exactly OK. Do not use tools.
+codex
+OK
+tokens used
+11,770
+OK

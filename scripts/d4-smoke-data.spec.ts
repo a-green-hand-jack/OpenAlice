@@ -61,6 +61,15 @@ function repoPath(ref: string) {
   return resolve(REPO_ROOT, ref);
 }
 
+function listRelativeFiles(root: string, prefix: string): string[] {
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    const relative = `${prefix}/${entry.name}`;
+    return entry.isDirectory()
+      ? listRelativeFiles(resolve(root, entry.name), relative)
+      : [relative];
+  });
+}
+
 function stageContentByRef() {
   const stage = d4SmokeStageManifestSchema.parse(readJson(STAGE_PATH));
   const contentByRef: Record<string, Uint8Array> = {};
@@ -181,7 +190,7 @@ describe('checked-in D4 Smoke dev package', () => {
       'stage-manifest.json',
       'stage-manifest.sha256',
       'sampling-plan.json',
-      ...readdirSync(resolve(PACKAGE_ROOT, 'quota')).map((name) => `quota/${name}`),
+      ...listRelativeFiles(resolve(PACKAGE_ROOT, 'quota'), 'quota'),
       ...readdirSync(resolve(PACKAGE_ROOT, 'candidate')).map((name) => `candidate/${name}`),
       ...readdirSync(resolve(PACKAGE_ROOT, 'audit')).map((name) => `audit/${name}`),
     ];
@@ -279,6 +288,15 @@ describe('checked-in D4 Smoke dev package', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('refusing to replace the checked-in stage manifest');
     expect(sha256(readFileSync(STAGE_PATH))).toBe(before);
+  });
+
+  it('verifies immutable native quota captures and exact calibration turns', () => {
+    const result = spawnSync('pnpm', [
+      'exec', 'tsx', resolve(REPO_ROOT, 'tools/campaigns/build-d4-smoke-data.mjs'),
+      '--verify',
+    ], { cwd: REPO_ROOT, encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('verified immutable native quota captures and 9 calibration probes');
   });
 
   it('uses exact half-open decision prefixes and keeps the final cadence outcome-only', () => {

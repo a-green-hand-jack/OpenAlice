@@ -9,9 +9,11 @@
   point-in-time universe evidence, and one D3 evaluation data manifest per
   decision.
 - `sampling-plan.json` freezes the selection and transform recipe.
-- `quota/` binds the zero-cost G2 reachability calibration used for the
-  conservative complete-layer forecast. Claude's earlier native `/usage`
-  result is explicitly normalized into the later SDK usage-control shape.
+- `quota/` binds immutable native quota captures, all nine successful G2
+  reachability probe artifacts, and a calibration receipt with the exact
+  provider/window charged-turn counts. Parser projections are checked against
+  those captures; Claude's native `/usage` result is explicitly normalized
+  into the later SDK usage-control shape.
 - `critic-approval.json` is added only after an independent clean-room critic
   approves the exact committed manifest hash.
 

@@ -55,9 +55,15 @@
     "availableCount": 0,
     "credits": []
   },
-  "provenance": {
-    "control": "Codex app-server account/rateLimits/read",
-    "calibration": "G2 reachability probes: four general-window model turns and one Spark-window model turn",
-    "incrementalSpendUsd": 0
+  "nativeEvidence": {
+    "capture": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/captures/codex-after.native.json",
+      "sha256": "1bfc46584ca0436f3989ac5aeacfa09633e6e3ae06c4f25286b09d692ef29533"
+    },
+    "calibrationReceipt": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/quota/calibration-receipt.json",
+      "sha256": "2ac9f27ef3da92aa8d2e4a83b3d17a2c05128490fad993aae6ae339e17f76529"
+    },
+    "normalization": "Exact JSON-RPC result projection; rate-limit fields are unchanged."
   }
 }

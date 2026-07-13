@@ -168,7 +168,7 @@
         },
         {
           "ref": "tools/campaigns/build-d4-smoke-data.mjs",
-          "sha256": "09ad8a4b847b45a48d6f1ee9c7f2e3f04522ac4c1920d9dd77f4c3a56367305d"
+          "sha256": "109edba4af37e03a3be1e1a674582aa0f6f01681a519532e1028cc1c8a722629"
         }
       ]
     }
@@ -291,7 +291,7 @@
     "evidence": "The frozen single-instrument universe was selected before model calls and is evidenced by the pinned provider-bar receipt.",
     "sourceReceipt": {
       "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json#source-receipt",
-      "sha256": "e5b47ac52a086cd51dd840ec737e9d1acb8e4e0ce854dc4c76013e7520ea3b9a"
+      "sha256": "9d926331d17c6d1bdcfbbf824282b922c0d07bd5d2cc9e26b8e5b015ff33602c"
     }
   },
   "decisionManifests": [
@@ -369,7 +369,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json#universe",
-          "sha256": "72860d4e99cab88cb3f9607f8f5b347898b7c3dfc6051afd5892b752122fbd8e"
+          "sha256": "c560a3f8b217089fed4cc079b954562012c35e5ca02cfc853f958d9a5f4a1cb1"
         }
       },
       "sampling": {
@@ -472,7 +472,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json#universe",
-          "sha256": "72860d4e99cab88cb3f9607f8f5b347898b7c3dfc6051afd5892b752122fbd8e"
+          "sha256": "c560a3f8b217089fed4cc079b954562012c35e5ca02cfc853f958d9a5f4a1cb1"
         }
       },
       "sampling": {
@@ -575,7 +575,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json#universe",
-          "sha256": "72860d4e99cab88cb3f9607f8f5b347898b7c3dfc6051afd5892b752122fbd8e"
+          "sha256": "c560a3f8b217089fed4cc079b954562012c35e5ca02cfc853f958d9a5f4a1cb1"
         }
       },
       "sampling": {
@@ -678,7 +678,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json#universe",
-          "sha256": "72860d4e99cab88cb3f9607f8f5b347898b7c3dfc6051afd5892b752122fbd8e"
+          "sha256": "c560a3f8b217089fed4cc079b954562012c35e5ca02cfc853f958d9a5f4a1cb1"
         }
       },
       "sampling": {
@@ -781,7 +781,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json#universe",
-          "sha256": "72860d4e99cab88cb3f9607f8f5b347898b7c3dfc6051afd5892b752122fbd8e"
+          "sha256": "c560a3f8b217089fed4cc079b954562012c35e5ca02cfc853f958d9a5f4a1cb1"
         }
       },
       "sampling": {
@@ -884,7 +884,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json#universe",
-          "sha256": "72860d4e99cab88cb3f9607f8f5b347898b7c3dfc6051afd5892b752122fbd8e"
+          "sha256": "c560a3f8b217089fed4cc079b954562012c35e5ca02cfc853f958d9a5f4a1cb1"
         }
       },
       "sampling": {
@@ -987,7 +987,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json#universe",
-          "sha256": "72860d4e99cab88cb3f9607f8f5b347898b7c3dfc6051afd5892b752122fbd8e"
+          "sha256": "c560a3f8b217089fed4cc079b954562012c35e5ca02cfc853f958d9a5f4a1cb1"
         }
       },
       "sampling": {
@@ -1090,7 +1090,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json#universe",
-          "sha256": "72860d4e99cab88cb3f9607f8f5b347898b7c3dfc6051afd5892b752122fbd8e"
+          "sha256": "c560a3f8b217089fed4cc079b954562012c35e5ca02cfc853f958d9a5f4a1cb1"
         }
       },
       "sampling": {
@@ -1193,7 +1193,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json#universe",
-          "sha256": "72860d4e99cab88cb3f9607f8f5b347898b7c3dfc6051afd5892b752122fbd8e"
+          "sha256": "c560a3f8b217089fed4cc079b954562012c35e5ca02cfc853f958d9a5f4a1cb1"
         }
       },
       "sampling": {
@@ -1296,7 +1296,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json#universe",
-          "sha256": "72860d4e99cab88cb3f9607f8f5b347898b7c3dfc6051afd5892b752122fbd8e"
+          "sha256": "c560a3f8b217089fed4cc079b954562012c35e5ca02cfc853f958d9a5f4a1cb1"
         }
       },
       "sampling": {
@@ -1399,7 +1399,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json#universe",
-          "sha256": "72860d4e99cab88cb3f9607f8f5b347898b7c3dfc6051afd5892b752122fbd8e"
+          "sha256": "c560a3f8b217089fed4cc079b954562012c35e5ca02cfc853f958d9a5f4a1cb1"
         }
       },
       "sampling": {
@@ -1502,7 +1502,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-crypto-major-bull-a.json#universe",
-          "sha256": "72860d4e99cab88cb3f9607f8f5b347898b7c3dfc6051afd5892b752122fbd8e"
+          "sha256": "c560a3f8b217089fed4cc079b954562012c35e5ca02cfc853f958d9a5f4a1cb1"
         }
       },
       "sampling": {

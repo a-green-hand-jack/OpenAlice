@@ -165,7 +165,7 @@
         },
         {
           "ref": "tools/campaigns/build-d4-smoke-data.mjs",
-          "sha256": "09ad8a4b847b45a48d6f1ee9c7f2e3f04522ac4c1920d9dd77f4c3a56367305d"
+          "sha256": "109edba4af37e03a3be1e1a674582aa0f6f01681a519532e1028cc1c8a722629"
         }
       ]
     }
@@ -292,7 +292,7 @@
     "evidence": "The frozen single-instrument universe was selected before model calls and is evidenced by the pinned provider-bar receipt.",
     "sourceReceipt": {
       "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json#source-receipt",
-      "sha256": "d679da314430e795b1cc999e685dba5f745a224fd722cac6b1e2b436074ec810"
+      "sha256": "b01e13ce7b3a2ba462e5ca5a44db2a43b88e53f4c0846cf1f228f360e5b0510c"
     }
   },
   "decisionManifests": [
@@ -370,7 +370,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json#universe",
-          "sha256": "3436f5187d40f2bc0ec467a6a7a44a47003195861b4ccabf7da215f4b4914070"
+          "sha256": "d60280bdef1f2a10ff20907243b7df1fa68b5530daee62d9c0c607d250a44efd"
         }
       },
       "sampling": {
@@ -473,7 +473,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json#universe",
-          "sha256": "3436f5187d40f2bc0ec467a6a7a44a47003195861b4ccabf7da215f4b4914070"
+          "sha256": "d60280bdef1f2a10ff20907243b7df1fa68b5530daee62d9c0c607d250a44efd"
         }
       },
       "sampling": {
@@ -576,7 +576,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json#universe",
-          "sha256": "3436f5187d40f2bc0ec467a6a7a44a47003195861b4ccabf7da215f4b4914070"
+          "sha256": "d60280bdef1f2a10ff20907243b7df1fa68b5530daee62d9c0c607d250a44efd"
         }
       },
       "sampling": {
@@ -679,7 +679,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json#universe",
-          "sha256": "3436f5187d40f2bc0ec467a6a7a44a47003195861b4ccabf7da215f4b4914070"
+          "sha256": "d60280bdef1f2a10ff20907243b7df1fa68b5530daee62d9c0c607d250a44efd"
         }
       },
       "sampling": {
@@ -782,7 +782,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json#universe",
-          "sha256": "3436f5187d40f2bc0ec467a6a7a44a47003195861b4ccabf7da215f4b4914070"
+          "sha256": "d60280bdef1f2a10ff20907243b7df1fa68b5530daee62d9c0c607d250a44efd"
         }
       },
       "sampling": {
@@ -885,7 +885,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json#universe",
-          "sha256": "3436f5187d40f2bc0ec467a6a7a44a47003195861b4ccabf7da215f4b4914070"
+          "sha256": "d60280bdef1f2a10ff20907243b7df1fa68b5530daee62d9c0c607d250a44efd"
         }
       },
       "sampling": {
@@ -988,7 +988,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json#universe",
-          "sha256": "3436f5187d40f2bc0ec467a6a7a44a47003195861b4ccabf7da215f4b4914070"
+          "sha256": "d60280bdef1f2a10ff20907243b7df1fa68b5530daee62d9c0c607d250a44efd"
         }
       },
       "sampling": {
@@ -1091,7 +1091,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json#universe",
-          "sha256": "3436f5187d40f2bc0ec467a6a7a44a47003195861b4ccabf7da215f4b4914070"
+          "sha256": "d60280bdef1f2a10ff20907243b7df1fa68b5530daee62d9c0c607d250a44efd"
         }
       },
       "sampling": {
@@ -1194,7 +1194,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json#universe",
-          "sha256": "3436f5187d40f2bc0ec467a6a7a44a47003195861b4ccabf7da215f4b4914070"
+          "sha256": "d60280bdef1f2a10ff20907243b7df1fa68b5530daee62d9c0c607d250a44efd"
         }
       },
       "sampling": {
@@ -1297,7 +1297,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json#universe",
-          "sha256": "3436f5187d40f2bc0ec467a6a7a44a47003195861b4ccabf7da215f4b4914070"
+          "sha256": "d60280bdef1f2a10ff20907243b7df1fa68b5530daee62d9c0c607d250a44efd"
         }
       },
       "sampling": {
@@ -1400,7 +1400,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json#universe",
-          "sha256": "3436f5187d40f2bc0ec467a6a7a44a47003195861b4ccabf7da215f4b4914070"
+          "sha256": "d60280bdef1f2a10ff20907243b7df1fa68b5530daee62d9c0c607d250a44efd"
         }
       },
       "sampling": {
@@ -1503,7 +1503,7 @@
         "effectiveTo": null,
         "source": {
           "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-gcn-equity-bull-a.json#universe",
-          "sha256": "3436f5187d40f2bc0ec467a6a7a44a47003195861b4ccabf7da215f4b4914070"
+          "sha256": "d60280bdef1f2a10ff20907243b7df1fa68b5530daee62d9c0c607d250a44efd"
         }
       },
       "sampling": {

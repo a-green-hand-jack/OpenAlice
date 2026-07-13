@@ -58,6 +58,7 @@ const QUOTA_CODEX_BEFORE_PATH = join(QUOTA_ROOT, 'codex-before.json');
 const QUOTA_CODEX_AFTER_PATH = join(QUOTA_ROOT, 'codex-after.json');
 const QUOTA_CLAUDE_BEFORE_PATH = join(QUOTA_ROOT, 'claude-before.json');
 const QUOTA_CLAUDE_AFTER_PATH = join(QUOTA_ROOT, 'claude-after.json');
+const QUOTA_CALIBRATION_RECEIPT_PATH = join(QUOTA_ROOT, 'calibration-receipt.json');
 
 const SAMPLING_PLAN = {
   schema: 'steward-d4-sampling-plan/1',
@@ -114,7 +115,7 @@ async function buildPackage() {
   }
   mkdirSync(OUTPUT_ROOT, { recursive: true });
   writeJson(SAMPLING_PATH, SAMPLING_PLAN);
-  writeQuotaEvidence();
+  verifyQuotaEvidence();
   const samplingIdentity = fileIdentity(SAMPLING_PATH);
   const cells = [];
   const splitEvidenceCache = new Map();
@@ -269,6 +270,7 @@ async function buildPackage() {
 }
 
 async function verifyCheckedInPackage({ requireApproval }) {
+  verifyQuotaEvidence();
   const instructionPath = resolve(REPO_ROOT, D4_SMOKE_INSTRUCTION_REF);
   if (sha256(readFileSync(instructionPath)) !== D4_SMOKE_INSTRUCTION_SHA256) {
     throw new Error('v9-RUNTIME instruction content drift');
@@ -630,126 +632,118 @@ function asOfRanges(selectedDerived, decisions) {
   };
 }
 
-function writeQuotaEvidence() {
-  const codexBucket = (limitId, usedPercent, resetsAt, credits) => ({
-    limitId,
-    limitName: limitId === 'codex_bengalfox' ? 'GPT-5.3-Codex-Spark' : null,
-    primary: { usedPercent, windowDurationMins: 10_080, resetsAt },
-    secondary: null,
-    credits,
-    individualLimit: null,
-    planType: 'pro',
-    rateLimitReachedType: null,
-  });
-  const codexSnapshot = (sparkReset) => {
-    const general = codexBucket('codex', 22, 1784487541, {
-      hasCredits: false,
-      unlimited: false,
-      balance: '0',
-    });
-    const spark = codexBucket('codex_bengalfox', 0, sparkReset, null);
-    return {
-      rateLimits: general,
-      rateLimitsByLimitId: { codex: general, codex_bengalfox: spark },
-      rateLimitResetCredits: { availableCount: 0, credits: [] },
-      provenance: {
-        control: 'Codex app-server account/rateLimits/read',
-        calibration: 'G2 reachability probes: four general-window model turns and one Spark-window model turn',
-        incrementalSpendUsd: 0,
-      },
-    };
+function verifyQuotaEvidence() {
+  const receipt = JSON.parse(readFileSync(QUOTA_CALIBRATION_RECEIPT_PATH, 'utf8'));
+  if (receipt.schema !== 'steward-d4-quota-calibration-receipt/1' ||
+      receipt.version !== 1 || receipt.authorization !== 'AUTH-D4-DEV' ||
+      receipt.sourceIdentity !== 'native-subscription-controls' ||
+      receipt.billing?.incrementalSpendUsd !== 0 || receipt.normalization?.displayResolutionPercent !== 1) {
+    throw new Error('invalid native quota calibration receipt');
+  }
+  const receiptIdentity = fileIdentity(QUOTA_CALIBRATION_RECEIPT_PATH);
+  for (const capture of Object.values(receipt.captures)) verifyFileIdentity(capture.content);
+
+  const probesByWindow = new Map();
+  for (const probe of receipt.probes) {
+    if (probe.provider === 'codex') {
+      verifyFileIdentity(probe.stdout);
+      verifyFileIdentity(probe.stderr);
+      const stdout = readFileSync(resolve(REPO_ROOT, probe.stdout.ref), 'utf8');
+      const stderr = readFileSync(resolve(REPO_ROOT, probe.stderr.ref), 'utf8');
+      if (stdout !== 'OK' && stdout !== 'OK\n') throw new Error(`Codex probe output drift: ${probe.modelId}`);
+      if (!stderr.includes('OpenAI Codex v0.144.0') ||
+          !stderr.includes(`model: ${probe.modelId}`) ||
+          !stderr.includes('sandbox: read-only') || !stderr.includes('\ncodex\nOK\n')) {
+        throw new Error(`Codex probe receipt invalid: ${probe.modelId}`);
+      }
+    } else if (probe.provider === 'claude') {
+      verifyFileIdentity(probe.result);
+      const result = JSON.parse(readFileSync(resolve(REPO_ROOT, probe.result.ref), 'utf8'));
+      const models = Object.keys(result.modelUsage ?? {});
+      if (result.type !== 'result' || result.subtype !== 'success' || result.is_error !== false ||
+          result.num_turns !== 1 || result.result !== 'OK' || models.length !== 1 ||
+          models[0] !== probe.modelId || (result.permission_denials ?? []).length !== 0) {
+        throw new Error(`Claude probe receipt invalid: ${probe.modelId}`);
+      }
+    } else {
+      throw new Error(`unsupported calibration probe provider: ${probe.provider}`);
+    }
+    for (const window of probe.chargedWindows) {
+      probesByWindow.set(window, (probesByWindow.get(window) ?? 0) + 1);
+    }
+  }
+  if (stableJson(Object.fromEntries([...probesByWindow].sort())) !==
+      stableJson(receipt.chargedTurnCounts)) {
+    throw new Error('quota calibration charged-turn count differs from native probe artifacts');
+  }
+
+  const forecast = JSON.parse(readFileSync(QUOTA_FORECAST_PATH, 'utf8'));
+  for (const observation of forecast.observations) {
+    for (const [phase, snapshot] of [['before', observation.before], ['after', observation.after]]) {
+      verifyFileIdentity(snapshot.raw);
+      const projection = JSON.parse(readFileSync(resolve(REPO_ROOT, snapshot.raw.ref), 'utf8'));
+      if (stableJson(projection.nativeEvidence?.calibrationReceipt) !== stableJson(receiptIdentity)) {
+        throw new Error(`${observation.id}:${phase} does not bind the calibration receipt`);
+      }
+      verifyFileIdentity(projection.nativeEvidence.capture);
+      if (observation.provider === 'codex') {
+        const native = JSON.parse(readFileSync(resolve(REPO_ROOT, projection.nativeEvidence.capture.ref), 'utf8'));
+        const { nativeEvidence: _nativeEvidence, ...projectedResult } = projection;
+        if (stableJson(projectedResult) !== stableJson(native.result)) {
+          throw new Error(`${observation.id}:${phase} differs from native Codex capture`);
+        }
+      } else {
+        verifyClaudeQuotaProjection(projection, projection.nativeEvidence.capture.ref);
+      }
+    }
+    for (const charge of observation.charges) {
+      if (charge.chargedTurnCount !== receipt.chargedTurnCounts[charge.id] ||
+          charge.resolutionPercent !== receipt.normalization.displayResolutionPercent) {
+        throw new Error(`${observation.id}:${charge.id} calibration denominator drift`);
+      }
+    }
+  }
+  process.stderr.write('[d4-data] verified immutable native quota captures and 9 calibration probes\n');
+}
+
+function verifyClaudeQuotaProjection(projection, captureRef) {
+  const capturePath = resolve(REPO_ROOT, captureRef);
+  const capture = captureRef.endsWith('.json')
+    ? JSON.parse(readFileSync(capturePath, 'utf8')).result
+    : readFileSync(capturePath, 'utf8');
+  const session = /Current session: (\d+)% used · resets ([^\n]+)/.exec(capture);
+  const allModels = /Current week \(all models\): (\d+)% used · resets ([^\n]+)/.exec(capture);
+  const fable = /Current week \(Fable\): (\d+)% used · resets ([^\n]+)/.exec(capture);
+  if (!session || !allModels || !fable) throw new Error(`Claude quota capture is incomplete: ${captureRef}`);
+  const expected = {
+    current: { utilization: Number(session[1]), resets_at: riyadhResetToIso(session[2]) },
+    allModels: { utilization: Number(allModels[1]), resets_at: riyadhResetToIso(allModels[2]) },
+    fable: {
+      display_name: 'Fable',
+      utilization: Number(fable[1]),
+      resets_at: riyadhResetToIso(fable[2]),
+    },
   };
-  const claudeSnapshot = (capturedAt) => ({
-    session: {
-      total_cost_usd: 0,
-      total_api_duration_ms: 0,
-      model_usage: {},
-      num_turns: 0,
-    },
-    subscription_type: 'max',
-    rate_limits_available: true,
-    rate_limits: {
-      five_hour: { utilization: 16, resets_at: '2026-07-13T13:00:00.000Z' },
-      seven_day: { utilization: 59, resets_at: '2026-07-18T03:00:00.000Z' },
-      model_scoped: [{
-        display_name: 'Fable',
-        utilization: 54,
-        resets_at: '2026-07-18T03:00:00.000Z',
-      }],
-      extra_usage: {
-        is_enabled: false,
-        monthly_limit: null,
-        used_credits: null,
-        utilization: null,
-      },
-      spend: {
-        enabled: false,
-        used: { amount_minor: 0 },
-        can_purchase_credits: false,
-      },
-    },
-    provenance: {
-      control: 'Claude Code native /usage JSON result',
-      capturedAt,
-      normalization: 'Integer utilization and reset text from the native result are projected into the later SDK usage-control response shape required by the frozen runner.',
-      nativeResult: {
-        total_cost_usd: 0,
-        num_turns: 0,
-        modelUsage: {},
-        currentSession: '16% used; resets Jul 13, 4pm (Asia/Riyadh)',
-        currentWeekAllModels: '59% used; resets Jul 18, 6am (Asia/Riyadh)',
-        currentWeekFable: '54% used; resets Jul 18, 6am (Asia/Riyadh)',
-      },
-      calibration: 'G2 reachability probes: four all-model/short-window model turns, including one Fable-window model turn',
-      incrementalSpendUsd: 0,
-    },
-  });
+  const actual = {
+    current: projection.rate_limits.five_hour,
+    allModels: projection.rate_limits.seven_day,
+    fable: projection.rate_limits.model_scoped.find((window) => window.display_name === 'Fable'),
+  };
+  if (stableJson(actual) !== stableJson(expected) || projection.session.total_cost_usd !== 0 ||
+      projection.session.total_api_duration_ms !== 0 ||
+      Object.keys(projection.session.model_usage).length !== 0 ||
+      projection.rate_limits.extra_usage.is_enabled !== false ||
+      projection.rate_limits.spend.enabled !== false) {
+    throw new Error(`Claude quota projection differs from native capture: ${captureRef}`);
+  }
+}
 
-  writeJson(QUOTA_CODEX_BEFORE_PATH, codexSnapshot(1784535591));
-  writeJson(QUOTA_CODEX_AFTER_PATH, codexSnapshot(1784535763));
-  writeJson(QUOTA_CLAUDE_BEFORE_PATH, claudeSnapshot('2026-07-13T08:20:27.776Z'));
-  writeJson(QUOTA_CLAUDE_AFTER_PATH, claudeSnapshot('2026-07-13T08:23:06.841Z'));
-
-  writeJson(QUOTA_FORECAST_PATH, {
-    schema: 'steward-d4-quota-forecast-observations/1',
-    version: 1,
-    sourceIdentity: 'native-subscription-controls',
-    observations: [
-      {
-        id: 'g2-codex-reachability-calibration',
-        provider: 'codex',
-        charges: [
-          { id: 'codex-general-weekly', chargedTurnCount: 4, resolutionPercent: 1 },
-          { id: 'codex-spark', chargedTurnCount: 1, resolutionPercent: 1 },
-        ],
-        before: {
-          capturedAt: '2026-07-13T08:19:51.752Z',
-          raw: fileIdentity(QUOTA_CODEX_BEFORE_PATH),
-        },
-        after: {
-          capturedAt: '2026-07-13T08:23:16.303Z',
-          raw: fileIdentity(QUOTA_CODEX_AFTER_PATH),
-        },
-      },
-      {
-        id: 'g2-claude-reachability-calibration',
-        provider: 'claude',
-        charges: [
-          { id: 'claude-all-model-weekly', chargedTurnCount: 4, resolutionPercent: 1 },
-          { id: 'claude-fable-weekly', chargedTurnCount: 1, resolutionPercent: 1 },
-          { id: 'claude-current-short', chargedTurnCount: 4, resolutionPercent: 1 },
-        ],
-        before: {
-          capturedAt: '2026-07-13T08:20:27.776Z',
-          raw: fileIdentity(QUOTA_CLAUDE_BEFORE_PATH),
-        },
-        after: {
-          capturedAt: '2026-07-13T08:23:06.841Z',
-          raw: fileIdentity(QUOTA_CLAUDE_AFTER_PATH),
-        },
-      },
-    ],
-  });
+function riyadhResetToIso(value) {
+  const match = /^Jul (\d{1,2}), (\d{1,2})(am|pm) \(Asia\/Riyadh\)$/.exec(value);
+  if (!match) throw new Error(`unsupported Claude reset timestamp: ${value}`);
+  let hour = Number(match[2]) % 12;
+  if (match[3] === 'pm') hour += 12;
+  return new Date(Date.UTC(2026, 6, Number(match[1]), hour - 3)).toISOString();
 }
 
 function readStageContent(manifest) {
