@@ -1964,6 +1964,7 @@ export async function runD4SmokeExecution(input: D4SmokeExecutionInput): Promise
   if (plan === undefined) {
     throw new D4SmokePlanError('coverage_invalid', `unknown execution ${input.executionId}`);
   }
+  const source = selectCredentialSource(plan.candidate.provider, input.credentialSources);
   input.auditLedger.assertZero();
   const forbiddenBoundaries = createD4SmokeForbiddenCapabilityBoundaries(input.auditLedger, now);
   const admissionPhase = { kind: 'layer_admission' } as const;
@@ -1976,7 +1977,6 @@ export async function runD4SmokeExecution(input: D4SmokeExecutionInput): Promise
 
   await createFreshSandbox(plan.paths, plan.candidate.provider);
   let auditCursor: D4SmokeAuditCursor | null = null;
-  const source = selectCredentialSource(plan.candidate.provider, input.credentialSources);
   const canonicalPaths = input.canonicalCredentialPaths ?? defaultD4SmokeCanonicalCredentialPaths();
   let credential: CredentialGuard;
   try {
@@ -5007,12 +5007,12 @@ export async function runD4EngineeringShakedown(
   const officialPlan = d4EngineeringShakedownOfficialPlanView(plan);
   const provider = plan.candidate.provider;
   const decisionIndex = plan.decisionIndex;
+  const source = selectCredentialSource(provider, input.credentialSources);
   input.auditLedger.assertZero();
   const forbiddenBoundaries = createD4SmokeForbiddenCapabilityBoundaries(input.auditLedger, now);
 
   await createFreshSandbox(plan.paths, plan.candidate.provider);
   let auditCursor: D4SmokeAuditCursor | null = null;
-  const source = selectCredentialSource(provider, input.credentialSources);
   const canonicalPaths = input.canonicalCredentialPaths ?? defaultD4SmokeCanonicalCredentialPaths();
   let credential: CredentialGuard;
   try {

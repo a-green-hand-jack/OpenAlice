@@ -98,6 +98,7 @@ import type { CodexAppServerDriverOptions } from './machine-driver/codex-app-ser
 
 const NOW = new Date('2026-07-13T12:00:00.000Z');
 const execFileAsync = promisify(execFile);
+const RUN_D4_NATIVE_SOCAT_SMOKE = process.env.OPENALICE_D4_NATIVE_SOCAT_SMOKE === '1';
 type ProductionSeamKey = Extract<
   keyof D4SmokeFilesystemExecutionInput,
   | 'driverFactory'
@@ -111,34 +112,48 @@ type ProductionSeamKey = Extract<
 >;
 const PRODUCTION_INPUT_EXCLUDES_SEAMS: ProductionSeamKey extends never ? true : never = true;
 
-async function startPinnedClaudeBridgeSocket(path: string): Promise<() => Promise<void>> {
+function pinnedClaudeBridgeSocketPaths(tempDir: string, nonce: string): { http: string; socks: string } {
+  return {
+    http: join(tempDir, `claude-http-${nonce}.sock`),
+    socks: join(tempDir, `claude-socks-${nonce}.sock`),
+  };
+}
+
+async function startPinnedClaudeBridgeSockets(paths: { http: string; socks: string }): Promise<() => Promise<void>> {
   // Exact Claude Code 2.1.202 Linux bridge initializer seam: sfa() spawns
   // `socat UNIX-LISTEN:<os.tmpdir()>/claude-http-<16 hex>.sock,fork,reuseaddr
   // TCP:localhost:<port>,keepalive,keepidle=10,keepintvl=5,keepcnt=3`.
-  const child = spawn('socat', [
+  const children = [paths.http, paths.socks].map((path, index) => spawn('socat', [
     `UNIX-LISTEN:${path},fork,reuseaddr`,
-    'TCP:localhost:1,keepalive,keepidle=10,keepintvl=5,keepcnt=3',
-  ], { stdio: 'ignore' });
-  await new Promise<void>((resolve, reject) => {
-    child.once('spawn', resolve);
-    child.once('error', reject);
-  });
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    try {
-      if ((await stat(path)).isSocket()) {
-        return async () => {
-          if (child.exitCode === null) child.kill('SIGTERM');
-          if (child.exitCode === null) await new Promise<void>((resolve) => child.once('exit', resolve));
-        };
+    `TCP:localhost:${index + 1},keepalive,keepidle=10,keepintvl=5,keepcnt=3`,
+  ], { stdio: 'ignore' }));
+  const stop = async () => {
+    const exits = children.map((child) => child.exitCode === null
+      ? new Promise<void>((resolve) => child.once('exit', resolve))
+      : Promise.resolve());
+    for (const child of children) if (child.exitCode === null) child.kill('SIGTERM');
+    await Promise.all(exits);
+  };
+  try {
+    await Promise.all(children.map((child) => new Promise<void>((resolve, reject) => {
+      child.once('spawn', resolve);
+      child.once('error', reject);
+    })));
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        const states = await Promise.all([stat(paths.http), stat(paths.socks)]);
+        if (states.every((state) => state.isSocket())) return stop;
+      } catch {
+        // The native initializer checks readiness five times too.
       }
-    } catch {
-      // The native initializer checks readiness five times too.
+      await new Promise<void>((resolve) => setTimeout(resolve, attempt * 100));
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, attempt * 100));
+  } catch (error) {
+    await stop();
+    throw error;
   }
-  if (child.exitCode === null) child.kill('SIGTERM');
-  if (child.exitCode === null) await new Promise<void>((resolve) => child.once('exit', resolve));
-  throw new Error(`pinned Claude bridge did not create ${path}`);
+  await stop();
+  throw new Error(`pinned Claude bridge did not create ${paths.http} and ${paths.socks}`);
 }
 
 function quotaEvidence(manifestSha256: string, phase: D4SmokeQuotaPhase) {
@@ -2421,15 +2436,79 @@ describe('D4 engineering shakedown (issue #205)', () => {
       .toThrow(/selection_invalid/);
   });
 
-  it('uses Claude 2.1.202\'s os.tmpdir bridge socket path for the saved failure', async () => {
+  it('rejects missing Claude credentials before creating official or shakedown bridge directories', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-d4-credential-selection-'));
+    try {
+      const fixture = await createD4SmokeTestFixture();
+      const stage = await validateD4SmokeStage({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+      });
+      const officialSandboxBase = join(root, 'official-sandboxes');
+      const officialPlan = planD4SmokeExecutions(stage, officialSandboxBase)
+        .find((candidate) => candidate.candidate.provider === 'claude')!;
+      const selector: D4EngineeringShakedownSelector = {
+        modelId: 'claude-fable-5',
+        cellId: stage.manifest.content.cells[0]!.id,
+        decisionIndex: 0,
+      };
+      const shakedownSandboxBase = join(root, 'shakedown-sandboxes');
+      const shakedownPlan = planD4EngineeringShakedown(stage, shakedownSandboxBase, selector);
+      const officialQuotaReader = vi.fn(async () => { throw new Error('quota reader must not run'); });
+      const shakedownQuotaReader = vi.fn(async () => { throw new Error('quota reader must not run'); });
+
+      await expect(runD4SmokeExecution({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+        contentByRef: fixture.contentByRef,
+        sandboxBase: officialSandboxBase,
+        executionId: officialPlan.executionId,
+        credentialSources: [],
+        quotaReader: officialQuotaReader,
+        driverFactory: async () => { throw new Error('driver factory must not run'); },
+        prepareDecision: async () => { throw new Error('prepare decision must not run'); },
+        readTerminalArtifact: async () => { throw new Error('terminal reader must not run'); },
+        auditLedger: new D4SmokeCapabilityAuditLedger(),
+      })).rejects.toThrow(/credential_source_invalid/);
+      await expect(runD4EngineeringShakedown({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+        contentByRef: fixture.contentByRef,
+        sandboxBase: shakedownSandboxBase,
+        selector,
+        credentialSources: [],
+        quotaReader: shakedownQuotaReader,
+        driverFactory: async () => { throw new Error('driver factory must not run'); },
+        prepareDecision: async () => { throw new Error('prepare decision must not run'); },
+        readTerminalArtifact: async () => { throw new Error('terminal reader must not run'); },
+        auditLedger: new D4SmokeCapabilityAuditLedger(),
+      })).rejects.toThrow(/credential_source_invalid/);
+
+      expect(officialQuotaReader).not.toHaveBeenCalled();
+      expect(shakedownQuotaReader).not.toHaveBeenCalled();
+      await expect(access(officialPlan.paths.root)).rejects.toThrow();
+      await expect(access(officialPlan.paths.claudeBridgeTempDir)).rejects.toThrow();
+      await expect(access(shakedownPlan.paths.root)).rejects.toThrow();
+      await expect(access(shakedownPlan.paths.claudeBridgeTempDir)).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('uses Claude 2.1.202\'s os.tmpdir bridge socket pair for the saved failure', async () => {
     const artifactTmpDir = join(
       '/home/user/.local/state/openalice/d4-engineering-shakedown/sandboxes',
       '406bb1f5e888b36874116e132b2ab220d7aa564c02862fc53307df5afadc3750',
       'engineering-shakedown-dba3e23907f7b062',
       'tmp',
     );
-    const artifactSocket = join(artifactTmpDir, 'claude-http-0123456789abcdef.sock');
-    expect(Buffer.byteLength(artifactSocket)).toBeGreaterThan(107);
+    const nonce = '0123456789abcdef';
+    const artifactSockets = pinnedClaudeBridgeSocketPaths(artifactTmpDir, nonce);
+    expect(Buffer.byteLength(artifactSockets.http)).toBeGreaterThan(107);
+    expect(Buffer.byteLength(artifactSockets.socks)).toBeGreaterThan(107);
 
     const root = await mkdtemp(join(tmpdir(), 'openalice-d4-bridge-'));
     try {
@@ -2445,22 +2524,31 @@ describe('D4 engineering shakedown (issue #205)', () => {
         decisionIndex: 0,
       };
       const plan = planD4EngineeringShakedown(stage, join(root, 'sandboxes'), selector);
-      const bridgeSocket = join(plan.env.TMPDIR!, 'claude-http-0123456789abcdef.sock');
+      const bridgeSockets = pinnedClaudeBridgeSocketPaths(plan.env.TMPDIR!, nonce);
+      const effectiveBashTemp = join(
+        plan.env.CLAUDE_CODE_TMPDIR!,
+        `claude-${process.getuid?.() ?? 0}`,
+      );
 
       expect(plan.env.CLAUDE_CODE_TMPDIR).toBe(plan.paths.claudeBridgeTempDir);
       expect(plan.env.TMPDIR).toBe(plan.paths.claudeBridgeTempDir);
       expect(plan.env.TMP).toBe(plan.paths.claudeBridgeTempDir);
       expect(plan.env.TEMP).toBe(plan.paths.claudeBridgeTempDir);
-      expect(Buffer.byteLength(bridgeSocket)).toBeLessThanOrEqual(107);
+      expect(Buffer.byteLength(bridgeSockets.http)).toBe(61);
+      expect(Buffer.byteLength(bridgeSockets.socks)).toBe(62);
       await mkdir(plan.paths.claudeBridgeTempDir, { recursive: false, mode: 0o700 });
+      await mkdir(effectiveBashTemp, { recursive: false, mode: 0o700 });
       try {
-        const bridgeStat = await stat(plan.paths.claudeBridgeTempDir);
+        const [bridgeStat, effectiveStat] = await Promise.all([
+          stat(plan.paths.claudeBridgeTempDir),
+          stat(effectiveBashTemp),
+        ]);
         expect(bridgeStat.mode & 0o777).toBe(0o700);
+        expect(effectiveStat.mode & 0o777).toBe(0o700);
         if (typeof process.getuid === 'function') {
           expect(bridgeStat.uid).toBe(process.getuid());
+          expect(effectiveStat.uid).toBe(process.getuid());
         }
-        const stopBridge = await startPinnedClaudeBridgeSocket(bridgeSocket);
-        await stopBridge();
       } finally {
         await rm(plan.paths.claudeBridgeTempDir, { recursive: true, force: true });
       }
@@ -2468,6 +2556,20 @@ describe('D4 engineering shakedown (issue #205)', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  (RUN_D4_NATIVE_SOCAT_SMOKE ? it : it.skip)(
+    'smokes the exact pinned Claude 2.1.202 socat bridge pair when explicitly enabled',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'openalice-d4-native-socat-'));
+      const sockets = pinnedClaudeBridgeSocketPaths(root, '0123456789abcdef');
+      try {
+        const stopBridge = await startPinnedClaudeBridgeSockets(sockets);
+        await stopBridge();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('removes the Claude bridge directory when later sandbox setup fails', async () => {
     const root = await mkdtemp(join(tmpdir(), 'openalice-d4-bridge-cleanup-'));
@@ -2496,7 +2598,11 @@ describe('D4 engineering shakedown (issue #205)', () => {
           contentByRef: fixture.contentByRef,
           sandboxBase,
           selector,
-          credentialSources: [],
+          credentialSources: [{
+            provider: 'claude',
+            sourceIdentity: 'claude-max-oauth',
+            sourcePath: join(root, '.credentials.json'),
+          }],
           quotaReader: async () => { throw new Error('quota reader must not run'); },
           driverFactory: async () => { throw new Error('driver factory must not run'); },
           prepareDecision: async () => { throw new Error('prepare decision must not run'); },
