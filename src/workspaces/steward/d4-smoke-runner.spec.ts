@@ -2288,6 +2288,7 @@ function validShakedownResult(): D4EngineeringShakedownResult {
       directDecisionAuthorModelIds: ['claude-fable-5'],
       primaryRoleGuardModelIds: ['claude-fable-5'],
       primaryModelUsages: [],
+      providerModelUsageIds: [],
       auxiliaryModels: [],
       sidechainAssistantModelIds: [],
       providerReportedModelIds: ['claude-fable-5'],
@@ -2614,8 +2615,13 @@ describe('D4 engineering shakedown (issue #205)', () => {
     })).toThrow(/directDecisionAuthorModelIds/);
     expect(() => assertD4EngineeringShakedownNonInferential({
       ...valid,
+      modelAttestation: { ...valid.modelAttestation, providerModelUsageIds: ['claude-fable-5'] },
+    })).toThrow(/provider model usage identities must equal/);
+    expect(() => assertD4EngineeringShakedownNonInferential({
+      ...valid,
       modelAttestation: {
         ...valid.modelAttestation,
+        providerModelUsageIds: ['claude-fable-5'],
         auxiliaryModels: [{
           modelId: 'claude-fable-5',
           modelUsage: {
@@ -2631,6 +2637,7 @@ describe('D4 engineering shakedown (issue #205)', () => {
       ...valid,
       modelAttestation: {
         ...valid.modelAttestation,
+        providerModelUsageIds: ['claude-haiku-4-5-20251001'],
         auxiliaryModels: [{
           modelId: 'claude-haiku-4-5-20251001',
           modelUsage: {
@@ -2648,6 +2655,23 @@ describe('D4 engineering shakedown (issue #205)', () => {
         providerReportedModelIds: ['claude-fable-5'],
       },
     })).toThrow(/role-accounted/);
+    expect(() => assertD4EngineeringShakedownNonInferential({
+      ...valid,
+      modelAttestation: {
+        ...valid.modelAttestation,
+        providerModelUsageIds: ['claude-haiku-4-5-20251001'],
+        auxiliaryModels: [{
+          modelId: 'claude-haiku-4-5-20251001',
+          modelUsage: {
+            modelId: 'claude-haiku-4-5-20251001', inputTokens: 1, outputTokens: 1,
+            cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0,
+            costUSD: 0.01, contextWindow: 200_000, maxOutputTokens: 8_192,
+          },
+        }],
+        sidechainAssistantModelIds: ['claude-haiku-4-5-20251001'],
+        providerReportedModelIds: ['claude-fable-5', 'claude-haiku-4-5-20251001'],
+      },
+    })).toThrow(/disjoint and accounted/);
     expect(() => assertD4EngineeringShakedownNonInferential({
       ...valid,
       diagnosticReport: { ...valid.diagnosticReport, wakeId: 'wake:mismatch' },
@@ -2790,6 +2814,7 @@ describe('D4 engineering shakedown (issue #205)', () => {
           directDecisionAuthorModelIds: ['claude-sonnet-5'],
           primaryRoleGuardModelIds: ['claude-fable-5', 'claude-sonnet-5'],
           primaryModelUsages: [expect.objectContaining({ modelId: 'claude-fable-5', costUSD: 0.42 })],
+          providerModelUsageIds: ['claude-fable-5', 'claude-haiku-4-5-20251001'],
           auxiliaryModels: [expect.objectContaining({
             modelId: 'claude-haiku-4-5-20251001',
             modelUsage: expect.objectContaining({ inputTokens: 0, costUSD: 0.01 }),
@@ -2959,6 +2984,7 @@ describe('D4 engineering shakedown (issue #205)', () => {
         directDecisionAuthorModelIds: ['claude-fable-5'],
         primaryRoleGuardModelIds: ['claude-fable-5'],
         primaryModelUsages: [expect.objectContaining({ modelId: 'claude-fable-5', costUSD: 0.42 })],
+        providerModelUsageIds: ['claude-fable-5', 'claude-haiku-4-5-20251001'],
         auxiliaryModels: [expect.objectContaining({
           modelId: 'claude-haiku-4-5-20251001',
           modelUsage: expect.objectContaining({ costUSD: 0.01 }),

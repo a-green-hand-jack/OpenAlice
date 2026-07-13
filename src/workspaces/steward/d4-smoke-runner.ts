@@ -4447,6 +4447,8 @@ const shakedownRoleAttestationSchema = z.object({
   primaryRoleGuardModelIds: z.array(nonEmptyStringSchema),
   /** Result usage entries that belong to a primary-role guard identity. */
   primaryModelUsages: z.array(shakedownProviderModelUsageSchema),
+  /** Exact model identities from the provider-native result modelUsage table. */
+  providerModelUsageIds: z.array(nonEmptyStringSchema),
   /** Every result usage identity outside the primary role, with native usage. */
   auxiliaryModels: z.array(z.object({
     modelId: nonEmptyStringSchema,
@@ -4469,6 +4471,7 @@ function addD4ShakedownRoleEvidenceIssues(
   const auxiliary = new Set(attestation.auxiliaryModels.map(({ modelId }) => modelId));
   const sidechain = new Set(attestation.sidechainAssistantModelIds);
   const primaryUsage = new Set(attestation.primaryModelUsages.map(({ modelId }) => modelId));
+  const providerUsage = new Set(attestation.providerModelUsageIds);
   if (
     providerReported.size !== attestation.providerReportedModelIds.length
     || direct.size !== attestation.directDecisionAuthorModelIds.length
@@ -4476,6 +4479,7 @@ function addD4ShakedownRoleEvidenceIssues(
     || auxiliary.size !== attestation.auxiliaryModels.length
     || sidechain.size !== attestation.sidechainAssistantModelIds.length
     || primaryUsage.size !== attestation.primaryModelUsages.length
+    || providerUsage.size !== attestation.providerModelUsageIds.length
   ) {
     ctx.addIssue({ code: 'custom', path: ['providerReportedModelIds'], message: 'role evidence identities must be unique' });
   }
@@ -4484,8 +4488,16 @@ function addD4ShakedownRoleEvidenceIssues(
     || [...auxiliary].some((modelId) => primaryGuards.has(modelId) || sidechain.has(modelId))
     || [...sidechain].some((modelId) => primaryGuards.has(modelId))
     || [...primaryUsage].some((modelId) => !primaryGuards.has(modelId))
+    || [...providerUsage].some((modelId) => !providerReported.has(modelId) || sidechain.has(modelId))
   ) {
     ctx.addIssue({ code: 'custom', path: ['primaryRoleGuardModelIds'], message: 'primary, auxiliary, and sidechain roles must be disjoint and accounted' });
+  }
+  const recordedUsage = new Set([...primaryUsage, ...auxiliary]);
+  if (
+    recordedUsage.size !== providerUsage.size
+    || [...recordedUsage].some((modelId) => !providerUsage.has(modelId))
+  ) {
+    ctx.addIssue({ code: 'custom', path: ['providerModelUsageIds'], message: 'provider model usage identities must equal recorded primary and auxiliary usage identities' });
   }
   const accounted = new Set([...primaryGuards, ...auxiliary, ...sidechain]);
   if (
@@ -4557,6 +4569,7 @@ function attestD4EngineeringShakedownModelRoles(input: {
       : directDecisionAuthorModelIds,
     primaryRoleGuardModelIds,
     primaryModelUsages,
+    providerModelUsageIds: [...usageByModelId.keys()].sort(),
     auxiliaryModels,
     sidechainAssistantModelIds,
     providerReportedModelIds,
