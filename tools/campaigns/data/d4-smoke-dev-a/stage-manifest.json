@@ -24,9 +24,9 @@
             "sha256": "c86a6b69138816a816a6d60891f481f6e00fb0d61313a308a477a43c126ed9a2"
           },
           {
-            "byteLength": 197257,
+            "byteLength": 205883,
             "path": "src/workspaces/steward/d4-smoke-runner.ts",
-            "sha256": "129c97f10e792350ae5e764e1624c1f842db8271dee1ea388e96de71316a723c"
+            "sha256": "f7952a9dbaf64e44dafeb9840a73f2361a60a5e17c60ba1e0607db0d6da3d347"
           },
           {
             "byteLength": 49253,
@@ -74,9 +74,9 @@
             "sha256": "9e44839d23b51d73c46b5766335d2add041e1e4a00c23ec012712c58636f4e39"
           },
           {
-            "byteLength": 23905,
+            "byteLength": 26567,
             "path": "src/workspaces/steward/machine-driver/claude-agent-sdk-driver.ts",
-            "sha256": "b988e1421c62d3507a558930bd240be0c90e34a10409a70672da293a25bdbe49"
+            "sha256": "9b1ac910abe50f3112b3a82f7bea8926e7e893c7b2a95017e425acc27b1f86bd"
           },
           {
             "byteLength": 28874,
@@ -89,9 +89,9 @@
             "sha256": "e5f7e9cf094dd9372fea75aeaf74324a1089e70b395959722a72384e6aa83c3f"
           },
           {
-            "byteLength": 10605,
+            "byteLength": 11719,
             "path": "src/workspaces/steward/machine-driver/types.ts",
-            "sha256": "8c71d2eeb35f90a11aa0bbac0f85bd64a9325f939e4d70d6863d4029b5a7090d"
+            "sha256": "932eae145100571c1cd8f2fb36687466b83fbaa85b3ea3f7268b11968f9e3914"
           },
           {
             "byteLength": 6192,
@@ -166,7 +166,7 @@
           "src/workspaces/templates/steward/README.md"
         ],
         "schema": "steward-d4-runtime-tree/1",
-        "sha256": "e27289fc04348bc27cb82a6a07bc320c4f89961f5e492de59053c111b6c57a9a",
+        "sha256": "ae9af568dd2f4a7595f14add2ada7bebc3ece2f8395b83c6da102ab83e13ea1d",
         "version": 1
       }
     },

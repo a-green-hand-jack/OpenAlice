@@ -28,6 +28,22 @@ function initMsg(sessionId: string, model?: string): SDKMessage {
   } as unknown as SDKMessage;
 }
 
+function assistantMsg(opts: {
+  sessionId: string;
+  model: string;
+  parentToolUseId?: string | null;
+  subagentType?: string;
+}): SDKMessage {
+  return {
+    type: 'assistant',
+    message: { model: opts.model, content: [] },
+    parent_tool_use_id: opts.parentToolUseId ?? null,
+    ...(opts.subagentType !== undefined ? { subagent_type: opts.subagentType } : {}),
+    uuid: 'assistant-message',
+    session_id: opts.sessionId,
+  } as unknown as SDKMessage;
+}
+
 interface ModelUsageLike {
   inputTokens: number;
   outputTokens: number;
@@ -353,6 +369,7 @@ describe('ClaudeAgentSdkDriver', () => {
     const { fn } = makeFakeQuery({
       messages: [
         initMsg('s', 'claude-fable-5'),
+        assistantMsg({ sessionId: 's', model: 'claude-fable-5' }),
         {
           type: 'system',
           subtype: 'model_refusal_fallback',
@@ -368,6 +385,95 @@ describe('ClaudeAgentSdkDriver', () => {
 
     const outcome = await driver.runTurn(threadId, 'x', { model: 'claude-fable-5' });
     expect(outcome.actualModelIds).toEqual(['claude-fable-5', 'claude-sonnet-5']);
+    expect(outcome.primaryModelIds).toEqual(['claude-fable-5']);
+    expect(outcome.primaryRoleGuardModelIds).toEqual(['claude-fable-5', 'claude-sonnet-5']);
+  });
+
+  it('retains an init-model mismatch in the primary-role guard set', async () => {
+    const { fn } = makeFakeQuery({
+      messages: [
+        initMsg('init-mismatch', 'claude-sonnet-5'),
+        assistantMsg({ sessionId: 'init-mismatch', model: 'claude-fable-5' }),
+        successResult({ sessionId: 'init-mismatch' }),
+      ],
+    });
+    const driver = makeDriver(fn);
+    const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch', model: 'claude-fable-5' });
+
+    const outcome = await driver.runTurn(threadId, 'x', { model: 'claude-fable-5' });
+
+    expect(outcome.primaryModelIds).toEqual(['claude-fable-5']);
+    expect(outcome.primaryRoleGuardModelIds).toEqual(['claude-fable-5', 'claude-sonnet-5']);
+    expect(outcome.actualModelIds).toEqual(['claude-fable-5', 'claude-sonnet-5']);
+  });
+
+  it('attests direct Fable assistant output as primary while preserving Haiku usage as auxiliary evidence', async () => {
+    const usage = (inputTokens: number, costUSD: number) => ({
+      inputTokens,
+      outputTokens: 5,
+      cacheReadInputTokens: 2,
+      cacheCreationInputTokens: 1,
+      webSearchRequests: 0,
+      costUSD,
+      contextWindow: 200_000,
+      maxOutputTokens: 8_192,
+    });
+    const { fn } = makeFakeQuery({
+      messages: [
+        initMsg('saved-fable', 'claude-fable-5'),
+        ...Array.from({ length: 7 }, () => assistantMsg({ sessionId: 'saved-fable', model: 'claude-fable-5' })),
+        successResult({
+          sessionId: 'saved-fable',
+          modelUsage: {
+            'claude-fable-5': usage(100, 0.42),
+            'claude-haiku-4-5-20251001': usage(11, 0.01),
+          },
+        }),
+      ],
+    });
+    const driver = makeDriver(fn);
+    const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch', model: 'claude-fable-5' });
+
+    const outcome = await driver.runTurn(threadId, 'x', { model: 'claude-fable-5' });
+
+    expect(outcome.primaryModelIds).toEqual(['claude-fable-5']);
+    expect(outcome.primaryRoleGuardModelIds).toEqual(['claude-fable-5']);
+    expect(outcome.actualModelIds).toEqual(['claude-fable-5', 'claude-haiku-4-5-20251001']);
+    expect(outcome.modelUsage).toEqual([
+      expect.objectContaining({ modelId: 'claude-fable-5', inputTokens: 100, costUSD: 0.42 }),
+      expect.objectContaining({ modelId: 'claude-haiku-4-5-20251001', inputTokens: 11, costUSD: 0.01 }),
+    ]);
+    // Thread telemetry remains aggregate: primary + auxiliary consumption is
+    // still visible to quota/rotation callers.
+    expect(driver.readTelemetry(threadId)).toMatchObject({
+      inputTokens: 117,
+      outputTokens: 10,
+      totalTokens: 127,
+    });
+  });
+
+  it('keeps subagent assistant models provider-reported without granting direct authorship', async () => {
+    const { fn } = makeFakeQuery({
+      messages: [
+        initMsg('subagent', 'claude-fable-5'),
+        assistantMsg({ sessionId: 'subagent', model: 'claude-fable-5' }),
+        assistantMsg({
+          sessionId: 'subagent',
+          model: 'claude-haiku-4-5-20251001',
+          parentToolUseId: 'tool-subagent',
+          subagentType: 'Explore',
+        }),
+        successResult({ sessionId: 'subagent' }),
+      ],
+    });
+    const driver = makeDriver(fn);
+    const { threadId } = await driver.ensureThread({ cwd: '/tmp/scratch', model: 'claude-fable-5' });
+
+    const outcome = await driver.runTurn(threadId, 'x', { model: 'claude-fable-5' });
+
+    expect(outcome.primaryModelIds).toEqual(['claude-fable-5']);
+    expect(outcome.primaryRoleGuardModelIds).toEqual(['claude-fable-5']);
+    expect(outcome.actualModelIds).toEqual(['claude-fable-5', 'claude-haiku-4-5-20251001']);
   });
 
   it('forwards cwd + the auto-trust settings, and passes a composed env EXACTLY (issue #146 S5 review MAJOR-1)', async () => {
