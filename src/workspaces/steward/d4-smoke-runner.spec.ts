@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { access, appendFile, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, appendFile, chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
@@ -2400,15 +2400,16 @@ describe('D4 engineering shakedown (issue #205)', () => {
       .toThrow(/selection_invalid/);
   });
 
-  it('uses a short private Claude bridge directory for the saved long D4 path shape', async () => {
-    const artifactTmpSocket = join(
+  it('uses Claude 2.1.202\'s effective per-user Bash temp directory for the saved bridge failure', async () => {
+    const artifactEffectiveTemp = join(
       '/home/user/.local/state/openalice/d4-engineering-shakedown/sandboxes',
-      'c7c3231ac811d4eb0589a771c07ee38034bc69227602c12df14fe1057baf143e',
+      'b13a6f014fd2b87f768f02cf402cf49d184bd97dbb8f0b18e26306d7eec8ee1b',
       'engineering-shakedown-dba3e23907f7b062',
       'tmp',
-      'bridge.sock',
+      'claude-1000',
     );
-    expect(Buffer.byteLength(artifactTmpSocket)).toBeGreaterThan(107);
+    expect(Buffer.byteLength(artifactEffectiveTemp)).toBeGreaterThan(44);
+    expect(Buffer.byteLength(join(artifactEffectiveTemp, 'bridge.sock'))).toBeGreaterThan(107);
 
     const root = await mkdtemp(join(tmpdir(), 'openalice-d4-bridge-'));
     try {
@@ -2428,13 +2429,30 @@ describe('D4 engineering shakedown (issue #205)', () => {
         decisionIndex: 0,
       };
       const plan = planD4EngineeringShakedown(stage, join(root, 'sandboxes'), selector);
-      const bridgeSocket = join(plan.paths.claudeBridgeTempDir, 'x'.repeat(64));
+      const effectiveBashTemp = join(
+        plan.paths.claudeBridgeTempDir,
+        `claude-${process.getuid?.() ?? 0}`,
+      );
+      const bridgeSocket = join(effectiveBashTemp, 'x'.repeat(64));
 
       expect(plan.env.CLAUDE_CODE_TMPDIR).toBe(plan.paths.claudeBridgeTempDir);
+      // Claude 2.1.202 derives its Bash child's TMPDIR from this per-uid path.
+      // The runner's long sandbox TMPDIR remains for non-Claude containment.
       expect(plan.env.TMPDIR).toBe(plan.paths.tempRoot);
+      expect(Buffer.byteLength(effectiveBashTemp)).toBeLessThanOrEqual(44);
       expect(Buffer.byteLength(bridgeSocket)).toBeLessThanOrEqual(107);
       await mkdir(plan.paths.claudeBridgeTempDir, { recursive: false, mode: 0o700 });
+      await mkdir(effectiveBashTemp, { recursive: false, mode: 0o700 });
       try {
+        const [bridgeStat, effectiveStat] = await Promise.all([
+          stat(plan.paths.claudeBridgeTempDir),
+          stat(effectiveBashTemp),
+        ]);
+        expect(bridgeStat.mode & 0o777).toBe(0o700);
+        expect(effectiveStat.mode & 0o777).toBe(0o700);
+        if (typeof process.getuid === 'function') {
+          expect(effectiveStat.uid).toBe(process.getuid());
+        }
         await expect(bindUnixSocket(bridgeSocket)).resolves.toBeUndefined();
       } finally {
         await rm(plan.paths.claudeBridgeTempDir, { recursive: true, force: true });
