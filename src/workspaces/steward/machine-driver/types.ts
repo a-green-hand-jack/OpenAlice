@@ -87,6 +87,10 @@ export interface TurnOutcome {
    * Claude supplies this from assistant frames only; it deliberately excludes
    * init, fallback, usage-table, and subagent identities. */
   readonly primaryModelIds?: readonly string[];
+  /** Complete primary-role guard identities. Claude includes the init model,
+   * direct main-loop assistant models, and structured refusal original/fallback
+   * models so callers can reject a primary-role substitution. */
+  readonly primaryRoleGuardModelIds?: readonly string[];
   /** Exact provider per-model usage entries, when exposed by the driver. */
   readonly modelUsage?: readonly ProviderModelUsage[];
 }

@@ -124,6 +124,8 @@ interface ClaudeInFlightTurn {
   readonly actualModelIds: Set<string>;
   /** Models observed on direct (not subagent) assistant messages. */
   readonly primaryModelIds: Set<string>;
+  /** Init/direct/fallback identities that are allowed to claim the primary role. */
+  readonly primaryRoleGuardModelIds: Set<string>;
   readonly modelUsage: Map<string, ProviderModelUsage>;
   readonly bashCommandsByToolUseId: Map<string, string>;
   readonly onEvent: ((ev: DriverEvent) => void) | undefined;
@@ -218,6 +220,7 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
       fatalControlFailure: null,
       actualModelIds: new Set<string>(),
       primaryModelIds: new Set<string>(),
+      primaryRoleGuardModelIds: new Set<string>(),
       modelUsage: new Map<string, ProviderModelUsage>(),
       bashCommandsByToolUseId: new Map<string, string>(),
       onEvent: opts.onEvent,
@@ -311,6 +314,7 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
         interrupted: false,
         actualModelIds: [...turn.actualModelIds].sort(),
         primaryModelIds: [...turn.primaryModelIds].sort(),
+        primaryRoleGuardModelIds: [...turn.primaryRoleGuardModelIds].sort(),
         modelUsage: [...turn.modelUsage.values()].sort((a, b) => a.modelId.localeCompare(b.modelId)),
       };
     } catch (err) {
@@ -390,18 +394,24 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
   private handleMessage(turn: ClaudeInFlightTurn, message: SDKMessage): void {
     if (message.type === 'system' && message.subtype === 'init') {
       addActualClaudeModel(turn, message.model);
+      addClaudePrimaryRoleGuardModel(turn, message.model);
     } else if (message.type === 'system' && message.subtype === 'model_refusal_fallback') {
       addActualClaudeModel(turn, message.original_model);
       addActualClaudeModel(turn, message.fallback_model);
+      addClaudePrimaryRoleGuardModel(turn, message.original_model);
+      addClaudePrimaryRoleGuardModel(turn, message.fallback_model);
     } else if (message.type === 'system' && message.subtype === 'model_refusal_no_fallback') {
       addActualClaudeModel(turn, message.original_model);
+      addClaudePrimaryRoleGuardModel(turn, message.original_model);
     }
     if (message.type === 'assistant') {
+      addActualClaudeModel(turn, message.message.model);
       captureClaudeBashCommands(turn, message.message.content);
       // `message.model` identifies the request that generated this assistant
       // output. Subagent frames are not decision-producing main-loop output.
       if (message.parent_tool_use_id === null && message.subagent_type === undefined) {
         addClaudePrimaryModel(turn, message.message.model);
+        addClaudePrimaryRoleGuardModel(turn, message.message.model);
       }
     } else if (message.type === 'user') {
       emitClaudeAuditAppendFailures(turn, message.message.content);
@@ -438,6 +448,7 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
       interrupted: true,
       actualModelIds: [...turn.actualModelIds].sort(),
       primaryModelIds: [...turn.primaryModelIds].sort(),
+      primaryRoleGuardModelIds: [...turn.primaryRoleGuardModelIds].sort(),
       modelUsage: [...turn.modelUsage.values()].sort((a, b) => a.modelId.localeCompare(b.modelId)),
     };
   }
@@ -500,6 +511,12 @@ function addClaudePrimaryModel(turn: ClaudeInFlightTurn, value: unknown): void {
   if (typeof value !== 'string') return;
   const modelId = value.trim();
   if (modelId !== '') turn.primaryModelIds.add(modelId);
+}
+
+function addClaudePrimaryRoleGuardModel(turn: ClaudeInFlightTurn, value: unknown): void {
+  if (typeof value !== 'string') return;
+  const modelId = value.trim();
+  if (modelId !== '') turn.primaryRoleGuardModelIds.add(modelId);
 }
 
 function providerModelUsage(modelId: string, usage: ModelUsage): ProviderModelUsage {

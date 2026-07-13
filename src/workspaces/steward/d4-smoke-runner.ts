@@ -3859,11 +3859,11 @@ export const D4_ENGINEERING_SHAKEDOWN_QUOTA_VERSION = 1 as const;
 export const D4_ENGINEERING_SHAKEDOWN_DIAGNOSTIC_REPORT_SCHEMA =
   'steward-d4-engineering-shakedown-diagnostic-report/1' as const;
 export const D4_ENGINEERING_SHAKEDOWN_DIAGNOSTIC_REPORT_VERSION = 1 as const;
-export const D4_ENGINEERING_SHAKEDOWN_RESULT_SCHEMA = 'steward-d4-engineering-shakedown-result/1' as const;
-export const D4_ENGINEERING_SHAKEDOWN_RESULT_VERSION = 1 as const;
+export const D4_ENGINEERING_SHAKEDOWN_RESULT_SCHEMA = 'steward-d4-engineering-shakedown-result/2' as const;
+export const D4_ENGINEERING_SHAKEDOWN_RESULT_VERSION = 2 as const;
 export const D4_ENGINEERING_SHAKEDOWN_FAILURE_PURPOSE = 'engineering_shakedown_failure' as const;
-export const D4_ENGINEERING_SHAKEDOWN_FAILURE_SCHEMA = 'steward-d4-engineering-shakedown-failure/1' as const;
-export const D4_ENGINEERING_SHAKEDOWN_FAILURE_VERSION = 1 as const;
+export const D4_ENGINEERING_SHAKEDOWN_FAILURE_SCHEMA = 'steward-d4-engineering-shakedown-failure/2' as const;
+export const D4_ENGINEERING_SHAKEDOWN_FAILURE_VERSION = 2 as const;
 
 /** The exact native subscription windows that a frozen model's turn actually
  * charges, in canonical order. Admission evidence and reserve enforcement
@@ -4441,50 +4441,77 @@ const shakedownProviderModelUsageSchema = z.object({
 }).strict();
 
 const shakedownRoleAttestationSchema = z.object({
-  /** The decision-producing direct main-loop identity, never an auxiliary. */
-  primaryAuthorModelId: nonEmptyStringSchema,
-  primaryModelUsage: shakedownProviderModelUsageSchema.nullable(),
-  /** Every non-primary provider identity, with its native usage when reported. */
+  /** Decision-producing direct main-loop identities only. */
+  directDecisionAuthorModelIds: z.array(nonEmptyStringSchema),
+  /** Init, direct-main-loop, and structured refusal identities. */
+  primaryRoleGuardModelIds: z.array(nonEmptyStringSchema),
+  /** Result usage entries that belong to a primary-role guard identity. */
+  primaryModelUsages: z.array(shakedownProviderModelUsageSchema),
+  /** Every result usage identity outside the primary role, with native usage. */
   auxiliaryModels: z.array(z.object({
     modelId: nonEmptyStringSchema,
-    modelUsage: shakedownProviderModelUsageSchema.nullable(),
+    modelUsage: shakedownProviderModelUsageSchema,
   }).strict()),
+  /** Assistant identities outside primary guards that had no result usage. */
+  sidechainAssistantModelIds: z.array(nonEmptyStringSchema),
   providerReportedModelIds: z.array(nonEmptyStringSchema),
 }).strict();
 
 type D4EngineeringShakedownRoleAttestation = z.infer<typeof shakedownRoleAttestationSchema>;
 
-function addD4ShakedownRoleAttestationIssues(
+function addD4ShakedownRoleEvidenceIssues(
   attestation: D4EngineeringShakedownRoleAttestation,
-  requestedModelId: string,
   ctx: z.RefinementCtx,
 ): void {
   const providerReported = new Set(attestation.providerReportedModelIds);
+  const direct = new Set(attestation.directDecisionAuthorModelIds);
+  const primaryGuards = new Set(attestation.primaryRoleGuardModelIds);
   const auxiliary = new Set(attestation.auxiliaryModels.map(({ modelId }) => modelId));
+  const sidechain = new Set(attestation.sidechainAssistantModelIds);
+  const primaryUsage = new Set(attestation.primaryModelUsages.map(({ modelId }) => modelId));
   if (
-    attestation.primaryAuthorModelId !== requestedModelId
-    || providerReported.size !== attestation.providerReportedModelIds.length
+    providerReported.size !== attestation.providerReportedModelIds.length
+    || direct.size !== attestation.directDecisionAuthorModelIds.length
+    || primaryGuards.size !== attestation.primaryRoleGuardModelIds.length
     || auxiliary.size !== attestation.auxiliaryModels.length
-    || auxiliary.has(attestation.primaryAuthorModelId)
+    || sidechain.size !== attestation.sidechainAssistantModelIds.length
+    || primaryUsage.size !== attestation.primaryModelUsages.length
   ) {
-    ctx.addIssue({ code: 'custom', path: ['primaryAuthorModelId'], message: 'requested model must be the sole primary author, disjoint from auxiliaries' });
+    ctx.addIssue({ code: 'custom', path: ['providerReportedModelIds'], message: 'role evidence identities must be unique' });
   }
-  const accounted = new Set([attestation.primaryAuthorModelId, ...auxiliary]);
+  if (
+    [...direct].some((modelId) => !primaryGuards.has(modelId))
+    || [...auxiliary].some((modelId) => primaryGuards.has(modelId) || sidechain.has(modelId))
+    || [...sidechain].some((modelId) => primaryGuards.has(modelId))
+    || [...primaryUsage].some((modelId) => !primaryGuards.has(modelId))
+  ) {
+    ctx.addIssue({ code: 'custom', path: ['primaryRoleGuardModelIds'], message: 'primary, auxiliary, and sidechain roles must be disjoint and accounted' });
+  }
+  const accounted = new Set([...primaryGuards, ...auxiliary, ...sidechain]);
   if (
     accounted.size !== providerReported.size
     || [...accounted].some((modelId) => !providerReported.has(modelId))
   ) {
     ctx.addIssue({ code: 'custom', path: ['providerReportedModelIds'], message: 'every provider-reported model identity must be role-accounted' });
   }
-  if (
-    attestation.primaryModelUsage !== null
-    && attestation.primaryModelUsage.modelId !== attestation.primaryAuthorModelId
-  ) {
-    ctx.addIssue({ code: 'custom', path: ['primaryModelUsage'], message: 'primary usage must belong to the primary author' });
-  }
   for (const [index, auxiliaryModel] of attestation.auxiliaryModels.entries()) {
-    if (auxiliaryModel.modelUsage !== null && auxiliaryModel.modelUsage.modelId !== auxiliaryModel.modelId) {
+    if (auxiliaryModel.modelUsage.modelId !== auxiliaryModel.modelId) {
       ctx.addIssue({ code: 'custom', path: ['auxiliaryModels', index, 'modelUsage'], message: 'auxiliary usage must belong to its auxiliary identity' });
+    }
+  }
+}
+
+function addD4ShakedownSuccessfulPrimaryIssues(
+  attestation: D4EngineeringShakedownRoleAttestation,
+  requestedModelId: string,
+  ctx: z.RefinementCtx,
+): void {
+  for (const [path, ids] of [
+    ['directDecisionAuthorModelIds', attestation.directDecisionAuthorModelIds],
+    ['primaryRoleGuardModelIds', attestation.primaryRoleGuardModelIds],
+  ] as const) {
+    if (ids.length !== 1 || ids[0] !== requestedModelId) {
+      ctx.addIssue({ code: 'custom', path: [path], message: 'successful shakedown primary identity must equal requestedModelId exactly' });
     }
   }
 }
@@ -4503,24 +4530,10 @@ function attestD4EngineeringShakedownModelRoles(input: {
   readonly wakeId: string;
 }): D4EngineeringShakedownRoleAttestation {
   const providerReportedModelIds = normalizedD4ModelIds(input.outcome.actualModelIds);
-  const directPrimaryModelIds = normalizedD4ModelIds(input.outcome.primaryModelIds);
-  if (input.provider === 'codex') {
-    // Codex has no direct-assistant model frame. Preserve its established
-    // exact-union behavior rather than treating an extra identity as auxiliary.
-    assertD4ActualModelIds(providerReportedModelIds, input.requestedModelId, input.wakeId);
-  } else if (
-    input.outcome.primaryModelIds === undefined
-    || directPrimaryModelIds.length !== 1
-    || directPrimaryModelIds[0] !== input.requestedModelId
-  ) {
-    throw new D4SmokePolicyError(
-      'model_binding_invalid',
-      `${input.wakeId}: settled Claude turn requires direct main-loop assistant evidence for ${input.requestedModelId}`,
-    );
-  }
-  const primaryAuthorModelId = input.provider === 'codex'
-    ? input.requestedModelId
-    : directPrimaryModelIds[0]!;
+  const directDecisionAuthorModelIds = normalizedD4ModelIds(input.outcome.primaryModelIds);
+  const primaryRoleGuardModelIds = input.provider === 'codex'
+    ? [input.requestedModelId]
+    : normalizedD4ModelIds(input.outcome.primaryRoleGuardModelIds);
   const usageByModelId = new Map<string, ProviderModelUsage>();
   for (const usage of input.outcome.modelUsage ?? []) {
     if (usageByModelId.has(usage.modelId)) {
@@ -4531,17 +4544,52 @@ function attestD4EngineeringShakedownModelRoles(input: {
     }
     usageByModelId.set(usage.modelId, usage);
   }
-  if (!providerReportedModelIds.includes(primaryAuthorModelId)) {
-    throw new D4SmokePolicyError('model_binding_invalid', `${input.wakeId}: direct primary ${primaryAuthorModelId} was not provider-reported`);
-  }
+  const primaryModelUsages = [...usageByModelId.values()]
+    .filter(({ modelId }) => primaryRoleGuardModelIds.includes(modelId));
+  const auxiliaryModels = [...usageByModelId.values()]
+    .filter(({ modelId }) => !primaryRoleGuardModelIds.includes(modelId))
+    .map((modelUsage) => ({ modelId: modelUsage.modelId, modelUsage }));
+  const sidechainAssistantModelIds = providerReportedModelIds.filter((modelId) =>
+    !primaryRoleGuardModelIds.includes(modelId) && !usageByModelId.has(modelId));
   return {
-    primaryAuthorModelId,
-    primaryModelUsage: usageByModelId.get(primaryAuthorModelId) ?? null,
-    auxiliaryModels: providerReportedModelIds
-      .filter((modelId) => modelId !== primaryAuthorModelId)
-      .map((modelId) => ({ modelId, modelUsage: usageByModelId.get(modelId) ?? null })),
+    directDecisionAuthorModelIds: input.provider === 'codex'
+      ? [input.requestedModelId]
+      : directDecisionAuthorModelIds,
+    primaryRoleGuardModelIds,
+    primaryModelUsages,
+    auxiliaryModels,
+    sidechainAssistantModelIds,
     providerReportedModelIds,
   };
+}
+
+function assertD4EngineeringShakedownSuccessfulModelRoles(input: {
+  readonly attestation: D4EngineeringShakedownRoleAttestation;
+  readonly provider: 'codex' | 'claude';
+  readonly requestedModelId: string;
+  readonly wakeId: string;
+}): void {
+  if (input.provider === 'codex') {
+    // Codex has no direct-assistant frame. Keep its established exact-union
+    // rule rather than reclassifying an extra identity as auxiliary.
+    assertD4ActualModelIds(
+      input.attestation.providerReportedModelIds,
+      input.requestedModelId,
+      input.wakeId,
+    );
+    return;
+  }
+  for (const ids of [
+    input.attestation.directDecisionAuthorModelIds,
+    input.attestation.primaryRoleGuardModelIds,
+  ]) {
+    if (ids.length !== 1 || ids[0] !== input.requestedModelId) {
+      throw new D4SmokePolicyError(
+        'model_binding_invalid',
+        `${input.wakeId}: direct decision-author and primary-role guard sets must each equal ${input.requestedModelId}`,
+      );
+    }
+  }
 }
 
 /** Strict full artifact schema. Every top-level field, the nested quota
@@ -4583,7 +4631,8 @@ export const d4EngineeringShakedownResultSchema = z.object({
     ctx.addIssue({ code: 'custom', path: ['requestedModelId'], message: 'requested model/provider is not frozen' });
     return;
   }
-  addD4ShakedownRoleAttestationIssues(artifact.modelAttestation, artifact.requestedModelId, ctx);
+  addD4ShakedownRoleEvidenceIssues(artifact.modelAttestation, ctx);
+  addD4ShakedownSuccessfulPrimaryIssues(artifact.modelAttestation, artifact.requestedModelId, ctx);
   if (!artifact.shakedownExecutionId.startsWith(
     `${D4_ENGINEERING_SHAKEDOWN_EXECUTION_PREFIX}:${artifact.provider}:${artifact.requestedModelId}:`,
   )) {
@@ -4699,7 +4748,7 @@ export const d4EngineeringShakedownFailureSchema = z.object({
   )) {
     ctx.addIssue({ code: 'custom', path: ['shakedownExecutionId'], message: 'execution namespace/model mismatch' });
   }
-  addD4ShakedownRoleAttestationIssues(artifact.modelAttestation, artifact.requestedModelId, ctx);
+  addD4ShakedownRoleEvidenceIssues(artifact.modelAttestation, ctx);
   const applicable = D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS[
     artifact.requestedModelId as keyof typeof D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS
   ];
@@ -5103,6 +5152,12 @@ export async function runD4EngineeringShakedown(
     tokenTelemetry = driver.readTelemetry(thread.threadId) ?? tokenTelemetry;
     modelAttestation = attestD4EngineeringShakedownModelRoles({
       outcome,
+      provider,
+      requestedModelId: plan.candidate.modelId,
+      wakeId,
+    });
+    assertD4EngineeringShakedownSuccessfulModelRoles({
+      attestation: modelAttestation,
       provider,
       requestedModelId: plan.candidate.modelId,
       wakeId,
