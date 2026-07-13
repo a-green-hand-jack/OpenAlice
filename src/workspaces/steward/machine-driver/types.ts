@@ -79,6 +79,10 @@ export interface TurnOutcome {
   readonly agentMessage: string | null;
   readonly durationMs: number | null;
   readonly interrupted: boolean;
+  /** Provider-reported model identities observed while executing this turn.
+   * Callers with a frozen exact-model contract must reject a missing, extra,
+   * aliased, or fallback identity rather than trusting the requested model. */
+  readonly actualModelIds?: readonly string[];
 }
 
 export interface ThreadTelemetry {
@@ -102,6 +106,9 @@ export type DriverEvent =
       readonly turnId: string;
       readonly itemType: string;
       readonly text: string | null;
+      readonly command?: string;
+      readonly aggregatedOutput?: string;
+      readonly exitCode?: number;
     }
   | {
       readonly type: 'token-usage';
@@ -119,7 +126,11 @@ export type DriverEvent =
   | { readonly type: 'server-request-denied'; readonly requestId: JsonRpcId; readonly method: string };
 
 export interface StewardMachineDriver {
-  ensureThread(opts: EnsureThreadOptions): Promise<{ threadId: string; resumed: boolean }>;
+  ensureThread(opts: EnsureThreadOptions): Promise<{
+    threadId: string;
+    resumed: boolean;
+    resolvedModelId?: string;
+  }>;
   runTurn(threadId: string, input: string, opts?: RunTurnOptions): Promise<TurnOutcome>;
   interruptTurn(threadId: string, turnId: string): Promise<void>;
   /** true while a turn is in flight OR the thread is known and its process is alive. */

@@ -74,6 +74,7 @@ class FakeCodexServer {
 interface HandshakeScript {
   threadId?: string;
   resumeThreadId?: string;
+  model?: string;
   turnId?: string;
   onTurnStart?: (msg: WireMessage, server: FakeCodexServer) => void;
   onTurnInterrupt?: (msg: WireMessage, server: FakeCodexServer) => void;
@@ -101,11 +102,17 @@ function respondHandshake(server: FakeCodexServer, script: HandshakeScript = {})
       case 'initialized':
         return;
       case 'thread/start':
-        srv.reply(msg.id as JsonRpcId, { thread: { id: script.threadId ?? THREAD_ID } });
+        srv.reply(msg.id as JsonRpcId, {
+          thread: { id: script.threadId ?? THREAD_ID },
+          ...(script.model !== undefined ? { model: script.model } : {}),
+        });
         return;
       case 'thread/resume': {
         const requested = (msg.params?.threadId as string | undefined) ?? THREAD_ID;
-        srv.reply(msg.id as JsonRpcId, { thread: { id: script.resumeThreadId ?? requested } });
+        srv.reply(msg.id as JsonRpcId, {
+          thread: { id: script.resumeThreadId ?? requested },
+          ...(script.model !== undefined ? { model: script.model } : {}),
+        });
         return;
       }
       case 'turn/start':
@@ -140,6 +147,26 @@ function sendAgentMessage(server: FakeCodexServer, text: string): void {
   });
 }
 
+function sendCommandCompleted(server: FakeCodexServer): void {
+  server.send({
+    method: 'item/completed',
+    params: {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      item: {
+        type: 'commandExecution',
+        id: 'cmd_1',
+        command: 'alice-uta order place',
+        commandActions: [],
+        cwd: '/tmp/scratch',
+        status: 'failed',
+        aggregatedOutput: 'D4_SMOKE_AUDIT_APPEND_FAILED EACCES',
+        exitCode: 125,
+      },
+    },
+  });
+}
+
 function sendTokenUsage(server: FakeCodexServer): void {
   server.send({
     method: 'thread/tokenUsage/updated',
@@ -151,6 +178,23 @@ function sendTokenUsage(server: FakeCodexServer): void {
         last: { totalTokens: 20201, inputTokens: 20116, cachedInputTokens: 1920, outputTokens: 85, reasoningOutputTokens: 11 },
         modelContextWindow: 258400,
       },
+    },
+  });
+}
+
+function sendModelRerouted(
+  server: FakeCodexServer,
+  fromModel: string,
+  toModel: string,
+): void {
+  server.send({
+    method: 'model/rerouted',
+    params: {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      fromModel,
+      toModel,
+      reason: 'highRiskCyberActivity',
     },
   });
 }
@@ -215,6 +259,68 @@ describe('CodexAppServerDriver', () => {
     const result = await driver.ensureThread({ threadId: THREAD_ID, cwd: '/tmp/scratch' });
     expect(result).toEqual({ threadId: THREAD_ID, resumed: true });
 
+    await driver.dispose();
+  });
+
+  it('reports the app-server top-level thread model as the actual turn model', async () => {
+    const server = new FakeCodexServer();
+    respondHandshake(server, {
+      model: 'gpt-5.6-sol',
+      onTurnStart: (_msg, srv) => sendTurnCompleted(srv, 'completed'),
+    });
+    const driver = makeDriver(server);
+
+    const thread = await driver.ensureThread({ cwd: '/tmp/scratch', model: 'gpt-5.6-sol' });
+    expect(thread.resolvedModelId).toBe('gpt-5.6-sol');
+    const outcome = await driver.runTurn(thread.threadId, 'x', { model: 'gpt-5.6-sol' });
+    expect(outcome.actualModelIds).toEqual(['gpt-5.6-sol']);
+
+    await driver.dispose();
+  });
+
+  it('persists both identities reported by model/rerouted across current and future turns', async () => {
+    const server = new FakeCodexServer();
+    let turn = 0;
+    respondHandshake(server, {
+      model: 'gpt-5.6-sol',
+      onTurnStart: (_msg, srv) => {
+        turn += 1;
+        if (turn === 1) sendModelRerouted(srv, 'gpt-5.6-sol', 'gpt-5.5');
+        sendTurnCompleted(srv, 'completed');
+      },
+    });
+    const driver = makeDriver(server);
+
+    const thread = await driver.ensureThread({ cwd: '/tmp/scratch', model: 'gpt-5.6-sol' });
+    const first = await driver.runTurn(thread.threadId, 'x', { model: 'gpt-5.6-sol' });
+    const second = await driver.runTurn(thread.threadId, 'y', { model: 'gpt-5.6-sol' });
+
+    expect(first.actualModelIds).toEqual(['gpt-5.5', 'gpt-5.6-sol']);
+    expect(second.actualModelIds).toEqual(['gpt-5.5', 'gpt-5.6-sol']);
+    await driver.dispose();
+  });
+
+  it('surfaces command output and exit status for fail-closed audit handling', async () => {
+    const server = new FakeCodexServer();
+    respondHandshake(server, {
+      model: 'gpt-5.6-sol',
+      onTurnStart: (_msg, srv) => {
+        sendCommandCompleted(srv);
+        sendTurnCompleted(srv, 'completed');
+      },
+    });
+    const driver = makeDriver(server);
+    const thread = await driver.ensureThread({ cwd: '/tmp/scratch', model: 'gpt-5.6-sol' });
+    const events: DriverEvent[] = [];
+    await driver.runTurn(thread.threadId, 'x', { onEvent: (event) => events.push(event) });
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'item-completed',
+      itemType: 'commandExecution',
+      command: 'alice-uta order place',
+      aggregatedOutput: 'D4_SMOKE_AUDIT_APPEND_FAILED EACCES',
+      exitCode: 125,
+    }));
     await driver.dispose();
   });
 

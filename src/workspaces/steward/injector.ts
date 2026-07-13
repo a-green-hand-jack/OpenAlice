@@ -2,13 +2,17 @@ import type { SessionPool } from '../session-pool.js';
 import type { StewardWakeRecord } from './types.js';
 import { STEWARD_DRAFTS_REL, STEWARD_LEDGER_REL, STEWARD_WAKES_REL, stewardWakeFilename } from './paths.js';
 
-export function formatStewardWakeMessage(record: StewardWakeRecord): string {
+export function formatStewardWakeMessage(
+  record: StewardWakeRecord,
+  options: { readonly validatorPath?: string } = {},
+): string {
   const wakePath = `${STEWARD_WAKES_REL}/${stewardWakeFilename(record.wakeId)}`;
+  const validatorPath = options.validatorPath ?? '.alice/steward/validate-ledger.mjs';
   return [
     `<STEWARD_WAKE id="${escapeAttr(record.wakeId)}" deadline="${escapeAttr(record.deadline)}">`,
     `Read ${wakePath} and the immutable Snapshot M1 file named by envelope.snapshotRef.path. This wake uses Decision Ledger v3; it supersedes any older v2/propose_trade ledger text retained in a persistent session.`,
     'Run the fixed UTA checklist: account, positions, orders, risk, market, and history.',
-    `Write one decision JSON object to ${STEWARD_DRAFTS_REL}/${stewardWakeFilename(record.wakeId)} with your Write/Edit tool (NEVER edit ${STEWARD_LEDGER_REL}), then run: node .alice/steward/validate-ledger.mjs ${record.wakeId}`,
+    `Write one decision JSON object to ${STEWARD_DRAFTS_REL}/${stewardWakeFilename(record.wakeId)} with your Write/Edit tool (NEVER edit ${STEWARD_LEDGER_REL}), then run: node ${validatorPath} ${record.wakeId}`,
     'Write version 3 with decision no_trade | propose_change | reduce_risk | blocked, intent (required for change/risk, null otherwise), and thesisDispositions addressed by wakeId+instrument. When intent is non-null, copy the bound snapshot id/hash into it. Do not write quantities or perform broker mutation; actions is [] and pendingHash is null in this contract slice.',
     'The decision must include top-level wakeId (this wake), completion.reason, exactly one wake:<this wakeId> self-reference, checklist, and cost. Validation commits it and is the only supported ledger writer.',
     'Do not inspect OpenAlice source. Do not call push.',
