@@ -1,0 +1,32 @@
+{
+  "schema": "steward-d4-sampling-plan/1",
+  "version": 1,
+  "authorization": "AUTH-D4-DEV",
+  "frozenAt": "2026-07-13T00:00:00.000Z",
+  "split": "dev",
+  "window": "a",
+  "sourcePolicy": "public-no-incremental-cost",
+  "adjustment": {
+    "provider": "Yahoo quote OHLCV is retrospectively split-adjusted; Binance spot bars use native units.",
+    "candidate": "Rebased candidate OHLCV is declared unadjusted only after a per-decision byte-invariance proof removes every not-yet-effective split factor.",
+    "boundary": "A selected cell may not straddle a split effective timestamp."
+  },
+  "selection": {
+    "bull": "Choose the exact-length consecutive derived window with the greatest log(lastClose/firstClose); ties keep the earliest source index.",
+    "bear": "Choose the exact-length consecutive derived window with the smallest log(lastClose/firstClose); ties keep the earliest source index."
+  },
+  "boundary": {
+    "formula": "T = L + D * C",
+    "sourceBarIndexing": "zero-based",
+    "decisionOrdinal": "d = 0..D-1",
+    "candidateVisiblePrefix": "[0, L + d * C)",
+    "decisionAsOfIndex": "L + d * C - 1",
+    "outcomeOnlyTail": "the final C bars [L + (D - 1) * C, T) are never candidate-visible"
+  },
+  "transform": {
+    "fourHour": "Aggregate only complete UTC-aligned groups of four strictly consecutive one-hour bars; drop partial/gapped groups.",
+    "priceAnonymization": "Rebase OHLC to first selected close = 100 and round to six decimals.",
+    "volumeAnonymization": "Rebase volume to first positive selected volume = 100; all-zero series remain zero; round to six decimals.",
+    "chronology": "Source timestamps and symbols stay in audit files; candidate cells contain only zero-based fictional bar indices."
+  }
+}

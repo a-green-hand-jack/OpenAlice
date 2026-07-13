@@ -1,0 +1,1735 @@
+{
+  "schema": "steward-d4-cell-audit/1",
+  "version": 1,
+  "cellId": "d4-us-single-bull-a",
+  "split": "dev",
+  "sourceReceipt": {
+    "schema": "steward-d4-source-receipt/1",
+    "version": 1,
+    "createdAt": "2026-07-13T00:00:00.000Z",
+    "redistribution": "receipt-only",
+    "provider": "yahoo-chart-public",
+    "symbol": "NVDA",
+    "assetClass": "equity",
+    "timezone": "America/New_York",
+    "exchangeCalendar": "XNAS",
+    "providerAdjustmentMode": "retrospective_split_adjusted",
+    "candidateAdjustmentMode": "unadjusted_split_invariant_rebase",
+    "splitEvidence": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-evidence",
+      "sha256": "5be256cc5337ce38e8919f294ef663ae7a28a653e9f472703aaa6dc3f70afee2"
+    },
+    "futureSplitInvariance": [
+      {
+        "decisionOrdinal": 1,
+        "asOf": "2023-03-24T13:30:00.000Z",
+        "futureSplitRefs": [
+          "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+        ],
+        "providerVisibleBarsSha256": "cbf4dde54bd422fec70213bb204b2edd71b1db48cf3fce5e582a102201197fc9",
+        "deadjustedVisibleBarsSha256": "cbf4dde54bd422fec70213bb204b2edd71b1db48cf3fce5e582a102201197fc9",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 2,
+        "asOf": "2023-03-31T13:30:00.000Z",
+        "futureSplitRefs": [
+          "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+        ],
+        "providerVisibleBarsSha256": "29f225882795b9fbe1e24df9e4a53b12c4375b0d9f77a7fefa7c876a4b7596f2",
+        "deadjustedVisibleBarsSha256": "29f225882795b9fbe1e24df9e4a53b12c4375b0d9f77a7fefa7c876a4b7596f2",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 3,
+        "asOf": "2023-04-07T13:30:00.000Z",
+        "futureSplitRefs": [
+          "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+        ],
+        "providerVisibleBarsSha256": "7ea16599d6364394eb737601f84bc73fd0f925cfb85fd80a66dc3fba51c99b1b",
+        "deadjustedVisibleBarsSha256": "7ea16599d6364394eb737601f84bc73fd0f925cfb85fd80a66dc3fba51c99b1b",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 4,
+        "asOf": "2023-04-15T13:30:00.000Z",
+        "futureSplitRefs": [
+          "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+        ],
+        "providerVisibleBarsSha256": "008b6fd1794558626723e6cf48460a8ecc728e4877cab51d3a8f331b997c6665",
+        "deadjustedVisibleBarsSha256": "008b6fd1794558626723e6cf48460a8ecc728e4877cab51d3a8f331b997c6665",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 5,
+        "asOf": "2023-04-22T13:30:00.000Z",
+        "futureSplitRefs": [
+          "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+        ],
+        "providerVisibleBarsSha256": "6dc061619b4d2742dfb45835acf5e4826813e636e01d9f41e6f39920d97d0b3e",
+        "deadjustedVisibleBarsSha256": "6dc061619b4d2742dfb45835acf5e4826813e636e01d9f41e6f39920d97d0b3e",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 6,
+        "asOf": "2023-04-29T13:30:00.000Z",
+        "futureSplitRefs": [
+          "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+        ],
+        "providerVisibleBarsSha256": "9e09000a0afcc1331ad172c4a7896f739e3d456c70a9c3028d5dfaf55d7adf7c",
+        "deadjustedVisibleBarsSha256": "9e09000a0afcc1331ad172c4a7896f739e3d456c70a9c3028d5dfaf55d7adf7c",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 7,
+        "asOf": "2023-05-06T13:30:00.000Z",
+        "futureSplitRefs": [
+          "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+        ],
+        "providerVisibleBarsSha256": "fb7b9711aa979e4416f9b53f0e65f7ebeeb8251aa3ea00881ab48f94e3960cce",
+        "deadjustedVisibleBarsSha256": "fb7b9711aa979e4416f9b53f0e65f7ebeeb8251aa3ea00881ab48f94e3960cce",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 8,
+        "asOf": "2023-05-13T13:30:00.000Z",
+        "futureSplitRefs": [
+          "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+        ],
+        "providerVisibleBarsSha256": "0551131d92952abae4fd95195c64d4ea14e229c5bfb12a0aca28530945d111aa",
+        "deadjustedVisibleBarsSha256": "0551131d92952abae4fd95195c64d4ea14e229c5bfb12a0aca28530945d111aa",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 9,
+        "asOf": "2023-05-20T13:30:00.000Z",
+        "futureSplitRefs": [
+          "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+        ],
+        "providerVisibleBarsSha256": "df3e212d3c985f06d32c422a4514839d9aa63aad7776088e3d7f26523e3e0b3d",
+        "deadjustedVisibleBarsSha256": "df3e212d3c985f06d32c422a4514839d9aa63aad7776088e3d7f26523e3e0b3d",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 10,
+        "asOf": "2023-05-27T13:30:00.000Z",
+        "futureSplitRefs": [
+          "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+        ],
+        "providerVisibleBarsSha256": "412e4e38c202c41f0cc69203278fa714a6364bdacb0284d33db65e2f9b178d49",
+        "deadjustedVisibleBarsSha256": "412e4e38c202c41f0cc69203278fa714a6364bdacb0284d33db65e2f9b178d49",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 11,
+        "asOf": "2023-06-06T13:30:00.000Z",
+        "futureSplitRefs": [
+          "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+        ],
+        "providerVisibleBarsSha256": "fe51c0d410bd67447dfb41df0e11ece79cee2fa0f043645e2d351a1e2bfdde63",
+        "deadjustedVisibleBarsSha256": "fe51c0d410bd67447dfb41df0e11ece79cee2fa0f043645e2d351a1e2bfdde63",
+        "invariant": true
+      },
+      {
+        "decisionOrdinal": 12,
+        "asOf": "2023-06-13T13:30:00.000Z",
+        "futureSplitRefs": [
+          "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+        ],
+        "providerVisibleBarsSha256": "96791770d3d6f9bfcbe31acc8e4566019a38b898f13d3f194e6a9f7621ca5c6e",
+        "deadjustedVisibleBarsSha256": "96791770d3d6f9bfcbe31acc8e4566019a38b898f13d3f194e6a9f7621ca5c6e",
+        "invariant": true
+      }
+    ],
+    "request": {
+      "method": "GET",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/NVDA?period1=1546300800&period2=1704067200&interval=1d&events=div%2Csplits&includeAdjustedClose=false&includePrePost=false",
+      "normalization": "chart.result[0] OHLCV; requested half-open range; non-finite/nonpositive rows removed; high/low expanded to include open/close; unadjusted"
+    },
+    "acquisition": {
+      "ref": "remote:d4-us-single-bull-a:acquisition",
+      "sha256": "09d5c2cc067f1aeee1b2c715c636e0ddfb75f9ad0964e2f9c9ba0acfbd458090",
+      "canonicalByteLength": 253834,
+      "barCount": 1258
+    },
+    "derivedPool": {
+      "ref": "derived:d4-us-single-bull-a:pool",
+      "sha256": "09d5c2cc067f1aeee1b2c715c636e0ddfb75f9ad0964e2f9c9ba0acfbd458090",
+      "canonicalByteLength": 253834,
+      "barCount": 1258
+    },
+    "selectedRaw": {
+      "ref": "remote:d4-us-single-bull-a:selected",
+      "sha256": "6babc72adac76148ec978a92b36b35b710f321ce81887b2c9c078a53f9ad5fc4",
+      "canonicalByteLength": 24199,
+      "barCount": 120
+    },
+    "selectedDerived": {
+      "ref": "derived:d4-us-single-bull-a:selected",
+      "sha256": "6babc72adac76148ec978a92b36b35b710f321ce81887b2c9c078a53f9ad5fc4",
+      "canonicalByteLength": 24199,
+      "barCount": 120
+    },
+    "selection": {
+      "profile": "bull",
+      "exactBarCount": 120,
+      "derivedPoolIndexStart": 1004,
+      "derivedPoolIndexEndExclusive": 1124,
+      "logReturn": 1.132153346836683,
+      "firstTimestamp": "2022-12-27T14:30:00.000Z",
+      "finalAvailableAt": "2023-06-21T13:30:00.000Z"
+    },
+    "recipe": {
+      "command": "pnpm exec tsx tools/campaigns/build-d4-smoke-data.mjs --verify-source",
+      "failClosed": "Any request, canonical byte identity, exact selection index, or transform drift is an error.",
+      "implementation": [
+        {
+          "ref": "tools/campaigns/d4-smoke-data.mjs",
+          "sha256": "54b08c9ea59068879050070bc671ccb2327f3605e56d04398e80c1c99bb719c9"
+        },
+        {
+          "ref": "tools/campaigns/build-d4-smoke-data.mjs",
+          "sha256": "09ad8a4b847b45a48d6f1ee9c7f2e3f04522ac4c1920d9dd77f4c3a56367305d"
+        }
+      ]
+    }
+  },
+  "splitEvidence": {
+    "schema": "steward-d4-split-evidence/1",
+    "version": 1,
+    "cellId": "d4-us-single-bull-a",
+    "provider": "yahoo-chart-public",
+    "symbol": "NVDA",
+    "providerAdjustmentMode": "retrospective_split_adjusted",
+    "cutoff": "2026-07-13T00:00:00.000Z",
+    "request": {
+      "method": "GET",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/NVDA?period1=1546300800&period2=1783900800&interval=1d&events=splits&includeAdjustedClose=false&includePrePost=false",
+      "normalization": "Yahoo split events through the frozen cutoff; sorted by effective timestamp."
+    },
+    "note": "Yahoo chart quote OHLCV is retrospectively normalized for split events even when adjusted-close output is disabled.",
+    "actions": [
+      {
+        "artifact": {
+          "schema": "steward-d4-split-action-evidence/1",
+          "provider": "yahoo-chart-public",
+          "symbol": "NVDA",
+          "effectiveAt": "2021-07-20T13:30:00.000Z",
+          "numerator": 4,
+          "denominator": 1,
+          "splitRatio": "4:1",
+          "announcedAt": "2021-07-20T13:30:00.000Z",
+          "announcementEvidence": null,
+          "availabilityPolicy": "Provider evidence proves the action no later than effectiveAt; earlier announcement access is not claimed."
+        },
+        "content": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-01",
+          "sha256": "c5676d4061c803188905bc52ca4c75f9708e95945fa64ffc5dd33ca9b220cc5f"
+        }
+      },
+      {
+        "artifact": {
+          "schema": "steward-d4-split-action-evidence/1",
+          "provider": "yahoo-chart-public",
+          "symbol": "NVDA",
+          "effectiveAt": "2024-06-10T13:30:00.000Z",
+          "numerator": 10,
+          "denominator": 1,
+          "splitRatio": "10:1",
+          "announcedAt": "2024-05-23T00:00:00.000Z",
+          "announcementEvidence": {
+            "publisher": "NVIDIA Newsroom",
+            "publishedDate": "2024-05-22",
+            "availableNoLaterThan": "2024-05-23T00:00:00.000Z",
+            "ref": "https://nvidianews.nvidia.com/news/nvidia-announces-financial-results-for-first-quarter-fiscal-2025",
+            "statement": "Ten-for-one forward stock split; split-adjusted trading expected at market open on June 10, 2024."
+          },
+          "availabilityPolicy": "Primary issuer evidence supplies a conservative end-of-publication-date availability bound."
+        },
+        "content": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02",
+          "sha256": "a990906aca9eff50b584925a2c3f5c31c0650ddcef8eb89f7d66eedd2dcb607b"
+        }
+      }
+    ]
+  },
+  "futureSplitInvariance": [
+    {
+      "decisionOrdinal": 1,
+      "asOf": "2023-03-24T13:30:00.000Z",
+      "futureSplitRefs": [
+        "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+      ],
+      "providerVisibleBarsSha256": "cbf4dde54bd422fec70213bb204b2edd71b1db48cf3fce5e582a102201197fc9",
+      "deadjustedVisibleBarsSha256": "cbf4dde54bd422fec70213bb204b2edd71b1db48cf3fce5e582a102201197fc9",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 2,
+      "asOf": "2023-03-31T13:30:00.000Z",
+      "futureSplitRefs": [
+        "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+      ],
+      "providerVisibleBarsSha256": "29f225882795b9fbe1e24df9e4a53b12c4375b0d9f77a7fefa7c876a4b7596f2",
+      "deadjustedVisibleBarsSha256": "29f225882795b9fbe1e24df9e4a53b12c4375b0d9f77a7fefa7c876a4b7596f2",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 3,
+      "asOf": "2023-04-07T13:30:00.000Z",
+      "futureSplitRefs": [
+        "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+      ],
+      "providerVisibleBarsSha256": "7ea16599d6364394eb737601f84bc73fd0f925cfb85fd80a66dc3fba51c99b1b",
+      "deadjustedVisibleBarsSha256": "7ea16599d6364394eb737601f84bc73fd0f925cfb85fd80a66dc3fba51c99b1b",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 4,
+      "asOf": "2023-04-15T13:30:00.000Z",
+      "futureSplitRefs": [
+        "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+      ],
+      "providerVisibleBarsSha256": "008b6fd1794558626723e6cf48460a8ecc728e4877cab51d3a8f331b997c6665",
+      "deadjustedVisibleBarsSha256": "008b6fd1794558626723e6cf48460a8ecc728e4877cab51d3a8f331b997c6665",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 5,
+      "asOf": "2023-04-22T13:30:00.000Z",
+      "futureSplitRefs": [
+        "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+      ],
+      "providerVisibleBarsSha256": "6dc061619b4d2742dfb45835acf5e4826813e636e01d9f41e6f39920d97d0b3e",
+      "deadjustedVisibleBarsSha256": "6dc061619b4d2742dfb45835acf5e4826813e636e01d9f41e6f39920d97d0b3e",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 6,
+      "asOf": "2023-04-29T13:30:00.000Z",
+      "futureSplitRefs": [
+        "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+      ],
+      "providerVisibleBarsSha256": "9e09000a0afcc1331ad172c4a7896f739e3d456c70a9c3028d5dfaf55d7adf7c",
+      "deadjustedVisibleBarsSha256": "9e09000a0afcc1331ad172c4a7896f739e3d456c70a9c3028d5dfaf55d7adf7c",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 7,
+      "asOf": "2023-05-06T13:30:00.000Z",
+      "futureSplitRefs": [
+        "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+      ],
+      "providerVisibleBarsSha256": "fb7b9711aa979e4416f9b53f0e65f7ebeeb8251aa3ea00881ab48f94e3960cce",
+      "deadjustedVisibleBarsSha256": "fb7b9711aa979e4416f9b53f0e65f7ebeeb8251aa3ea00881ab48f94e3960cce",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 8,
+      "asOf": "2023-05-13T13:30:00.000Z",
+      "futureSplitRefs": [
+        "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+      ],
+      "providerVisibleBarsSha256": "0551131d92952abae4fd95195c64d4ea14e229c5bfb12a0aca28530945d111aa",
+      "deadjustedVisibleBarsSha256": "0551131d92952abae4fd95195c64d4ea14e229c5bfb12a0aca28530945d111aa",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 9,
+      "asOf": "2023-05-20T13:30:00.000Z",
+      "futureSplitRefs": [
+        "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+      ],
+      "providerVisibleBarsSha256": "df3e212d3c985f06d32c422a4514839d9aa63aad7776088e3d7f26523e3e0b3d",
+      "deadjustedVisibleBarsSha256": "df3e212d3c985f06d32c422a4514839d9aa63aad7776088e3d7f26523e3e0b3d",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 10,
+      "asOf": "2023-05-27T13:30:00.000Z",
+      "futureSplitRefs": [
+        "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+      ],
+      "providerVisibleBarsSha256": "412e4e38c202c41f0cc69203278fa714a6364bdacb0284d33db65e2f9b178d49",
+      "deadjustedVisibleBarsSha256": "412e4e38c202c41f0cc69203278fa714a6364bdacb0284d33db65e2f9b178d49",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 11,
+      "asOf": "2023-06-06T13:30:00.000Z",
+      "futureSplitRefs": [
+        "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+      ],
+      "providerVisibleBarsSha256": "fe51c0d410bd67447dfb41df0e11ece79cee2fa0f043645e2d351a1e2bfdde63",
+      "deadjustedVisibleBarsSha256": "fe51c0d410bd67447dfb41df0e11ece79cee2fa0f043645e2d351a1e2bfdde63",
+      "invariant": true
+    },
+    {
+      "decisionOrdinal": 12,
+      "asOf": "2023-06-13T13:30:00.000Z",
+      "futureSplitRefs": [
+        "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-02"
+      ],
+      "providerVisibleBarsSha256": "96791770d3d6f9bfcbe31acc8e4566019a38b898f13d3f194e6a9f7621ca5c6e",
+      "deadjustedVisibleBarsSha256": "96791770d3d6f9bfcbe31acc8e4566019a38b898f13d3f194e6a9f7621ca5c6e",
+      "invariant": true
+    }
+  ],
+  "universeEvidence": {
+    "cellId": "d4-us-single-bull-a",
+    "selectionBasis": "point_in_time",
+    "instrumentObservedFrom": "2022-12-27T14:30:00.000Z",
+    "instrumentObservedThrough": "2023-06-21T13:30:00.000Z",
+    "evidence": "The frozen single-instrument universe was selected before model calls and is evidenced by the pinned provider-bar receipt.",
+    "sourceReceipt": {
+      "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#source-receipt",
+      "sha256": "ce38c5e7a783b4b9e2297c51086c21be4a63abaee953def053e654b1afe9a12f"
+    }
+  },
+  "decisionManifests": [
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:01",
+      "datasetId": "d4-us-single-bull-a",
+      "asOf": "2023-03-24T13:30:00.000Z",
+      "snapshot": {
+        "ref": "869994c4404823f8d6d3988357b1a4711ded63da",
+        "sha256": "1f4fb18ec1818833146a819f73d7748cdf86640ec02f2c845aa30ca88f8f7834"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "NVDA",
+        "assetClass": "equity",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNAS",
+        "content": {
+          "ref": "869994c4404823f8d6d3988357b1a4711ded63da",
+          "sha256": "1f4fb18ec1818833146a819f73d7748cdf86640ec02f2c845aa30ca88f8f7834"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "869994c4404823f8d6d3988357b1a4711ded63da",
+              "sha256": "1f4fb18ec1818833146a819f73d7748cdf86640ec02f2c845aa30ca88f8f7834",
+              "observedAt": "2023-03-24T13:30:00.000Z",
+              "availableAt": "2023-03-24T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-01",
+          "sha256": "c5676d4061c803188905bc52ca4c75f9708e95945fa64ffc5dd33ca9b220cc5f",
+          "kind": "split",
+          "announcedAt": "2021-07-20T13:30:00.000Z",
+          "effectiveAt": "2021-07-20T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2022-12-27T14:30:00.000Z",
+        "effectiveFrom": "2022-12-27T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#universe",
+          "sha256": "3badac565e2b73eefde682a73513144ecc34abd18b704d1f912ae6c87bdf2800"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-single-bull-a",
+        "leakageGroups": [
+          "market:us-single",
+          "instrument:yahoo-chart-public:NVDA"
+        ],
+        "inputStart": "2022-12-27T14:30:00.000Z",
+        "decisionStart": "2023-03-24T13:30:00.000Z",
+        "decisionEnd": "2023-06-13T13:30:00.000Z",
+        "outcomeEnd": "2023-06-21T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:02",
+      "datasetId": "d4-us-single-bull-a",
+      "asOf": "2023-03-31T13:30:00.000Z",
+      "snapshot": {
+        "ref": "194fdb091d664590001746157f1a6669b2ea20d6",
+        "sha256": "63d757fedea67c43f5b642790ee340945e0b694a3c127e57f0448fdaba5ade01"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "NVDA",
+        "assetClass": "equity",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNAS",
+        "content": {
+          "ref": "194fdb091d664590001746157f1a6669b2ea20d6",
+          "sha256": "63d757fedea67c43f5b642790ee340945e0b694a3c127e57f0448fdaba5ade01"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "194fdb091d664590001746157f1a6669b2ea20d6",
+              "sha256": "63d757fedea67c43f5b642790ee340945e0b694a3c127e57f0448fdaba5ade01",
+              "observedAt": "2023-03-31T13:30:00.000Z",
+              "availableAt": "2023-03-31T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-01",
+          "sha256": "c5676d4061c803188905bc52ca4c75f9708e95945fa64ffc5dd33ca9b220cc5f",
+          "kind": "split",
+          "announcedAt": "2021-07-20T13:30:00.000Z",
+          "effectiveAt": "2021-07-20T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2022-12-27T14:30:00.000Z",
+        "effectiveFrom": "2022-12-27T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#universe",
+          "sha256": "3badac565e2b73eefde682a73513144ecc34abd18b704d1f912ae6c87bdf2800"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-single-bull-a",
+        "leakageGroups": [
+          "market:us-single",
+          "instrument:yahoo-chart-public:NVDA"
+        ],
+        "inputStart": "2022-12-27T14:30:00.000Z",
+        "decisionStart": "2023-03-24T13:30:00.000Z",
+        "decisionEnd": "2023-06-13T13:30:00.000Z",
+        "outcomeEnd": "2023-06-21T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:03",
+      "datasetId": "d4-us-single-bull-a",
+      "asOf": "2023-04-07T13:30:00.000Z",
+      "snapshot": {
+        "ref": "dd7fa5eb966b11e3162fa9d9b287fe9c4459766c",
+        "sha256": "6ec55c7cf4ea67ba6c6e67a47fae145665de8b591cb54a10a07673f07e6df309"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "NVDA",
+        "assetClass": "equity",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNAS",
+        "content": {
+          "ref": "dd7fa5eb966b11e3162fa9d9b287fe9c4459766c",
+          "sha256": "6ec55c7cf4ea67ba6c6e67a47fae145665de8b591cb54a10a07673f07e6df309"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "dd7fa5eb966b11e3162fa9d9b287fe9c4459766c",
+              "sha256": "6ec55c7cf4ea67ba6c6e67a47fae145665de8b591cb54a10a07673f07e6df309",
+              "observedAt": "2023-04-07T13:30:00.000Z",
+              "availableAt": "2023-04-07T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-01",
+          "sha256": "c5676d4061c803188905bc52ca4c75f9708e95945fa64ffc5dd33ca9b220cc5f",
+          "kind": "split",
+          "announcedAt": "2021-07-20T13:30:00.000Z",
+          "effectiveAt": "2021-07-20T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2022-12-27T14:30:00.000Z",
+        "effectiveFrom": "2022-12-27T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#universe",
+          "sha256": "3badac565e2b73eefde682a73513144ecc34abd18b704d1f912ae6c87bdf2800"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-single-bull-a",
+        "leakageGroups": [
+          "market:us-single",
+          "instrument:yahoo-chart-public:NVDA"
+        ],
+        "inputStart": "2022-12-27T14:30:00.000Z",
+        "decisionStart": "2023-03-24T13:30:00.000Z",
+        "decisionEnd": "2023-06-13T13:30:00.000Z",
+        "outcomeEnd": "2023-06-21T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:04",
+      "datasetId": "d4-us-single-bull-a",
+      "asOf": "2023-04-15T13:30:00.000Z",
+      "snapshot": {
+        "ref": "561a03aa143ed2a8b8be978398da08f530302b01",
+        "sha256": "288a99fc05fda12ab9b9d6865edc95f15a3b9372140ef2feb84dce8dc4d99d38"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "NVDA",
+        "assetClass": "equity",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNAS",
+        "content": {
+          "ref": "561a03aa143ed2a8b8be978398da08f530302b01",
+          "sha256": "288a99fc05fda12ab9b9d6865edc95f15a3b9372140ef2feb84dce8dc4d99d38"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "561a03aa143ed2a8b8be978398da08f530302b01",
+              "sha256": "288a99fc05fda12ab9b9d6865edc95f15a3b9372140ef2feb84dce8dc4d99d38",
+              "observedAt": "2023-04-15T13:30:00.000Z",
+              "availableAt": "2023-04-15T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-01",
+          "sha256": "c5676d4061c803188905bc52ca4c75f9708e95945fa64ffc5dd33ca9b220cc5f",
+          "kind": "split",
+          "announcedAt": "2021-07-20T13:30:00.000Z",
+          "effectiveAt": "2021-07-20T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2022-12-27T14:30:00.000Z",
+        "effectiveFrom": "2022-12-27T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#universe",
+          "sha256": "3badac565e2b73eefde682a73513144ecc34abd18b704d1f912ae6c87bdf2800"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-single-bull-a",
+        "leakageGroups": [
+          "market:us-single",
+          "instrument:yahoo-chart-public:NVDA"
+        ],
+        "inputStart": "2022-12-27T14:30:00.000Z",
+        "decisionStart": "2023-03-24T13:30:00.000Z",
+        "decisionEnd": "2023-06-13T13:30:00.000Z",
+        "outcomeEnd": "2023-06-21T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:05",
+      "datasetId": "d4-us-single-bull-a",
+      "asOf": "2023-04-22T13:30:00.000Z",
+      "snapshot": {
+        "ref": "159c07aaa42b3552129e9313d83947fdb8b909d1",
+        "sha256": "efed90663e8a9ec796a0179cc5bff337973ea9fcf7edfe86d54fbc59f042d333"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "NVDA",
+        "assetClass": "equity",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNAS",
+        "content": {
+          "ref": "159c07aaa42b3552129e9313d83947fdb8b909d1",
+          "sha256": "efed90663e8a9ec796a0179cc5bff337973ea9fcf7edfe86d54fbc59f042d333"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "159c07aaa42b3552129e9313d83947fdb8b909d1",
+              "sha256": "efed90663e8a9ec796a0179cc5bff337973ea9fcf7edfe86d54fbc59f042d333",
+              "observedAt": "2023-04-22T13:30:00.000Z",
+              "availableAt": "2023-04-22T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-01",
+          "sha256": "c5676d4061c803188905bc52ca4c75f9708e95945fa64ffc5dd33ca9b220cc5f",
+          "kind": "split",
+          "announcedAt": "2021-07-20T13:30:00.000Z",
+          "effectiveAt": "2021-07-20T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2022-12-27T14:30:00.000Z",
+        "effectiveFrom": "2022-12-27T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#universe",
+          "sha256": "3badac565e2b73eefde682a73513144ecc34abd18b704d1f912ae6c87bdf2800"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-single-bull-a",
+        "leakageGroups": [
+          "market:us-single",
+          "instrument:yahoo-chart-public:NVDA"
+        ],
+        "inputStart": "2022-12-27T14:30:00.000Z",
+        "decisionStart": "2023-03-24T13:30:00.000Z",
+        "decisionEnd": "2023-06-13T13:30:00.000Z",
+        "outcomeEnd": "2023-06-21T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:06",
+      "datasetId": "d4-us-single-bull-a",
+      "asOf": "2023-04-29T13:30:00.000Z",
+      "snapshot": {
+        "ref": "9c51d68ed814ba5b3bbe2b79623bfd585c24e8ac",
+        "sha256": "d753e34c21bdedb7f47ceb49aa898bc17268471db3c0cb70cf332d7f2b963094"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "NVDA",
+        "assetClass": "equity",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNAS",
+        "content": {
+          "ref": "9c51d68ed814ba5b3bbe2b79623bfd585c24e8ac",
+          "sha256": "d753e34c21bdedb7f47ceb49aa898bc17268471db3c0cb70cf332d7f2b963094"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "9c51d68ed814ba5b3bbe2b79623bfd585c24e8ac",
+              "sha256": "d753e34c21bdedb7f47ceb49aa898bc17268471db3c0cb70cf332d7f2b963094",
+              "observedAt": "2023-04-29T13:30:00.000Z",
+              "availableAt": "2023-04-29T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-01",
+          "sha256": "c5676d4061c803188905bc52ca4c75f9708e95945fa64ffc5dd33ca9b220cc5f",
+          "kind": "split",
+          "announcedAt": "2021-07-20T13:30:00.000Z",
+          "effectiveAt": "2021-07-20T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2022-12-27T14:30:00.000Z",
+        "effectiveFrom": "2022-12-27T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#universe",
+          "sha256": "3badac565e2b73eefde682a73513144ecc34abd18b704d1f912ae6c87bdf2800"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-single-bull-a",
+        "leakageGroups": [
+          "market:us-single",
+          "instrument:yahoo-chart-public:NVDA"
+        ],
+        "inputStart": "2022-12-27T14:30:00.000Z",
+        "decisionStart": "2023-03-24T13:30:00.000Z",
+        "decisionEnd": "2023-06-13T13:30:00.000Z",
+        "outcomeEnd": "2023-06-21T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:07",
+      "datasetId": "d4-us-single-bull-a",
+      "asOf": "2023-05-06T13:30:00.000Z",
+      "snapshot": {
+        "ref": "fd1d0b435b6912e6743b9445009737df0a7005c5",
+        "sha256": "7149e3213c1297edb6a371ced2ebc0ec9ce91c502a4a273bcdd3cc40eacae3b8"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "NVDA",
+        "assetClass": "equity",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNAS",
+        "content": {
+          "ref": "fd1d0b435b6912e6743b9445009737df0a7005c5",
+          "sha256": "7149e3213c1297edb6a371ced2ebc0ec9ce91c502a4a273bcdd3cc40eacae3b8"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "fd1d0b435b6912e6743b9445009737df0a7005c5",
+              "sha256": "7149e3213c1297edb6a371ced2ebc0ec9ce91c502a4a273bcdd3cc40eacae3b8",
+              "observedAt": "2023-05-06T13:30:00.000Z",
+              "availableAt": "2023-05-06T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-01",
+          "sha256": "c5676d4061c803188905bc52ca4c75f9708e95945fa64ffc5dd33ca9b220cc5f",
+          "kind": "split",
+          "announcedAt": "2021-07-20T13:30:00.000Z",
+          "effectiveAt": "2021-07-20T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2022-12-27T14:30:00.000Z",
+        "effectiveFrom": "2022-12-27T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#universe",
+          "sha256": "3badac565e2b73eefde682a73513144ecc34abd18b704d1f912ae6c87bdf2800"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-single-bull-a",
+        "leakageGroups": [
+          "market:us-single",
+          "instrument:yahoo-chart-public:NVDA"
+        ],
+        "inputStart": "2022-12-27T14:30:00.000Z",
+        "decisionStart": "2023-03-24T13:30:00.000Z",
+        "decisionEnd": "2023-06-13T13:30:00.000Z",
+        "outcomeEnd": "2023-06-21T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:08",
+      "datasetId": "d4-us-single-bull-a",
+      "asOf": "2023-05-13T13:30:00.000Z",
+      "snapshot": {
+        "ref": "f6346e7174fc6cd402e90fcad31ecb11bb20273a",
+        "sha256": "fe7ecb55693b3bfe2d87348a39165f0eb33cc837e24b01a7e22b1235dcb34c01"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "NVDA",
+        "assetClass": "equity",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNAS",
+        "content": {
+          "ref": "f6346e7174fc6cd402e90fcad31ecb11bb20273a",
+          "sha256": "fe7ecb55693b3bfe2d87348a39165f0eb33cc837e24b01a7e22b1235dcb34c01"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "f6346e7174fc6cd402e90fcad31ecb11bb20273a",
+              "sha256": "fe7ecb55693b3bfe2d87348a39165f0eb33cc837e24b01a7e22b1235dcb34c01",
+              "observedAt": "2023-05-13T13:30:00.000Z",
+              "availableAt": "2023-05-13T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-01",
+          "sha256": "c5676d4061c803188905bc52ca4c75f9708e95945fa64ffc5dd33ca9b220cc5f",
+          "kind": "split",
+          "announcedAt": "2021-07-20T13:30:00.000Z",
+          "effectiveAt": "2021-07-20T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2022-12-27T14:30:00.000Z",
+        "effectiveFrom": "2022-12-27T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#universe",
+          "sha256": "3badac565e2b73eefde682a73513144ecc34abd18b704d1f912ae6c87bdf2800"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-single-bull-a",
+        "leakageGroups": [
+          "market:us-single",
+          "instrument:yahoo-chart-public:NVDA"
+        ],
+        "inputStart": "2022-12-27T14:30:00.000Z",
+        "decisionStart": "2023-03-24T13:30:00.000Z",
+        "decisionEnd": "2023-06-13T13:30:00.000Z",
+        "outcomeEnd": "2023-06-21T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:09",
+      "datasetId": "d4-us-single-bull-a",
+      "asOf": "2023-05-20T13:30:00.000Z",
+      "snapshot": {
+        "ref": "ffb9645cbf91f5c4d01aaefc60c4bc0d3593700b",
+        "sha256": "e4782fb7abbc7b51884f35cdfaca4d1c3aa6be54ae81f05f705f0cc2ec9aa958"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "NVDA",
+        "assetClass": "equity",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNAS",
+        "content": {
+          "ref": "ffb9645cbf91f5c4d01aaefc60c4bc0d3593700b",
+          "sha256": "e4782fb7abbc7b51884f35cdfaca4d1c3aa6be54ae81f05f705f0cc2ec9aa958"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "ffb9645cbf91f5c4d01aaefc60c4bc0d3593700b",
+              "sha256": "e4782fb7abbc7b51884f35cdfaca4d1c3aa6be54ae81f05f705f0cc2ec9aa958",
+              "observedAt": "2023-05-20T13:30:00.000Z",
+              "availableAt": "2023-05-20T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-01",
+          "sha256": "c5676d4061c803188905bc52ca4c75f9708e95945fa64ffc5dd33ca9b220cc5f",
+          "kind": "split",
+          "announcedAt": "2021-07-20T13:30:00.000Z",
+          "effectiveAt": "2021-07-20T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2022-12-27T14:30:00.000Z",
+        "effectiveFrom": "2022-12-27T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#universe",
+          "sha256": "3badac565e2b73eefde682a73513144ecc34abd18b704d1f912ae6c87bdf2800"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-single-bull-a",
+        "leakageGroups": [
+          "market:us-single",
+          "instrument:yahoo-chart-public:NVDA"
+        ],
+        "inputStart": "2022-12-27T14:30:00.000Z",
+        "decisionStart": "2023-03-24T13:30:00.000Z",
+        "decisionEnd": "2023-06-13T13:30:00.000Z",
+        "outcomeEnd": "2023-06-21T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:10",
+      "datasetId": "d4-us-single-bull-a",
+      "asOf": "2023-05-27T13:30:00.000Z",
+      "snapshot": {
+        "ref": "fd1908402f37f4ee0bb147b5e7570ab4570b32c7",
+        "sha256": "4f4cf763efb668d41382c1aac2446a687fd038067db8d53d5e90b471f92d2e4b"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "NVDA",
+        "assetClass": "equity",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNAS",
+        "content": {
+          "ref": "fd1908402f37f4ee0bb147b5e7570ab4570b32c7",
+          "sha256": "4f4cf763efb668d41382c1aac2446a687fd038067db8d53d5e90b471f92d2e4b"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "fd1908402f37f4ee0bb147b5e7570ab4570b32c7",
+              "sha256": "4f4cf763efb668d41382c1aac2446a687fd038067db8d53d5e90b471f92d2e4b",
+              "observedAt": "2023-05-27T13:30:00.000Z",
+              "availableAt": "2023-05-27T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-01",
+          "sha256": "c5676d4061c803188905bc52ca4c75f9708e95945fa64ffc5dd33ca9b220cc5f",
+          "kind": "split",
+          "announcedAt": "2021-07-20T13:30:00.000Z",
+          "effectiveAt": "2021-07-20T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2022-12-27T14:30:00.000Z",
+        "effectiveFrom": "2022-12-27T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#universe",
+          "sha256": "3badac565e2b73eefde682a73513144ecc34abd18b704d1f912ae6c87bdf2800"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-single-bull-a",
+        "leakageGroups": [
+          "market:us-single",
+          "instrument:yahoo-chart-public:NVDA"
+        ],
+        "inputStart": "2022-12-27T14:30:00.000Z",
+        "decisionStart": "2023-03-24T13:30:00.000Z",
+        "decisionEnd": "2023-06-13T13:30:00.000Z",
+        "outcomeEnd": "2023-06-21T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:11",
+      "datasetId": "d4-us-single-bull-a",
+      "asOf": "2023-06-06T13:30:00.000Z",
+      "snapshot": {
+        "ref": "cc736d09639e4e491be57b917f8d8991928c2f35",
+        "sha256": "ccc1b21fa8bf6a227e8e6bc3536fb8fc92fc14c93a5a9a12de357f02a7e2f5fd"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "NVDA",
+        "assetClass": "equity",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNAS",
+        "content": {
+          "ref": "cc736d09639e4e491be57b917f8d8991928c2f35",
+          "sha256": "ccc1b21fa8bf6a227e8e6bc3536fb8fc92fc14c93a5a9a12de357f02a7e2f5fd"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "cc736d09639e4e491be57b917f8d8991928c2f35",
+              "sha256": "ccc1b21fa8bf6a227e8e6bc3536fb8fc92fc14c93a5a9a12de357f02a7e2f5fd",
+              "observedAt": "2023-06-06T13:30:00.000Z",
+              "availableAt": "2023-06-06T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-01",
+          "sha256": "c5676d4061c803188905bc52ca4c75f9708e95945fa64ffc5dd33ca9b220cc5f",
+          "kind": "split",
+          "announcedAt": "2021-07-20T13:30:00.000Z",
+          "effectiveAt": "2021-07-20T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2022-12-27T14:30:00.000Z",
+        "effectiveFrom": "2022-12-27T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#universe",
+          "sha256": "3badac565e2b73eefde682a73513144ecc34abd18b704d1f912ae6c87bdf2800"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-single-bull-a",
+        "leakageGroups": [
+          "market:us-single",
+          "instrument:yahoo-chart-public:NVDA"
+        ],
+        "inputStart": "2022-12-27T14:30:00.000Z",
+        "decisionStart": "2023-03-24T13:30:00.000Z",
+        "decisionEnd": "2023-06-13T13:30:00.000Z",
+        "outcomeEnd": "2023-06-21T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    },
+    {
+      "schema": "steward-eval-data-manifest/1",
+      "version": 1,
+      "wakeId": "d4-opaque-wake-placeholder:12",
+      "datasetId": "d4-us-single-bull-a",
+      "asOf": "2023-06-13T13:30:00.000Z",
+      "snapshot": {
+        "ref": "af6ffc5b6c6c4ad769c70e23d9fcb07bcb0e6f14",
+        "sha256": "a4eda36f55a2d96b56d084b721247773c629e1433cd7d1da86e82df1328a5cde"
+      },
+      "dataset": {
+        "provider": "yahoo-chart-public",
+        "name": "1d-ohlcv-anonymized",
+        "rawSymbol": "NVDA",
+        "assetClass": "equity",
+        "timezone": "America/New_York",
+        "exchangeCalendar": "XNAS",
+        "content": {
+          "ref": "af6ffc5b6c6c4ad769c70e23d9fcb07bcb0e6f14",
+          "sha256": "a4eda36f55a2d96b56d084b721247773c629e1433cd7d1da86e82df1328a5cde"
+        }
+      },
+      "adjustment": {
+        "mode": "unadjusted",
+        "corporateActionRefs": []
+      },
+      "sources": {
+        "market": {
+          "required": true,
+          "provided": true,
+          "items": [
+            {
+              "ref": "af6ffc5b6c6c4ad769c70e23d9fcb07bcb0e6f14",
+              "sha256": "a4eda36f55a2d96b56d084b721247773c629e1433cd7d1da86e82df1328a5cde",
+              "observedAt": "2023-06-13T13:30:00.000Z",
+              "availableAt": "2023-06-13T13:30:00.000Z"
+            }
+          ],
+          "note": null
+        },
+        "portfolio": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the fresh portfolio snapshot."
+        },
+        "risk": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies the frozen deterministic risk context."
+        },
+        "events": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "This price-only Smoke cell supplies no publication or event stream."
+        },
+        "history": {
+          "required": false,
+          "provided": false,
+          "items": [],
+          "note": "Runtime sandbox supplies only history created within this cell execution."
+        }
+      },
+      "publications": [],
+      "corporateActions": [
+        {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#split-01",
+          "sha256": "c5676d4061c803188905bc52ca4c75f9708e95945fa64ffc5dd33ca9b220cc5f",
+          "kind": "split",
+          "announcedAt": "2021-07-20T13:30:00.000Z",
+          "effectiveAt": "2021-07-20T13:30:00.000Z",
+          "appliedToData": false
+        }
+      ],
+      "universe": {
+        "selectionBasis": "point_in_time",
+        "membershipAsOf": "2022-12-27T14:30:00.000Z",
+        "effectiveFrom": "2022-12-27T14:30:00.000Z",
+        "effectiveTo": null,
+        "source": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/audit/d4-us-single-bull-a.json#universe",
+          "sha256": "3badac565e2b73eefde682a73513144ecc34abd18b704d1f912ae6c87bdf2800"
+        }
+      },
+      "sampling": {
+        "kind": "regime_labeled",
+        "frozenAt": "2026-07-13T00:00:00.000Z",
+        "plan": {
+          "ref": "tools/campaigns/data/d4-smoke-dev-a/sampling-plan.json",
+          "sha256": "9c2ce137e789d5f4791b97d785d64a5961a7a85f79f2b4b3b2e5f648e7059822"
+        }
+      },
+      "audit": {
+        "manifestCreatedAt": "2026-07-13T00:00:00.000Z",
+        "evaluationStartedAt": "2026-07-13T00:00:00.000Z"
+      },
+      "split": {
+        "name": "dev",
+        "identity": "split:dev:d4-us-single-bull-a",
+        "leakageGroups": [
+          "market:us-single",
+          "instrument:yahoo-chart-public:NVDA"
+        ],
+        "inputStart": "2022-12-27T14:30:00.000Z",
+        "decisionStart": "2023-03-24T13:30:00.000Z",
+        "decisionEnd": "2023-06-13T13:30:00.000Z",
+        "outcomeEnd": "2023-06-21T13:30:00.000Z",
+        "embargoMs": 86400000
+      }
+    }
+  ]
+}

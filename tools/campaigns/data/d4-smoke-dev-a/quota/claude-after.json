@@ -1,0 +1,55 @@
+{
+  "session": {
+    "total_cost_usd": 0,
+    "total_api_duration_ms": 0,
+    "model_usage": {},
+    "num_turns": 0
+  },
+  "subscription_type": "max",
+  "rate_limits_available": true,
+  "rate_limits": {
+    "five_hour": {
+      "utilization": 16,
+      "resets_at": "2026-07-13T13:00:00.000Z"
+    },
+    "seven_day": {
+      "utilization": 59,
+      "resets_at": "2026-07-18T03:00:00.000Z"
+    },
+    "model_scoped": [
+      {
+        "display_name": "Fable",
+        "utilization": 54,
+        "resets_at": "2026-07-18T03:00:00.000Z"
+      }
+    ],
+    "extra_usage": {
+      "is_enabled": false,
+      "monthly_limit": null,
+      "used_credits": null,
+      "utilization": null
+    },
+    "spend": {
+      "enabled": false,
+      "used": {
+        "amount_minor": 0
+      },
+      "can_purchase_credits": false
+    }
+  },
+  "provenance": {
+    "control": "Claude Code native /usage JSON result",
+    "capturedAt": "2026-07-13T08:23:06.841Z",
+    "normalization": "Integer utilization and reset text from the native result are projected into the later SDK usage-control response shape required by the frozen runner.",
+    "nativeResult": {
+      "total_cost_usd": 0,
+      "num_turns": 0,
+      "modelUsage": {},
+      "currentSession": "16% used; resets Jul 13, 4pm (Asia/Riyadh)",
+      "currentWeekAllModels": "59% used; resets Jul 18, 6am (Asia/Riyadh)",
+      "currentWeekFable": "54% used; resets Jul 18, 6am (Asia/Riyadh)"
+    },
+    "calibration": "G2 reachability probes: four all-model/short-window model turns, including one Fable-window model turn",
+    "incrementalSpendUsd": 0
+  }
+}
