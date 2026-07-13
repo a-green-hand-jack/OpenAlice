@@ -2399,21 +2399,28 @@ async function createFreshSandbox(
   } catch (error) {
     throw new D4SmokePolicyError('sandbox_not_fresh', paths.root, { cause: error });
   }
-  for (const path of writablePaths(paths)) {
-    if (isWithin(paths.workspace, path)) continue;
-    const directory = path === paths.localStorageFile || path === paths.auditCallLedger
-      ? dirname(path)
-      : path;
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-  }
-  if (provider === 'claude') {
-    try {
-      await mkdir(paths.claudeBridgeTempDir, { recursive: false, mode: 0o700 });
-    } catch (error) {
-      throw new D4SmokePolicyError('sandbox_not_fresh', paths.claudeBridgeTempDir, { cause: error });
+  let bridgeCreated = false;
+  try {
+    for (const path of writablePaths(paths)) {
+      if (isWithin(paths.workspace, path)) continue;
+      const directory = path === paths.localStorageFile || path === paths.auditCallLedger
+        ? dirname(path)
+        : path;
+      await mkdir(directory, { recursive: true, mode: 0o700 });
     }
+    if (provider === 'claude') {
+      try {
+        await mkdir(paths.claudeBridgeTempDir, { recursive: false, mode: 0o700 });
+        bridgeCreated = true;
+      } catch (error) {
+        throw new D4SmokePolicyError('sandbox_not_fresh', paths.claudeBridgeTempDir, { cause: error });
+      }
+    }
+    await mkdir(paths.runtimeRoot, { recursive: false, mode: 0o700 });
+  } catch (error) {
+    if (bridgeCreated) await releaseD4ClaudeBridgeTemp(paths, provider).catch(() => undefined);
+    throw error;
   }
-  await mkdir(paths.runtimeRoot, { recursive: false, mode: 0o700 });
 }
 
 async function releaseD4ClaudeBridgeTemp(

@@ -7,6 +7,22 @@ import { promisify } from 'node:util';
 
 import { describe, expect, it, vi } from 'vitest';
 
+const mkdirFault = vi.hoisted(() => ({
+  path: null as string | null,
+  error: null as Error | null,
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    mkdir: async (...args: Parameters<typeof actual.mkdir>) => {
+      if (args[0] === mkdirFault.path) throw mkdirFault.error ?? new Error('post-bridge setup failure');
+      return actual.mkdir(...args);
+    },
+  };
+});
+
 import { sha256StewardEvaluationContent, type StewardEvaluationDataManifest } from './evaluation-data-manifest.js';
 import { createStewardEvaluationProvenanceStore } from './evaluation-provenance-store.js';
 import {
@@ -2413,6 +2429,50 @@ describe('D4 engineering shakedown (issue #205)', () => {
       } finally {
         await rm(plan.paths.claudeBridgeTempDir, { recursive: true, force: true });
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('removes the Claude bridge directory when later sandbox setup fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-d4-bridge-cleanup-'));
+    try {
+      const fixture = await createD4SmokeTestFixture();
+      const stage = await validateD4SmokeStage({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+      });
+      const selector: D4EngineeringShakedownSelector = {
+        modelId: 'claude-fable-5',
+        cellId: stage.manifest.content.cells[0]!.id,
+        decisionIndex: 0,
+      };
+      const sandboxBase = join(root, 'sandboxes');
+      const plan = planD4EngineeringShakedown(stage, sandboxBase, selector);
+      const setupError = new Error('post-bridge setup failure');
+      mkdirFault.path = plan.paths.runtimeRoot;
+      mkdirFault.error = setupError;
+      try {
+        await expect(runD4EngineeringShakedown({
+          ...fixture,
+          repoRoot: process.cwd(),
+          gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+          contentByRef: fixture.contentByRef,
+          sandboxBase,
+          selector,
+          credentialSources: [],
+          quotaReader: async () => { throw new Error('quota reader must not run'); },
+          driverFactory: async () => { throw new Error('driver factory must not run'); },
+          prepareDecision: async () => { throw new Error('prepare decision must not run'); },
+          readTerminalArtifact: async () => { throw new Error('terminal reader must not run'); },
+          auditLedger: new D4SmokeCapabilityAuditLedger(),
+        })).rejects.toBe(setupError);
+      } finally {
+        mkdirFault.path = null;
+        mkdirFault.error = null;
+      }
+      await expect(access(plan.paths.claudeBridgeTempDir)).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
