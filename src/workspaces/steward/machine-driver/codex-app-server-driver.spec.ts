@@ -3,7 +3,11 @@ import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
 import type { Logger } from '../../logger.js';
-import { CodexAppServerDriver, SUPPORTED_CODEX_VERSION } from './codex-app-server-driver.js';
+import {
+  CodexAppServerDriver,
+  SUPPORTED_CODEX_VERSION,
+  resolveCodexAppServerEnvironment,
+} from './codex-app-server-driver.js';
 import { MachineDriverProtocolError, type DriverEvent, type JsonRpcId, type MachineTransport } from './types.js';
 
 // Real thread/turn ids lifted from fixtures/transcripts/single-turn.jsonl so the
@@ -213,6 +217,27 @@ function makeDriver(server: FakeCodexServer): CodexAppServerDriver {
 }
 
 describe('CodexAppServerDriver', () => {
+  it('keeps inheritance as the default-compatible policy and supports replacement envs', () => {
+    const parent = {
+      PATH: '/host/bin',
+      OPENALICE_D4_PARENT_SECRET: 'must-not-reach-launcher',
+    };
+    const configured = {
+      PATH: '/d4/bin',
+      HOME: '/d4/home',
+      CODEX_HOME: '/d4/codex',
+      TMPDIR: '/d4/tmp',
+    };
+
+    expect(resolveCodexAppServerEnvironment(configured, 'inherit', parent)).toEqual({
+      ...parent,
+      ...configured,
+    });
+    expect(resolveCodexAppServerEnvironment(configured, 'replace', parent)).toEqual(configured);
+    expect(resolveCodexAppServerEnvironment(configured, 'replace', parent))
+      .not.toHaveProperty('OPENALICE_D4_PARENT_SECRET');
+  });
+
   it('runs a turn to completion, capturing the agent message and telemetry', async () => {
     const server = new FakeCodexServer();
     respondHandshake(server, {

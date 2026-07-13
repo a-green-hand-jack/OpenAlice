@@ -90,6 +90,9 @@ const INTERRUPT_GRACE_MS = 2000;
 export interface CodexAppServerDriverOptions {
   readonly cwd: string;
   readonly env?: Record<string, string>;
+  /** `inherit` preserves the historical parent-env merge. Security-sensitive
+   * callers can select `replace` to launch from only the supplied environment. */
+  readonly envInheritance?: 'inherit' | 'replace';
   readonly codexBin?: string;
   readonly logger?: Logger;
   /** Test seam: override how the app-server child is created. Production leaves
@@ -99,6 +102,15 @@ export interface CodexAppServerDriverOptions {
    *  leaves this undefined and spawns `<codexBin> --version`, memoized per bin
    *  for the life of the process (see `probeCodexVersion`). */
   readonly versionProbe?: (bin: string) => Promise<string | null>;
+}
+
+export function resolveCodexAppServerEnvironment(
+  configured: Readonly<Record<string, string>> | undefined,
+  inheritance: 'inherit' | 'replace',
+  parent: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  if (inheritance === 'replace') return configured === undefined ? {} : { ...configured };
+  return configured === undefined ? parent : { ...parent, ...configured };
 }
 
 interface ThreadState {
@@ -413,7 +425,10 @@ export class CodexAppServerDriver implements StewardMachineDriver {
     const bin = this.options.codexBin ?? 'codex';
     const child = spawn(bin, ['app-server'], {
       cwd: this.options.cwd,
-      env: this.options.env ? { ...process.env, ...this.options.env } : process.env,
+      env: resolveCodexAppServerEnvironment(
+        this.options.env,
+        this.options.envInheritance ?? 'inherit',
+      ),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     if (!child.stdin || !child.stdout) {

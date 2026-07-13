@@ -64,6 +64,7 @@ const execFileAsync = promisify(execFile);
 type ProductionSeamKey = Extract<
   keyof D4SmokeFilesystemExecutionInput,
   | 'driverFactory'
+  | 'codexRuntime'
   | 'gitVerifier'
   | 'canonicalCredentialPaths'
   | 'quotaReader'
@@ -289,7 +290,12 @@ async function exerciseAuditIntegrity(
       driverFactory: async (binding) => ({
         driver: new FakeDriver(async ({ options }) => {
           if (mode === 'codex_shim') {
-            await execFileAsync('alice-uta', ['order', 'place'], {
+            await execFileAsync(plan.paths.runtimeCodexLauncher, [
+              '--d4-audit-canary',
+              '-C',
+              '.',
+              'push',
+            ], {
               cwd: binding.cwd,
               env: { ...binding.env },
             }).catch(() => undefined);
@@ -379,8 +385,12 @@ describe('D4 Smoke quota and planner', () => {
     expect(classifyD4SmokeShimAttempt('alice-uta', ['git', 'reject'])).toBe('stage');
     expect(classifyD4SmokeShimAttempt('alice-uta', ['git', 'push'])).toBe('auto_push');
     expect(classifyD4SmokeShimAttempt('git', ['push'])).toBe('auto_push');
+    expect(classifyD4SmokeShimAttempt('git', ['-C', '.', 'push'])).toBe('auto_push');
+    expect(classifyD4SmokeShimAttempt('/usr/bin/git', ['push'])).toBe('auto_push');
+    expect(classifyD4SmokeShimAttempt('git', ['--git-dir=.git', 'push'])).toBe('auto_push');
     expect(classifyD4SmokeShimAttempt('alice-uta', ['order', 'place', '--help'])).toBeNull();
     expect(classifyD4SmokeShimAttempt('git', ['push', '--help'])).toBeNull();
+    expect(classifyD4SmokeShimAttempt('git', ['-C', '.', 'push', '--version'])).toBeNull();
     expect(classifyD4SmokeShimAttempt('alice-uta', ['account', 'list'])).toBeNull();
     expect(classifyD4SmokeShimAttempt('alice-uta', ['git', 'status'])).toBeNull();
     expect(classifyD4SmokeShimAttempt('traderhub', ['board', 'get'])).toBeNull();
@@ -585,6 +595,55 @@ describe('D4 Smoke quota and planner', () => {
         },
       })).rejects.toThrow(/fixture quota failure/);
       for (const probeRoot of errorRoots) await expect(access(probeRoot)).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('pins the production Codex runtime before OAuth and gives that exact executable the credential', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-d4-preflight-runtime-'));
+    try {
+      const expectedVersion = '0.144.0';
+      const exact = await resolveD4CodexNativeRuntime(expectedVersion);
+      const mismatchedBin = join(root, 'mismatched-bin');
+      const codexCanonical = join(root, 'auth.json');
+      const claudeCanonical = join(root, '.credentials.json');
+      await mkdir(mismatchedBin, { recursive: true, mode: 0o700 });
+      await writeFile(
+        join(mismatchedBin, 'codex'),
+        '#!/bin/sh\nprintf "codex-cli 0.143.0\\n"\n',
+        { mode: 0o700 },
+      );
+      await writeFile(codexCanonical, subscriptionOAuthFixture('codex'), { mode: 0o600 });
+      await writeFile(claudeCanonical, subscriptionOAuthFixture('claude'), { mode: 0o600 });
+      const sequence: string[] = [];
+      const oauthExecutables: string[] = [];
+
+      const snapshot = await captureD4SmokeIsolatedPreflightQuota({
+        canonical: { codex: codexCanonical, claude: claudeCanonical },
+        expectedCodexRuntimeVersion: expectedVersion,
+        resolveCodexRuntime: async (version) => {
+          sequence.push('resolve-runtime');
+          return resolveD4CodexNativeRuntime(
+            version,
+            `${mismatchedBin}${delimiter}${dirname(exact.executable)}`,
+          );
+        },
+        readCodex: async (context, runtime) => {
+          sequence.push('codex-oauth');
+          await expect(access(join(context.env.CODEX_HOME!, 'auth.json'))).resolves.toBeUndefined();
+          oauthExecutables.push(runtime!.executable);
+          return codexLiveQuotaResponse();
+        },
+        readClaude: async () => {
+          sequence.push('claude-oauth');
+          return claudeLiveQuotaResponse();
+        },
+      });
+
+      expect(sequence).toEqual(['resolve-runtime', 'codex-oauth', 'claude-oauth']);
+      expect(oauthExecutables).toEqual([exact.executable]);
+      expect(snapshot.codexRuntime).toEqual(exact);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -800,8 +859,10 @@ describe('D4 Smoke quota and planner', () => {
         ['traderhub', ['board', 'get']],
         ['alice', ['market', 'search']],
         ['alice-uta', ['order', 'place', '--help']],
+        ['git', ['-C', '.', 'push', '--help']],
         ['alice-uta', ['order', 'place']],
         ['git', ['push']],
+        ['git', ['-C', '.', 'push']],
       ] as const) {
         await execFileAsync(command, [...args], { env: { ...plan.env } }).catch(() => undefined);
       }
@@ -809,6 +870,7 @@ describe('D4 Smoke quota and planner', () => {
       const lines = (await readFile(plan.paths.auditCallLedger, 'utf8')).trim().split('\n');
       expect(lines.map((line) => JSON.parse(line) as { capability: string })).toEqual([
         expect.objectContaining({ capability: 'uta_mutation' }),
+        expect.objectContaining({ capability: 'auto_push' }),
         expect.objectContaining({ capability: 'auto_push' }),
       ]);
     } finally {
@@ -819,6 +881,9 @@ describe('D4 Smoke quota and planner', () => {
 
   it('keeps Codex behind the outer filesystem and absolute-git audit boundary without a model call', async () => {
     const root = await mkdtemp(join(tmpdir(), 'openalice-d4-codex-isolation-'));
+    const sentinelName = 'OPENALICE_D4_PARENT_SECRET';
+    const previousSentinel = process.env[sentinelName];
+    process.env[sentinelName] = 'must-not-reach-candidate';
     try {
       const fixture = await createD4SmokeTestFixture();
       const stage = await validateD4SmokeStage({
@@ -842,7 +907,9 @@ describe('D4 Smoke quota and planner', () => {
         'process.exit(0)\n',
         { mode: 0o600 },
       );
-      await installD4SmokeAuditShims(plan.paths, plan.candidate);
+      const pinnedRuntime = await resolveD4CodexNativeRuntime(plan.candidate.runtimeVersion);
+      await installD4SmokeAuditShims(plan.paths, plan.candidate, pinnedRuntime);
+      expect(await readFile(plan.paths.runtimeCodexLauncher, 'utf8')).toContain(pinnedRuntime.root);
       await expect(writeFile(plan.paths.runtimeValidator, 'workspace overwrite')).rejects.toThrow();
       await expect(writeFile(plan.paths.runtimeAuditAppendHelper, 'workspace overwrite')).rejects.toThrow();
       await expect(writeFile(join(plan.paths.auditBin, 'git'), 'workspace overwrite')).rejects.toThrow();
@@ -860,7 +927,7 @@ describe('D4 Smoke quota and planner', () => {
 
       await expect(execFileAsync(
         plan.paths.runtimeCodexLauncher,
-        ['--d4-isolation-canary', selectedCredential, nonSelectedCanonical],
+        ['--d4-isolation-canary', selectedCredential, nonSelectedCanonical, sentinelName],
         { cwd: plan.paths.workspace, env: { ...plan.env } },
       )).resolves.toBeDefined();
       await expect(execFileAsync(
@@ -873,14 +940,22 @@ describe('D4 Smoke quota and planner', () => {
         ['--d4-audit-canary'],
         { cwd: plan.paths.workspace, env: { ...plan.env } },
       )).rejects.toMatchObject({ code: 126 });
+      await expect(execFileAsync(
+        plan.paths.runtimeCodexLauncher,
+        ['--d4-audit-canary', '-C', '.', 'push'],
+        { cwd: plan.paths.workspace, env: { ...plan.env } },
+      )).rejects.toMatchObject({ code: 126 });
 
       await expect(access(fakeGitMarker)).rejects.toThrow();
       await expect(access(fakeValidatorMarker)).rejects.toThrow();
       const auditLines = (await readFile(plan.paths.auditCallLedger, 'utf8')).trim().split('\n');
       expect(auditLines.map((line) => JSON.parse(line))).toEqual([
         expect.objectContaining({ capability: 'auto_push', detail: 'git:push' }),
+        expect.objectContaining({ capability: 'auto_push', detail: 'git:-C:.' }),
       ]);
     } finally {
+      if (previousSentinel === undefined) delete process.env[sentinelName];
+      else process.env[sentinelName] = previousSentinel;
       await execFileAsync('chmod', ['-R', 'u+w', root]).catch(() => undefined);
       await rm(root, { recursive: true, force: true });
     }
@@ -940,7 +1015,7 @@ describe('D4 Smoke single-execution runner', () => {
     const result = await exerciseAuditIntegrity('codex_shim');
     expect(result.error?.message).toMatch(/forbidden_capability_attempted/);
     expect(result.attempts).toEqual([
-      expect.objectContaining({ capability: 'uta_mutation' }),
+      expect.objectContaining({ capability: 'auto_push' }),
     ]);
   });
 
@@ -1297,6 +1372,14 @@ describe('D4 Smoke single-execution runner', () => {
         if (provider === 'codex') {
           expect(codexDriverOptions).toHaveLength(1);
           expect(claudeDriverOptions).toHaveLength(0);
+          expect(codexDriverOptions[0]).toMatchObject({
+            envInheritance: 'replace',
+            env: expect.objectContaining({
+              HOME: plan.paths.home,
+              CODEX_HOME: plan.paths.codexHome,
+              TMPDIR: plan.paths.tempRoot,
+            }),
+          });
         } else {
           expect(codexDriverOptions).toHaveLength(0);
           expect(claudeDriverOptions).toHaveLength(1);
@@ -1446,6 +1529,16 @@ describe('D4 Smoke single-execution runner', () => {
               { command: 'curl https://example.com' },
               { signal: new AbortController().signal, toolUseID: 'query-bash-out', requestId: 'query-bash-out' },
             )).resolves.toMatchObject({ behavior: 'deny' });
+            await expect(toolGuard(
+              'Bash',
+              { command: '/usr/bin/git push --help' },
+              { signal: new AbortController().signal, toolUseID: 'query-git-help', requestId: 'query-git-help' },
+            )).resolves.toMatchObject({ behavior: 'deny' });
+            await expect(toolGuard(
+              'Bash',
+              { command: '/usr/bin/git push' },
+              { signal: new AbortController().signal, toolUseID: 'query-git-push', requestId: 'query-git-push' },
+            )).resolves.toMatchObject({ behavior: 'deny' });
             for (const [command, args] of [
               ['alice', ['market', 'search']],
               ['traderhub', ['board', 'get']],
@@ -1457,7 +1550,7 @@ describe('D4 Smoke single-execution runner', () => {
               ['alice-uta', ['git', 'commit']],
               ['alice-uta', ['git', 'reject']],
               ['alice-uta', ['git', 'push']],
-              ['git', ['push']],
+              ['git', ['-C', '.', 'push']],
             ] as const) {
               await execFileAsync(command, [...args], {
                 cwd: queryOptions.cwd,
@@ -1501,14 +1594,15 @@ describe('D4 Smoke single-execution runner', () => {
       })).rejects.toThrow(/forbidden_capability_attempted/);
       expect(claudeQueryCount).toBe(1);
       expect(auditLedger.snapshot()).toEqual([
-        expect.objectContaining({ sequence: 1, capability: 'uta_mutation' }),
+        expect.objectContaining({ sequence: 1, capability: 'auto_push' }),
         expect.objectContaining({ sequence: 2, capability: 'uta_mutation' }),
         expect.objectContaining({ sequence: 3, capability: 'uta_mutation' }),
         expect.objectContaining({ sequence: 4, capability: 'uta_mutation' }),
-        expect.objectContaining({ sequence: 5, capability: 'stage' }),
+        expect.objectContaining({ sequence: 5, capability: 'uta_mutation' }),
         expect.objectContaining({ sequence: 6, capability: 'stage' }),
-        expect.objectContaining({ sequence: 7, capability: 'auto_push' }),
+        expect.objectContaining({ sequence: 7, capability: 'stage' }),
         expect.objectContaining({ sequence: 8, capability: 'auto_push' }),
+        expect.objectContaining({ sequence: 9, capability: 'auto_push' }),
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });

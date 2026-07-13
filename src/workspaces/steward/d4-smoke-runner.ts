@@ -409,23 +409,55 @@ export interface D4SmokePreflightQuotaSnapshot {
   readonly capturedAt: Date;
   readonly codexRaw: unknown;
   readonly claudeRaw: unknown;
+  readonly codexRuntime: D4SmokeCodexNativeRuntime | null;
 }
 
 export type D4SmokeNativeQuotaProbe = (
   context: D4SmokeNativeQuotaControlContext,
 ) => Promise<unknown>;
 
+export type D4SmokeCodexQuotaProbe = (
+  context: D4SmokeNativeQuotaControlContext,
+  runtime: D4SmokeCodexNativeRuntime | null,
+) => Promise<unknown>;
+
 export async function captureD4SmokeIsolatedPreflightQuota(input: {
   readonly canonical: D4SmokeCanonicalCredentialPaths;
-  readonly readCodex?: D4SmokeNativeQuotaProbe;
+  readonly expectedCodexRuntimeVersion?: string;
+  readonly resolveCodexRuntime?: (expectedVersion: string) => Promise<D4SmokeCodexNativeRuntime>;
+  readonly readCodex?: D4SmokeCodexQuotaProbe;
   readonly readClaude?: D4SmokeNativeQuotaProbe;
   readonly now?: () => Date;
 }): Promise<D4SmokePreflightQuotaSnapshot> {
+  const codexRuntime = input.expectedCodexRuntimeVersion === undefined
+    ? null
+    : await (input.resolveCodexRuntime ?? resolveD4CodexNativeRuntime)(
+        input.expectedCodexRuntimeVersion,
+      );
+  if (codexRuntime !== null) {
+    await assertD4CodexNativeRuntimeIdentity(codexRuntime, input.expectedCodexRuntimeVersion!);
+  } else if (input.readCodex === undefined) {
+    throw new D4SmokePolicyError(
+      'model_binding_invalid',
+      'Codex quota preflight requires the frozen native runtime',
+    );
+  }
   const codexRaw = await withD4SmokeEphemeralQuotaCredential(
     'codex',
     input.canonical.codex,
-    input.readCodex ?? ((context) =>
-      readNativeCodexQuota('account/rateLimits/read', null, context)),
+    async (context) => {
+      if (codexRuntime !== null) {
+        await assertD4CodexNativeRuntimeIdentity(codexRuntime, codexRuntime.version);
+      }
+      return input.readCodex !== undefined
+        ? input.readCodex(context, codexRuntime)
+        : readNativeCodexQuota(
+            codexRuntime!.executable,
+            'account/rateLimits/read',
+            null,
+            context,
+          );
+    },
   );
   const claudeRaw = await withD4SmokeEphemeralQuotaCredential(
     'claude',
@@ -437,6 +469,7 @@ export async function captureD4SmokeIsolatedPreflightQuota(input: {
     capturedAt: (input.now ?? (() => new Date()))(),
     codexRaw,
     claudeRaw,
+    codexRuntime,
   };
 }
 
@@ -457,11 +490,27 @@ function createD4SmokeNativeExecutionQuotaReader(
     }
     const captured = new Date();
     const context = { cwd: plan.paths.workspace, env: plan.env };
-    const liveUsed = plan.candidate.provider === 'codex'
-      ? readD4SmokeCodexQuotaWindows(
-          await readNativeCodexQuota('account/rateLimits/read', null, context),
-        )
-      : readD4SmokeClaudeQuotaWindows(await readNativeClaudeQuota(context));
+    let liveUsed: Readonly<Record<string, number>>;
+    if (plan.candidate.provider === 'codex') {
+      if (snapshot.codexRuntime === null) {
+        throw new D4SmokePolicyError(
+          'model_binding_invalid',
+          'Codex dispatch quota reader is missing the preflight runtime attestation',
+        );
+      }
+      await assertD4CodexNativeRuntimeIdentity(
+        snapshot.codexRuntime,
+        plan.candidate.runtimeVersion,
+      );
+      liveUsed = readD4SmokeCodexQuotaWindows(await readNativeCodexQuota(
+        snapshot.codexRuntime.executable,
+        'account/rateLimits/read',
+        null,
+        context,
+      ));
+    } else {
+      liveUsed = readD4SmokeClaudeQuotaWindows(await readNativeClaudeQuota(context));
+    }
     return buildD4SmokeQuotaEvidenceFromUsed({
       phase,
       plan,
@@ -475,11 +524,12 @@ function createD4SmokeNativeExecutionQuotaReader(
 }
 
 async function readNativeCodexQuota(
+  executable: string,
   method: 'account/rateLimits/read',
   params: null,
   control: D4SmokeNativeQuotaControlContext,
 ): Promise<unknown> {
-  const child = spawn('codex', ['app-server'], {
+  const child = spawn(executable, ['app-server'], {
     cwd: control.cwd,
     env: { ...control.env },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -1198,6 +1248,7 @@ export function createD4SmokeNativeDriverFactory(
       driver = makeCodexDriver({
         cwd: binding.cwd,
         env: { ...binding.env },
+        envInheritance: 'replace',
         codexBin: binary,
       });
     } else {
@@ -1211,7 +1262,7 @@ export function createD4SmokeNativeDriverFactory(
         strictMcpConfig: true,
         tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
         skills: [],
-        canUseTool: createD4ClaudeToolGuard(binding.cwd),
+        canUseTool: createD4ClaudeToolGuard(binding),
         systemPrompt: {
           type: 'preset',
           preset: 'claude_code',
@@ -1255,25 +1306,30 @@ export function createD4SmokeNativeDriverFactory(
   };
 }
 
-function createD4ClaudeToolGuard(cwd: string): NonNullable<ClaudeAgentSdkDriverOptions['canUseTool']> {
+function createD4ClaudeToolGuard(binding: D4SmokeDriverBinding): NonNullable<ClaudeAgentSdkDriverOptions['canUseTool']> {
   return async (toolName, input) => {
     if (toolName === 'Write' || toolName === 'Edit') {
       const rawPath = input['file_path'];
-      if (typeof rawPath === 'string' && await isD4WorkspacePath(cwd, rawPath)) {
+      if (typeof rawPath === 'string' && await isD4WorkspacePath(binding.cwd, rawPath)) {
         return { behavior: 'allow', updatedInput: input };
       }
       return { behavior: 'deny', message: `${toolName} is restricted to the D4 workspace` };
     }
     if (toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep') {
       const rawPath = input['file_path'] ?? input['path'] ?? '.';
-      if (typeof rawPath === 'string' && await isD4WorkspacePath(cwd, rawPath)) {
+      if (typeof rawPath === 'string' && await isD4WorkspacePath(binding.cwd, rawPath)) {
         return { behavior: 'allow', updatedInput: input };
       }
       return { behavior: 'deny', message: `${toolName} is restricted to the D4 workspace` };
     }
     if (toolName === 'Bash') {
       const command = input['command'];
-      if (typeof command === 'string' && isD4AllowedBashCommand(cwd, command)) {
+      const parsed = typeof command === 'string' ? parseD4ShimShellCommand(command) : null;
+      if (parsed !== null && classifyD4SmokeShimAttempt(parsed.command, parsed.args) !== null) {
+        await recordD4ClaudeGuardAttempt(binding, parsed);
+        return { behavior: 'deny', message: 'Bash command attempted a forbidden D4 capability' };
+      }
+      if (typeof command === 'string' && isD4AllowedBashCommand(command)) {
         return { behavior: 'allow', updatedInput: input };
       }
       return { behavior: 'deny', message: 'Bash command is outside the D4 command policy' };
@@ -1282,10 +1338,57 @@ function createD4ClaudeToolGuard(cwd: string): NonNullable<ClaudeAgentSdkDriverO
   };
 }
 
-function isD4AllowedBashCommand(_cwd: string, command: string): boolean {
+function isD4AllowedBashCommand(command: string): boolean {
   const normalized = command.trim();
   if (/^node \.\.\/runtime\/validate-ledger\.mjs [A-Za-z0-9:._%+-]+$/.test(normalized)) return true;
-  return /^(?:alice|alice-uta|traderhub|git)(?: [A-Za-z0-9_./:=@%+,-]+)*$/.test(normalized);
+  const parsed = parseD4ShimShellCommand(normalized);
+  return parsed !== null && !normalized.startsWith('/usr/bin/');
+}
+
+interface D4SmokeParsedShimCommand {
+  readonly command: 'alice' | 'alice-uta' | 'traderhub' | 'git';
+  readonly args: readonly string[];
+}
+
+function parseD4ShimShellCommand(command: string): D4SmokeParsedShimCommand | null {
+  const normalized = command.trim();
+  if (!/^[A-Za-z0-9_./:=@%+,-]+(?: [A-Za-z0-9_./:=@%+,-]+)*$/.test(normalized)) return null;
+  const [rawCommand, ...args] = normalized.split(' ');
+  const shimCommand = rawCommand === '/usr/bin/git' ? 'git' : rawCommand;
+  if (!['alice', 'alice-uta', 'traderhub', 'git'].includes(shimCommand)) return null;
+  return {
+    command: shimCommand as D4SmokeParsedShimCommand['command'],
+    args,
+  };
+}
+
+async function recordD4ClaudeGuardAttempt(
+  binding: D4SmokeDriverBinding,
+  parsed: D4SmokeParsedShimCommand,
+): Promise<void> {
+  const shim = resolve(binding.cwd, '..', 'runtime', 'bin', parsed.command);
+  try {
+    await execFileAsync(shim, [...parsed.args], {
+      cwd: binding.cwd,
+      env: { ...binding.env },
+      timeout: 5_000,
+      maxBuffer: 64 * 1024,
+    });
+  } catch (error) {
+    const code = typeof error === 'object' && error !== null
+      ? (error as { code?: string | number }).code
+      : undefined;
+    if (code === 126 || code === '126') return;
+    throw new D4SmokePolicyError(
+      'terminal_artifact_invalid',
+      'Claude authorization boundary could not record a forbidden command',
+      { cause: error },
+    );
+  }
+  throw new D4SmokePolicyError(
+    'terminal_artifact_invalid',
+    'Claude authorization boundary unexpectedly allowed a forbidden command',
+  );
 }
 
 async function isD4WorkspacePath(cwd: string, candidate: string): Promise<boolean> {
@@ -1667,6 +1770,9 @@ export interface D4SmokeExecutionInput {
   readonly canonicalCredentialPaths?: D4SmokeCanonicalCredentialPaths;
   readonly quotaReader: D4SmokeQuotaReader;
   readonly driverFactory: D4SmokeDriverFactory;
+  /** Production pins this before any OAuth copy; direct test harnesses may
+   * omit it and resolve the frozen runtime during audit installation. */
+  readonly codexRuntime?: D4SmokeCodexNativeRuntime;
   readonly bootstrapWorkspace?: D4SmokeBootstrapWorkspace;
   readonly prepareDecision: D4SmokePrepareDecision;
   readonly readTerminalArtifact: D4SmokeReadTerminalArtifact;
@@ -1697,12 +1803,28 @@ const D4_SMOKE_PRODUCTION_SEAMS = [
   'claudeControl',
   'forecastBounds',
   'driverFactory',
+  'codexRuntime',
   'bootstrapWorkspace',
   'prepareDecision',
   'readTerminalArtifact',
   'auditLedger',
   'now',
 ] as const;
+
+function frozenD4SmokeCodexRuntimeVersion(): string {
+  const versions = new Set(
+    D4_SMOKE_CANDIDATES
+      .filter((candidate) => candidate.provider === 'codex')
+      .map((candidate) => candidate.runtimeVersion),
+  );
+  if (versions.size !== 1) {
+    throw new D4SmokePolicyError(
+      'model_binding_invalid',
+      `D4 Codex matrix must freeze one runtime version, found ${[...versions].join(',')}`,
+    );
+  }
+  return [...versions][0]!;
+}
 
 /** Watchdog-facing, single-execution production entrypoint. */
 export async function runD4SmokeFilesystemExecution(
@@ -1731,7 +1853,13 @@ export async function runD4SmokeFilesystemExecution(
   }
   const forecastBounds = deriveD4SmokeQuotaForecastBounds({ stage, contentByRef: input.contentByRef });
   const canonical = defaultD4SmokeCanonicalCredentialPaths();
-  const preflightQuota = await captureD4SmokeIsolatedPreflightQuota({ canonical });
+  const preflightQuota = await captureD4SmokeIsolatedPreflightQuota({
+    canonical,
+    expectedCodexRuntimeVersion: frozenD4SmokeCodexRuntimeVersion(),
+  });
+  if (preflightQuota.codexRuntime === null) {
+    throw new D4SmokePolicyError('model_binding_invalid', 'production preflight did not pin Codex');
+  }
   const adapter = createD4SmokeFilesystemWorkspaceAdapter(input.filesystemAdapterOptions);
   return runD4SmokeExecution({
     manifestBytes: input.manifestBytes,
@@ -1747,6 +1875,7 @@ export async function runD4SmokeFilesystemExecution(
     canonicalCredentialPaths: canonical,
     quotaReader: createD4SmokeNativeExecutionQuotaReader(preflightQuota, forecastBounds),
     driverFactory: createD4SmokeNativeDriverFactory(),
+    codexRuntime: preflightQuota.codexRuntime,
     bootstrapWorkspace: adapter.bootstrapWorkspace,
     prepareDecision: adapter.prepareDecision,
     readTerminalArtifact: adapter.readTerminalArtifact,
@@ -1809,7 +1938,11 @@ export async function runD4SmokeExecution(input: D4SmokeExecutionInput): Promise
       runtimePolicyBytes,
       forbiddenBoundaries,
     });
-    auditCursor = await installD4SmokeAuditShims(plan.paths, plan.candidate);
+    auditCursor = await installD4SmokeAuditShims(
+      plan.paths,
+      plan.candidate,
+      input.codexRuntime,
+    );
     if (plan.candidate.provider === 'codex') {
       await verifyD4CodexOuterIsolation(plan, canonicalPaths.claude);
     }
@@ -2178,8 +2311,8 @@ async function createFreshSandbox(paths: D4SmokeSandboxPaths): Promise<void> {
   await mkdir(paths.runtimeRoot, { recursive: false, mode: 0o700 });
 }
 
-const D4_SMOKE_SHIM_RULES: readonly {
-  readonly command: 'alice-uta' | 'git';
+const D4_SMOKE_POSITIONAL_SHIM_RULES: readonly {
+  readonly command: 'alice-uta';
   readonly prefix: readonly string[];
   readonly capability: D4SmokeForbiddenCapability;
 }[] = [
@@ -2190,18 +2323,64 @@ const D4_SMOKE_SHIM_RULES: readonly {
   { command: 'alice-uta', prefix: ['git', 'commit'], capability: 'stage' },
   { command: 'alice-uta', prefix: ['git', 'reject'], capability: 'stage' },
   { command: 'alice-uta', prefix: ['git', 'push'], capability: 'auto_push' },
-  { command: 'git', prefix: ['push'], capability: 'auto_push' },
 ];
 const D4_SMOKE_INSPECTION_FLAGS = ['--help', '-h', '--version'] as const;
+const D4_SMOKE_GIT_GLOBAL_OPTIONS_WITH_VALUE = [
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--namespace',
+  '--super-prefix',
+  '--config-env',
+  '--exec-path',
+] as const;
+const D4_SMOKE_GIT_GLOBAL_OPTIONS_WITHOUT_VALUE = [
+  '-p',
+  '-P',
+  '--paginate',
+  '--no-pager',
+  '--bare',
+  '--no-replace-objects',
+  '--literal-pathspecs',
+  '--glob-pathspecs',
+  '--noglob-pathspecs',
+  '--icase-pathspecs',
+  '--no-optional-locks',
+  '--no-lazy-fetch',
+] as const;
 
 export function classifyD4SmokeShimAttempt(
   command: string,
   args: readonly string[],
 ): D4SmokeForbiddenCapability | null {
   if (args.some((arg) => D4_SMOKE_INSPECTION_FLAGS.some((flag) => flag === arg))) return null;
-  return D4_SMOKE_SHIM_RULES.find((rule) =>
-    rule.command === command
+  const normalizedCommand = command === '/usr/bin/git' ? 'git' : command;
+  if (normalizedCommand === 'git') {
+    return d4SmokeGitSubcommand(args) === 'push' ? 'auto_push' : null;
+  }
+  return D4_SMOKE_POSITIONAL_SHIM_RULES.find((rule) =>
+    rule.command === normalizedCommand
     && rule.prefix.every((token, index) => args[index] === token))?.capability ?? null;
+}
+
+function d4SmokeGitSubcommand(args: readonly string[]): string | null {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (D4_SMOKE_GIT_GLOBAL_OPTIONS_WITHOUT_VALUE.some((option) => option === arg)) continue;
+    if (D4_SMOKE_GIT_GLOBAL_OPTIONS_WITH_VALUE.some((option) => option === arg)) {
+      if (args[index + 1] === undefined) return null;
+      index += 1;
+      continue;
+    }
+    if (D4_SMOKE_GIT_GLOBAL_OPTIONS_WITH_VALUE.some((option) => arg.startsWith(`${option}=`))) {
+      continue;
+    }
+    if ((arg.startsWith('-C') || arg.startsWith('-c')) && arg.length > 2) continue;
+    if (arg.startsWith('-') || arg === '--') return null;
+    return arg;
+  }
+  return null;
 }
 
 interface D4SmokeAuditCursor {
@@ -2217,6 +2396,7 @@ interface D4SmokeAuditCursor {
 export async function installD4SmokeAuditShims(
   paths: D4SmokeSandboxPaths,
   candidate: D4SmokeCandidate,
+  pinnedCodexRuntime?: D4SmokeCodexNativeRuntime,
 ): Promise<D4SmokeAuditCursor> {
   if (!await pathExists(paths.workspace)) {
     throw new D4SmokePolicyError('terminal_artifact_invalid', 'workspace must exist before audit installation');
@@ -2285,13 +2465,32 @@ export function appendAuditAttempt(entry) {
 import { appendAuditAttempt } from ${JSON.stringify(appendHelperUrl)}
 const command = ${JSON.stringify(command)}
 const args = process.argv.slice(2)
-const rules = ${JSON.stringify(D4_SMOKE_SHIM_RULES)}
+const positionalRules = ${JSON.stringify(D4_SMOKE_POSITIONAL_SHIM_RULES)}
 const inspectionFlags = ${JSON.stringify(D4_SMOKE_INSPECTION_FLAGS)}
+const gitOptionsWithValue = ${JSON.stringify(D4_SMOKE_GIT_GLOBAL_OPTIONS_WITH_VALUE)}
+const gitOptionsWithoutValue = ${JSON.stringify(D4_SMOKE_GIT_GLOBAL_OPTIONS_WITHOUT_VALUE)}
+function gitSubcommand(values) {
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index]
+    if (gitOptionsWithoutValue.includes(value)) continue
+    if (gitOptionsWithValue.includes(value)) {
+      if (values[index + 1] === undefined) return undefined
+      index += 1
+      continue
+    }
+    if (gitOptionsWithValue.some((option) => value.startsWith(option + '='))) continue
+    if ((value.startsWith('-C') || value.startsWith('-c')) && value.length > 2) continue
+    if (value.startsWith('-') || value === '--') return undefined
+    return value
+  }
+}
 const capability = args.some((arg) => inspectionFlags.includes(arg))
   ? undefined
-  : rules.find((rule) =>
-    rule.command === command && rule.prefix.every((token, index) => args[index] === token)
-  )?.capability
+  : command === 'git'
+    ? gitSubcommand(args) === 'push' ? 'auto_push' : undefined
+    : positionalRules.find((rule) =>
+      rule.command === command && rule.prefix.every((token, index) => args[index] === token)
+    )?.capability
 if (capability !== undefined) {
   const entry = {
     schema: ${JSON.stringify(D4_SMOKE_AUDIT_SCHEMA)},
@@ -2320,7 +2519,10 @@ process.exit(126)
     );
   }
   if (candidate.provider === 'codex') {
-    await installD4CodexOuterIsolationRuntime(paths, candidate.runtimeVersion);
+    const runtime = pinnedCodexRuntime
+      ?? await resolveD4CodexNativeRuntime(candidate.runtimeVersion);
+    await assertD4CodexNativeRuntimeIdentity(runtime, candidate.runtimeVersion);
+    await installD4CodexOuterIsolationRuntime(paths, runtime);
   }
   await chmod(paths.auditBin, 0o500);
   await chmod(paths.runtimeRoot, 0o500);
@@ -2329,10 +2531,9 @@ process.exit(126)
 
 async function installD4CodexOuterIsolationRuntime(
   paths: D4SmokeSandboxPaths,
-  expectedVersion: string,
+  codex: D4SmokeCodexNativeRuntime,
 ): Promise<void> {
   const bwrap = await resolveD4HostExecutable('bwrap');
-  const codex = await resolveD4CodexNativeRuntime(expectedVersion);
   const node = await resolveD4HostExecutable('node');
   const env = await resolveD4HostExecutable('env');
   const bash = await resolveD4HostExecutable('bash');
@@ -2340,11 +2541,24 @@ async function installD4CodexOuterIsolationRuntime(
   const runtimeLibraries = await resolveD4RuntimeLibraries([node, env, bash, sh]);
   const canary = `import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-const [runtimeValidator, selectedCredential, forbidden] = process.argv.slice(2)
+const [runtimeValidator, selectedCredential, forbidden, forbiddenEnv] = process.argv.slice(2)
 const runtime = spawnSync('/opt/openalice/codex-runtime/bin/codex', ['--version'], { stdio: 'ignore' })
 if (runtime.error || runtime.status !== 0) {
   console.error('D4_OUTER_ISOLATION_RUNTIME_UNREACHABLE')
   process.exit(96)
+}
+if (forbiddenEnv && process.env[forbiddenEnv] !== undefined) {
+  console.error('D4_OUTER_ISOLATION_FORBIDDEN_ENV_REACHABLE')
+  process.exit(95)
+}
+if (
+  process.env.HOME !== ${JSON.stringify(paths.home)}
+  || process.env.CODEX_HOME !== ${JSON.stringify(paths.codexHome)}
+  || process.env.TMPDIR !== ${JSON.stringify(paths.tempRoot)}
+  || !(process.env.PATH ?? '').split(${JSON.stringify(delimiter)}).includes(${JSON.stringify(paths.auditBin)})
+) {
+  console.error('D4_OUTER_ISOLATION_REQUIRED_ENV_MISSING')
+  process.exit(94)
 }
 readFileSync(runtimeValidator)
 readFileSync(selectedCredential)
@@ -2418,9 +2632,9 @@ const command = mode === '--d4-isolation-canary'
     ? '/usr/bin/git'
     : '/opt/openalice/codex-runtime/bin/codex'
 const commandArgs = mode === '--d4-isolation-canary'
-  ? [${JSON.stringify(paths.runtimeIsolationCanary)}, ${JSON.stringify(paths.runtimeValidator)}, args[1], args[2]]
+  ? [${JSON.stringify(paths.runtimeIsolationCanary)}, ${JSON.stringify(paths.runtimeValidator)}, args[1], args[2], ...(args[3] === undefined ? [] : [args[3]])]
   : mode === '--d4-audit-canary'
-    ? ['push']
+    ? args.length > 1 ? args.slice(1) : ['push']
     : args
 const result = spawnSync(bwrap, [...baseArgs, '--', command, ...commandArgs], {
   env: process.env,
@@ -2503,6 +2717,13 @@ export interface D4SmokeCodexNativeRuntime {
   readonly root: string;
   readonly executable: string;
   readonly version: string;
+  readonly identity: {
+    readonly dev: bigint;
+    readonly ino: bigint;
+    readonly size: bigint;
+    readonly mtimeNs: bigint;
+    readonly ctimeNs: bigint;
+  };
 }
 
 interface D4SmokeCodexPlatformTarget {
@@ -2562,10 +2783,18 @@ export async function resolveD4CodexNativeRuntime(
     if (nativeVersion !== expectedVersion) continue;
     const root = dirname(dirname(nativeExecutable));
     if (!await isD4CodexRuntimeTree(root, nativeExecutable)) continue;
+    const identity = await lstat(nativeExecutable, { bigint: true });
     return {
       root,
       executable: nativeExecutable,
       version: nativeVersion,
+      identity: {
+        dev: identity.dev,
+        ino: identity.ino,
+        size: identity.size,
+        mtimeNs: identity.mtimeNs,
+        ctimeNs: identity.ctimeNs,
+      },
     };
   }
 
@@ -2574,6 +2803,41 @@ export async function resolveD4CodexNativeRuntime(
     'sandbox_not_fresh',
     `D4 outer isolation requires native Codex ${expectedVersion}; discovered versions: ${discovered}`,
   );
+}
+
+async function assertD4CodexNativeRuntimeIdentity(
+  runtime: D4SmokeCodexNativeRuntime,
+  expectedVersion: string,
+): Promise<void> {
+  let executable: string;
+  let metadata: Awaited<ReturnType<typeof lstat>>;
+  try {
+    executable = await realpath(runtime.executable);
+    metadata = await lstat(runtime.executable, { bigint: true });
+  } catch (error) {
+    throw new D4SmokePolicyError(
+      'model_binding_invalid',
+      'pinned Codex runtime disappeared',
+      { cause: error },
+    );
+  }
+  if (
+    runtime.version !== expectedVersion
+    || executable !== runtime.executable
+    || !metadata.isFile()
+    || metadata.isSymbolicLink()
+    || metadata.dev !== runtime.identity.dev
+    || metadata.ino !== runtime.identity.ino
+    || metadata.size !== runtime.identity.size
+    || metadata.mtimeNs !== runtime.identity.mtimeNs
+    || metadata.ctimeNs !== runtime.identity.ctimeNs
+    || !await isD4CodexRuntimeTree(runtime.root, runtime.executable)
+  ) {
+    throw new D4SmokePolicyError(
+      'model_binding_invalid',
+      `pinned Codex runtime identity diverged from ${expectedVersion}`,
+    );
+  }
 }
 
 function d4CodexPlatformTarget(): D4SmokeCodexPlatformTarget {

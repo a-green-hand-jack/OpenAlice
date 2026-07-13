@@ -129,15 +129,20 @@ state, or ownership.
   explicit repo-local runtime dependency closure, D3 dataset identity,
   provider-specific raw quota observations (including exact calibration turns,
   display resolution, and per-window future-turn counts), and model matrix.
-  `d4-smoke-runner.ts` reads both subscription controls sequentially through
+  `d4-smoke-runner.ts` first resolves and attests the frozen native Codex
+  runtime, then reads both subscription controls sequentially through
   one-provider ephemeral credential roots that are source-checked and removed
-  before candidate setup; each dispatch then rechecks only the selected provider
-  through that execution's selected OAuth copy. The bootstrap moves the ledger
+  before candidate setup. Codex preflight, dispatch quota reads, and the candidate
+  launcher retain that same executable identity; each dispatch rechecks only the
+  selected provider through that execution's selected OAuth copy. The bootstrap
+  moves the ledger
   validator, command shims, and audit append helper into a host runtime outside
   the workspace that is non-writable while the candidate runs. Codex runs inside
-  a fail-closed bubblewrap filesystem with a curated executable/library set and
-  `/usr/bin/git` overlaid by the audit shim; Claude uses the fail-closed SDK
-  sandbox and reports audit append failures as command events. The runner also
+  a fail-closed bubblewrap filesystem with a replacement-only environment,
+  curated executable/library set, and `/usr/bin/git` overlaid by the audit shim;
+  Claude uses the fail-closed SDK sandbox. Structured forbidden Git attempts are
+  recorded at both the Claude authorization guard and CLI/absolute wrapper
+  boundaries, and audit append failures surface as command events. The runner also
   owns deterministic wakes, exact model attestation, proposal-only audit checks,
   and terminal report validation. This is corruption-evident inside one
   agent-writable trust domain, not tamper-proof account truth; UTA and the venue
