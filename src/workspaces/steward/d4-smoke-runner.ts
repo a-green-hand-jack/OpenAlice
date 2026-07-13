@@ -95,6 +95,14 @@ export const D4_SMOKE_FICTIONAL_DEADLINE_OFFSET_MS = 60_000 as const;
 
 const execFileAsync = promisify(execFile);
 
+// Linux's sockaddr_un permits at most 107 bytes of pathname payload. Claude
+// creates bridge sockets below CLAUDE_CODE_TMPDIR, so reserve space for its
+// per-user directory and socket names rather than letting a long D4 root make
+// required sandbox initialization fail.
+const D4_CLAUDE_BRIDGE_SOCKET_PATH_MAX_BYTES = 107;
+const D4_CLAUDE_BRIDGE_SOCKET_SUFFIX_RESERVE_BYTES = 64;
+const D4_CLAUDE_BRIDGE_TMP_PREFIX = 'openalice-d4-bridge-';
+
 export const D4_SMOKE_CLAUDE_SETTINGS: Exclude<
   ClaudeAgentSdkDriverOptions['settings'],
   string | undefined
@@ -932,6 +940,8 @@ export interface D4SmokeSandboxPaths {
   readonly cacheRoot: string;
   readonly trustRoot: string;
   readonly tempRoot: string;
+  /** Private host-side Claude bridge directory; it is not a candidate write root. */
+  readonly claudeBridgeTempDir: string;
   readonly runtimeRoot: string;
   readonly runtimeValidator: string;
   readonly runtimeAuditAppendHelper: string;
@@ -982,7 +992,7 @@ export function planD4SmokeExecutions(
           cell,
           repetitionId: repetitionId as 'r1',
           paths,
-          env: sandboxEnv(paths),
+          env: sandboxEnv(paths, candidate.provider),
         });
         ordinal += 1;
       }
@@ -1046,7 +1056,7 @@ export function validateD4SmokeExecutionPlan(
       }
       writableRoots.add(canonicalPath);
     }
-    if (JSON.stringify(plan.env) !== JSON.stringify(sandboxEnv(expectedPaths))) {
+    if (JSON.stringify(plan.env) !== JSON.stringify(sandboxEnv(expectedPaths, plan.candidate.provider))) {
       throw new D4SmokePlanError('shared_writable_root', `${plan.executionId}: sandbox environment drift`);
     }
   }
@@ -1958,15 +1968,17 @@ export async function runD4SmokeExecution(input: D4SmokeExecutionInput): Promise
     now: now(),
   });
 
-  await createFreshSandbox(plan.paths);
+  await createFreshSandbox(plan.paths, plan.candidate.provider);
   let auditCursor: D4SmokeAuditCursor | null = null;
   const source = selectCredentialSource(plan.candidate.provider, input.credentialSources);
   const canonicalPaths = input.canonicalCredentialPaths ?? defaultD4SmokeCanonicalCredentialPaths();
-  const credential = await copyCredentialIntoSandbox(
-    plan,
-    source,
-    canonicalPaths,
-  );
+  let credential: CredentialGuard;
+  try {
+    credential = await copyCredentialIntoSandbox(plan, source, canonicalPaths);
+  } catch (error) {
+    await releaseD4ClaudeBridgeTemp(plan.paths, plan.candidate.provider).catch(() => undefined);
+    throw error;
+  }
 
   let driver: StewardMachineDriver | null = null;
   const reports: StewardWakeEvaluationReport[] = [];
@@ -2176,6 +2188,11 @@ export async function runD4SmokeExecution(input: D4SmokeExecutionInput): Promise
     }
     if (candidateStopped) {
       try {
+        await releaseD4ClaudeBridgeTemp(plan.paths, plan.candidate.provider);
+      } catch (error) {
+        cleanupError ??= error;
+      }
+      try {
         await releaseD4SmokeRuntimeForHost(plan.paths);
       } catch (error) {
         cleanupError ??= error;
@@ -2293,6 +2310,7 @@ function sandboxPaths(rootInput: string): D4SmokeSandboxPaths {
     cacheRoot: join(root, 'cache'),
     trustRoot: join(root, 'trust'),
     tempRoot: join(root, 'tmp'),
+    claudeBridgeTempDir: d4ClaudeBridgeTempDir(root),
     runtimeRoot: join(root, 'runtime'),
     runtimeValidator: join(root, 'runtime', 'validate-ledger.mjs'),
     runtimeAuditAppendHelper: join(root, 'runtime', 'append-audit.mjs'),
@@ -2304,7 +2322,24 @@ function sandboxPaths(rootInput: string): D4SmokeSandboxPaths {
   };
 }
 
-function sandboxEnv(paths: D4SmokeSandboxPaths): Readonly<Record<string, string>> {
+function d4ClaudeBridgeTempDir(root: string): string {
+  const digest = createHash('sha256').update(root).digest('hex').slice(0, 16);
+  return join(resolve(tmpdir()), `${D4_CLAUDE_BRIDGE_TMP_PREFIX}${digest}`);
+}
+
+function assertD4ClaudeBridgeTempDirFits(directory: string): void {
+  if (
+    Buffer.byteLength(directory) + D4_CLAUDE_BRIDGE_SOCKET_SUFFIX_RESERVE_BYTES
+    > D4_CLAUDE_BRIDGE_SOCKET_PATH_MAX_BYTES
+  ) {
+    throw new D4SmokePlanError('shared_writable_root', 'Claude bridge temp directory exceeds Unix socket budget');
+  }
+}
+
+function sandboxEnv(
+  paths: D4SmokeSandboxPaths,
+  provider: D4SmokeCandidate['provider'],
+): Readonly<Record<string, string>> {
   const env: Record<string, string> = {
     HOME: paths.home,
     OPENALICE_HOME: paths.openAliceHome,
@@ -2321,6 +2356,10 @@ function sandboxEnv(paths: D4SmokeSandboxPaths): Readonly<Record<string, string>
     TEMP: paths.tempRoot,
     NODE_OPTIONS: `--localstorage-file=${paths.localStorageFile}`,
   };
+  if (provider === 'claude') {
+    assertD4ClaudeBridgeTempDirFits(paths.claudeBridgeTempDir);
+    env.CLAUDE_CODE_TMPDIR = paths.claudeBridgeTempDir;
+  }
   for (const key of ['LANG', 'LC_ALL', 'TERM']) {
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
@@ -2350,21 +2389,45 @@ function writablePaths(paths: D4SmokeSandboxPaths): readonly string[] {
   ];
 }
 
-async function createFreshSandbox(paths: D4SmokeSandboxPaths): Promise<void> {
+async function createFreshSandbox(
+  paths: D4SmokeSandboxPaths,
+  provider: D4SmokeCandidate['provider'],
+): Promise<void> {
   await mkdir(resolve(paths.root, '..'), { recursive: true });
   try {
     await mkdir(paths.root, { recursive: false, mode: 0o700 });
   } catch (error) {
     throw new D4SmokePolicyError('sandbox_not_fresh', paths.root, { cause: error });
   }
-  for (const path of writablePaths(paths)) {
-    if (isWithin(paths.workspace, path)) continue;
-    const directory = path === paths.localStorageFile || path === paths.auditCallLedger
-      ? dirname(path)
-      : path;
-    await mkdir(directory, { recursive: true, mode: 0o700 });
+  let bridgeCreated = false;
+  try {
+    for (const path of writablePaths(paths)) {
+      if (isWithin(paths.workspace, path)) continue;
+      const directory = path === paths.localStorageFile || path === paths.auditCallLedger
+        ? dirname(path)
+        : path;
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+    }
+    if (provider === 'claude') {
+      try {
+        await mkdir(paths.claudeBridgeTempDir, { recursive: false, mode: 0o700 });
+        bridgeCreated = true;
+      } catch (error) {
+        throw new D4SmokePolicyError('sandbox_not_fresh', paths.claudeBridgeTempDir, { cause: error });
+      }
+    }
+    await mkdir(paths.runtimeRoot, { recursive: false, mode: 0o700 });
+  } catch (error) {
+    if (bridgeCreated) await releaseD4ClaudeBridgeTemp(paths, provider).catch(() => undefined);
+    throw error;
   }
-  await mkdir(paths.runtimeRoot, { recursive: false, mode: 0o700 });
+}
+
+async function releaseD4ClaudeBridgeTemp(
+  paths: D4SmokeSandboxPaths,
+  provider: D4SmokeCandidate['provider'],
+): Promise<void> {
+  if (provider === 'claude') await rm(paths.claudeBridgeTempDir, { recursive: true, force: true });
 }
 
 const D4_SMOKE_POSITIONAL_SHIM_RULES: readonly {
@@ -3994,7 +4057,7 @@ export function planD4EngineeringShakedown(
     decisionIndex: selector.decisionIndex,
     repetitionId: 'r1',
     paths,
-    env: sandboxEnv(paths),
+    env: sandboxEnv(paths, candidate.provider),
   };
   validateD4EngineeringShakedownPlan(plan, sandboxBase);
   return plan;
@@ -4058,7 +4121,7 @@ export function validateD4EngineeringShakedownPlan(
       );
     }
   }
-  if (JSON.stringify(plan.env) !== JSON.stringify(sandboxEnv(expectedPaths))) {
+  if (JSON.stringify(plan.env) !== JSON.stringify(sandboxEnv(expectedPaths, plan.candidate.provider))) {
     throw new D4EngineeringShakedownError('namespace_collision', `${plan.shakedownExecutionId}: sandbox environment drift`);
   }
 }
@@ -4754,11 +4817,17 @@ export async function runD4EngineeringShakedown(
   input.auditLedger.assertZero();
   const forbiddenBoundaries = createD4SmokeForbiddenCapabilityBoundaries(input.auditLedger, now);
 
-  await createFreshSandbox(plan.paths);
+  await createFreshSandbox(plan.paths, plan.candidate.provider);
   let auditCursor: D4SmokeAuditCursor | null = null;
   const source = selectCredentialSource(provider, input.credentialSources);
   const canonicalPaths = input.canonicalCredentialPaths ?? defaultD4SmokeCanonicalCredentialPaths();
-  const credential = await copyCredentialIntoSandbox(officialPlan, source, canonicalPaths);
+  let credential: CredentialGuard;
+  try {
+    credential = await copyCredentialIntoSandbox(officialPlan, source, canonicalPaths);
+  } catch (error) {
+    await releaseD4ClaudeBridgeTemp(plan.paths, provider).catch(() => undefined);
+    throw error;
+  }
 
   let driver: StewardMachineDriver | null = null;
   let executionError: unknown;
@@ -4978,6 +5047,11 @@ export async function runD4EngineeringShakedown(
       cleanupError ??= error;
     }
     if (candidateStopped) {
+      try {
+        await releaseD4ClaudeBridgeTemp(plan.paths, provider);
+      } catch (error) {
+        cleanupError ??= error;
+      }
       try {
         await releaseD4SmokeRuntimeForHost(plan.paths);
       } catch (error) {
