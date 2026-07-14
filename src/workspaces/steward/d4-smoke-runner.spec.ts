@@ -40,11 +40,13 @@ import {
   assertD4EngineeringShakedownNonInferential,
   classifyD4SmokeShimAttempt,
   captureD4SmokeIsolatedPreflightQuota,
+  createD4OfficialClaudeProviderSerialNativeQuotaReader,
   createD4SmokeForbiddenCapabilityBoundaries,
   createD4SmokeFilesystemWorkspaceAdapter,
   createD4SmokeNativeDriverFactory,
   createD4SmokeLiveQuotaReader,
   d4EngineeringShakedownQuotaEvidenceSchema,
+  d4OfficialProviderSerialQuotaEvidenceSchema,
   d4SmokeQuotaEvidenceSchema,
   deriveD4SmokeQuotaForecastBounds,
   dryRunD4Smoke,
@@ -54,18 +56,24 @@ import {
   planD4SmokeExecutions,
   runD4EngineeringShakedown,
   runD4EngineeringShakedownFilesystem,
+  runD4OfficialClaudeProviderSerialExecution,
+  runD4OfficialClaudeProviderSerialFilesystemExecution,
   runD4SmokeExecution,
   runD4SmokeFilesystemExecution,
   resolveD4ClaudeNativeRuntime,
   resolveD4CodexNativeRuntime,
   validateD4EngineeringShakedownQuotaEvidence,
+  validateD4OfficialProviderSerialQuotaEvidence,
   validateD4SmokeExecutionPlan,
   validateD4SmokeQuotaEvidence,
   type D4EngineeringShakedownQuotaEvidence,
   type D4EngineeringShakedownFailure,
   type D4EngineeringShakedownResult,
   type D4EngineeringShakedownSelector,
+  type D4OfficialClaudeProviderSerialFilesystemExecutionInput,
+  type D4OfficialProviderSerialQuotaPhase,
   type D4ShakedownQuotaPhase,
+  type D4SmokeClaudeNativeRuntime,
   type D4SmokeDriverBinding,
   type D4SmokeExecutionPlan,
   type D4SmokeExecutionResult,
@@ -100,8 +108,7 @@ import type { CodexAppServerDriverOptions } from './machine-driver/codex-app-ser
 const NOW = new Date('2026-07-13T12:00:00.000Z');
 const execFileAsync = promisify(execFile);
 const RUN_D4_NATIVE_SOCAT_SMOKE = process.env.OPENALICE_D4_NATIVE_SOCAT_SMOKE === '1';
-type ProductionSeamKey = Extract<
-  keyof D4SmokeFilesystemExecutionInput,
+type ProductionSeamName =
   | 'driverFactory'
   | 'codexRuntime'
   | 'gitVerifier'
@@ -109,9 +116,15 @@ type ProductionSeamKey = Extract<
   | 'quotaReader'
   | 'codexControl'
   | 'claudeControl'
-  | 'forecastBounds'
->;
+  | 'forecastBounds';
+type ProductionSeamKey = Extract<keyof D4SmokeFilesystemExecutionInput, ProductionSeamName>;
 const PRODUCTION_INPUT_EXCLUDES_SEAMS: ProductionSeamKey extends never ? true : never = true;
+type ProviderSerialProductionSeamKey = Extract<
+  keyof D4OfficialClaudeProviderSerialFilesystemExecutionInput,
+  ProductionSeamName
+>;
+const PROVIDER_SERIAL_PRODUCTION_INPUT_EXCLUDES_SEAMS:
+  ProviderSerialProductionSeamKey extends never ? true : never = true;
 
 function pinnedClaudeBridgeSocketPaths(tempDir: string, nonce: string): { http: string; socks: string } {
   return {
@@ -189,6 +202,50 @@ function quotaEvidence(manifestSha256: string, phase: D4SmokeQuotaPhase) {
             observationCount: 10,
             observedAt: '2026-07-13T11:50:00.000Z',
             sourceIdentity: `fixture-observed-delta:${window.id}`,
+          },
+        })),
+      },
+      shadowApiEquivalent: { status: 'unknown', amountUsd: null },
+    },
+  };
+}
+
+function officialProviderSerialQuotaEvidence(
+  manifestSha256: string,
+  phase: D4OfficialProviderSerialQuotaPhase,
+  modelId: keyof typeof D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS,
+) {
+  return {
+    schema: 'steward-d4-official-provider-serial-quota/1',
+    version: 1,
+    purpose: 'official_smoke',
+    scheduleMode: 'provider_serial',
+    schedulingDirective: 'AUTH-D4-DEV:issue-222:claude-first',
+    manifestSha256,
+    provider: 'claude',
+    phase,
+    capturedAt: '2026-07-13T11:59:30.000Z',
+    validUntil: '2026-07-13T12:05:00.000Z',
+    officialTargetExecutionCount: 108,
+    officialTargetModelTurnCount: 1296,
+    forecastModelTurnCount: 1,
+    cost: {
+      actualIncrementalSpendUsd: 0,
+      forecastIncrementalSpendUsd: 0,
+      subscriptionQuota: {
+        windows: D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS[modelId].map((id) => ({
+          id,
+          provider: 'claude',
+          usedPercent: 10,
+          perTurnForecastAdditionalPercent: 0.5,
+          sourceIdentity: `fixture:${id}`,
+          forecast: {
+            basis: 'observed_delta_upper_bound_single_turn',
+            observedDeltaUpperBoundPercentPerModelTurn: 0.5,
+            forecastModelTurnCount: 1,
+            observationCount: 3,
+            observedAt: '2026-07-13T11:50:00.000Z',
+            sourceIdentity: `fixture-observed:${id}`,
           },
         })),
       },
@@ -277,6 +334,28 @@ function quotaForecastBounds(): D4SmokeQuotaForecastBounds {
     observedAt: '2026-07-13T11:50:00.000Z',
     sourceIdentity: `observed:${id}`,
   }])) as D4SmokeQuotaForecastBounds;
+}
+
+async function pinnedClaudeRuntimeFixture(
+  root: string,
+  version = '2.1.202',
+): Promise<D4SmokeClaudeNativeRuntime> {
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  const executable = join(root, version);
+  await writeFile(executable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  const metadata = await stat(executable, { bigint: true });
+  return {
+    root: dirname(executable),
+    executable,
+    version,
+    identity: {
+      dev: metadata.dev,
+      ino: metadata.ino,
+      size: metadata.size,
+      mtimeNs: metadata.mtimeNs,
+      ctimeNs: metadata.ctimeNs,
+    },
+  };
 }
 
 function codexLiveQuotaResponse() {
@@ -879,6 +958,93 @@ describe('D4 Smoke quota and planner', () => {
     }
   });
 
+  it('reads only the selected Claude windows for official provider-serial admission', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-d4-official-claude-quota-'));
+    try {
+      const fixture = await createD4SmokeTestFixture();
+      const stage = await validateD4SmokeStage({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+      });
+      const plan = planD4SmokeExecutions(stage, join(root, 'sandboxes')).find(
+        ({ candidate }) => candidate.modelId === 'claude-sonnet-5',
+      )!;
+      const runtime = await pinnedClaudeRuntimeFixture(root);
+      const readClaude = vi.fn(async () => claudeLiveQuotaResponse());
+      const reader = createD4OfficialClaudeProviderSerialNativeQuotaReader({
+        forecastBounds: quotaForecastBounds(),
+        claudeRuntime: runtime,
+        readClaude,
+        now: () => NOW,
+      });
+      const phase = {
+        kind: 'provider_serial_dispatch',
+        executionId: plan.executionId,
+        decisionIndex: 0,
+        wakeId: 'wake:fixture',
+      } as const;
+
+      const evidence = validateD4OfficialProviderSerialQuotaEvidence({
+        evidence: await reader(phase, plan),
+        manifestSha256: fixture.manifestSha256,
+        phase,
+        modelId: plan.candidate.modelId,
+        now: NOW,
+      });
+
+      expect(readClaude).toHaveBeenCalledTimes(1);
+      expect(evidence.cost.subscriptionQuota.windows.map(({ id }) => id)).toEqual([
+        'claude-all-model-weekly',
+        'claude-current-short',
+      ]);
+      expect(evidence.cost.subscriptionQuota.windows.every(({ provider }) => provider === 'claude')).toBe(true);
+      expect(d4OfficialProviderSerialQuotaEvidenceSchema.parse(evidence)).toEqual(evidence);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps official provider-serial and engineering-shakedown quota schemas disjoint', async () => {
+    const fixture = await createD4SmokeTestFixture();
+    const executionId = 'claude:claude-fable-5:d4-crypto-major-bull-a:r1';
+    const officialPhase = {
+      kind: 'provider_serial_dispatch',
+      executionId,
+      decisionIndex: 0,
+      wakeId: 'wake:fixture',
+    } as const;
+    const official = officialProviderSerialQuotaEvidence(
+      fixture.manifestSha256,
+      officialPhase,
+      'claude-fable-5',
+    );
+    const shakedownExecutionId = 'engineering-shakedown:claude:claude-fable-5:d4-crypto-major-bull-a:d01';
+    const shakedownPhaseValue = shakedownPhase(shakedownExecutionId, 'shakedown_dispatch');
+    const shakedown = shakedownQuotaEvidence(
+      fixture.manifestSha256,
+      shakedownPhaseValue,
+      'claude-fable-5',
+    );
+
+    expect(d4OfficialProviderSerialQuotaEvidenceSchema.safeParse(shakedown).success).toBe(false);
+    expect(() => validateD4OfficialProviderSerialQuotaEvidence({
+      evidence: shakedown,
+      manifestSha256: fixture.manifestSha256,
+      phase: officialPhase,
+      modelId: 'claude-fable-5',
+      now: NOW,
+    })).toThrow(/invalid/);
+    expect(d4EngineeringShakedownQuotaEvidenceSchema.safeParse(official).success).toBe(false);
+    expect(() => validateD4EngineeringShakedownQuotaEvidence({
+      evidence: official,
+      manifestSha256: fixture.manifestSha256,
+      phase: shakedownPhaseValue,
+      modelId: 'claude-fable-5',
+      now: NOW,
+    })).toThrow(/invalid/);
+  });
+
   it('derives production bounds only from critic-bound raw before/after quota sources', async () => {
     const fixture = await createD4SmokeTestFixture();
     const stage = await validateD4SmokeStage({
@@ -1026,10 +1192,16 @@ describe('D4 Smoke quota and planner', () => {
 
   it('rejects test seams on the production entrypoint before any dispatch', async () => {
     expect(PRODUCTION_INPUT_EXCLUDES_SEAMS).toBe(true);
+    expect(PROVIDER_SERIAL_PRODUCTION_INPUT_EXCLUDES_SEAMS).toBe(true);
     const driverFactory = vi.fn();
     await expect(runD4SmokeFilesystemExecution({
       driverFactory,
     } as unknown as Parameters<typeof runD4SmokeFilesystemExecution>[0])).rejects.toThrow(
+      /production_seam_forbidden/,
+    );
+    await expect(runD4OfficialClaudeProviderSerialFilesystemExecution({
+      driverFactory,
+    } as unknown as Parameters<typeof runD4OfficialClaudeProviderSerialFilesystemExecution>[0])).rejects.toThrow(
       /production_seam_forbidden/,
     );
     expect(driverFactory).not.toHaveBeenCalled();
@@ -1326,6 +1498,214 @@ describe('D4 Smoke single-execution runner', () => {
   ] as const)('fails closed when the candidate causes audit %s', async (mode, expected) => {
     const result = await exerciseAuditIntegrity(mode);
     expect(result.error?.message).toMatch(expected);
+  });
+
+  it('runs a Claude official execution with per-turn quota reads and leaves Codex pending', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-d4-official-claude-run-'));
+    try {
+      const fixture = await createD4SmokeTestFixture();
+      const stage = await validateD4SmokeStage({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+      });
+      const sandboxBase = join(root, 'sandboxes');
+      const plan = planD4SmokeExecutions(stage, sandboxBase).find(
+        ({ candidate }) => candidate.modelId === 'claude-fable-5',
+      )!;
+      const claudeCredential = join(root, '.credentials.json');
+      const codexCredential = join(root, 'codex-must-remain-unread.json');
+      await writeFile(claudeCredential, subscriptionOAuthFixture('claude'), { mode: 0o600 });
+      const runtime = await pinnedClaudeRuntimeFixture(join(root, 'runtime'));
+      const events: string[] = [];
+      const phases: D4OfficialProviderSerialQuotaPhase[] = [];
+      const readClaude = vi.fn(async () => {
+        events.push('quota');
+        return claudeLiveQuotaResponse();
+      });
+      const nativeQuotaReader = createD4OfficialClaudeProviderSerialNativeQuotaReader({
+        forecastBounds: quotaForecastBounds(),
+        claudeRuntime: runtime,
+        readClaude,
+        now: () => NOW,
+      });
+      const driver = new FakeDriver(() => { events.push('turn'); });
+      const bindings: D4SmokeDriverBinding[] = [];
+
+      const result = await runD4OfficialClaudeProviderSerialExecution({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+        contentByRef: fixture.contentByRef,
+        sandboxBase,
+        executionId: plan.executionId,
+        credentialSources: [{
+          provider: 'claude',
+          sourceIdentity: 'claude-max-oauth',
+          sourcePath: claudeCredential,
+        }],
+        canonicalCredentialPaths: { codex: codexCredential, claude: claudeCredential },
+        quotaReader: async (phase, selectedPlan) => {
+          phases.push(phase);
+          return nativeQuotaReader(phase, selectedPlan);
+        },
+        driverFactory: async (binding) => {
+          bindings.push(binding);
+          return {
+            driver,
+            resolvedModelId: binding.modelId,
+            runtimeVersion: binding.runtimeVersion,
+          };
+        },
+        prepareDecision: async (decision) => {
+          const record = wakeRecord(decision.wakeId, decision.fictionalAsOf);
+          return { record, candidateVisibleBytes: [JSON.stringify(record)] };
+        },
+        readTerminalArtifact: async (terminal) => terminalArtifact(
+          plan.paths.workspace,
+          terminal.wakeId,
+        ),
+        auditLedger: new D4SmokeCapabilityAuditLedger(),
+        now: () => NOW,
+      });
+
+      expect(result.status).toBe('valid');
+      expect(result.reports).toHaveLength(12);
+      expect(result.quotaEvidence.dispatches).toHaveLength(12);
+      expect(result.scheduling).toEqual({
+        mode: 'provider_serial',
+        activeProvider: 'claude',
+        directive: 'AUTH-D4-DEV:issue-222:claude-first',
+        pending: [{
+          provider: 'codex',
+          status: 'pending',
+          reason: 'maintainer_scheduled_later',
+          inferentialOutcome: false,
+        }],
+      });
+      expect(phases).toEqual(Array.from({ length: 12 }, (_, decisionIndex) =>
+        expect.objectContaining({
+          kind: 'provider_serial_dispatch',
+          executionId: plan.executionId,
+          decisionIndex,
+        })));
+      expect(readClaude).toHaveBeenCalledTimes(12);
+      expect(events).toEqual(Array.from({ length: 12 }, () => ['quota', 'turn']).flat());
+      expect(driver.turnCalls).toHaveLength(12);
+      expect(bindings).toHaveLength(1);
+      expect(bindings[0]!.provider).toBe('claude');
+      expect(result.credential.provider).toBe('claude');
+      await expect(access(codexCredential)).rejects.toThrow();
+      await expect(access(join(plan.paths.codexHome, 'auth.json'))).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps Codex executions pending without reading quota or constructing a driver', async () => {
+    const fixture = await createD4SmokeTestFixture();
+    const stage = await validateD4SmokeStage({
+      ...fixture,
+      repoRoot: process.cwd(),
+      gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+    });
+    const plan = planD4SmokeExecutions(stage, '/tmp/d4-official-codex-pending').find(
+      ({ candidate }) => candidate.provider === 'codex',
+    )!;
+    const quotaReader = vi.fn();
+    const driverFactory = vi.fn();
+
+    await expect(runD4OfficialClaudeProviderSerialExecution({
+      ...fixture,
+      repoRoot: process.cwd(),
+      gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+      contentByRef: fixture.contentByRef,
+      sandboxBase: '/tmp/d4-official-codex-pending',
+      executionId: plan.executionId,
+      credentialSources: [],
+      quotaReader,
+      driverFactory,
+      prepareDecision: async () => { throw new Error('unreachable'); },
+      readTerminalArtifact: async () => { throw new Error('unreachable'); },
+      auditLedger: new D4SmokeCapabilityAuditLedger(),
+      now: () => NOW,
+    })).rejects.toThrow(/Claude-first official scheduling forbids codex/);
+
+    expect(quotaReader).not.toHaveBeenCalled();
+    expect(driverFactory).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['incomplete windows', (evidence: ReturnType<typeof officialProviderSerialQuotaEvidence>) => {
+      evidence.cost.subscriptionQuota.windows.pop();
+    }],
+    ['nonzero spend', (evidence: ReturnType<typeof officialProviderSerialQuotaEvidence>) => {
+      evidence.cost.actualIncrementalSpendUsd = 1;
+    }],
+    ['exhausted reserve', (evidence: ReturnType<typeof officialProviderSerialQuotaEvidence>) => {
+      evidence.cost.subscriptionQuota.windows[0]!.usedPercent = 79.5;
+    }],
+  ] as const)('stops before runTurn on official provider-serial %s', async (_name, mutateEvidence) => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-d4-official-quota-stop-'));
+    try {
+      const fixture = await createD4SmokeTestFixture();
+      const stage = await validateD4SmokeStage({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+      });
+      const sandboxBase = join(root, 'sandboxes');
+      const plan = planD4SmokeExecutions(stage, sandboxBase).find(
+        ({ candidate }) => candidate.modelId === 'claude-fable-5',
+      )!;
+      const credentialSource = join(root, '.credentials.json');
+      await writeFile(credentialSource, subscriptionOAuthFixture('claude'), { mode: 0o600 });
+      const driver = new FakeDriver();
+
+      await expect(runD4OfficialClaudeProviderSerialExecution({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+        contentByRef: fixture.contentByRef,
+        sandboxBase,
+        executionId: plan.executionId,
+        credentialSources: [{
+          provider: 'claude',
+          sourceIdentity: 'claude-max-oauth',
+          sourcePath: credentialSource,
+        }],
+        canonicalCredentialPaths: {
+          codex: join(root, 'codex-must-remain-unread.json'),
+          claude: credentialSource,
+        },
+        quotaReader: async (phase) => {
+          const evidence = officialProviderSerialQuotaEvidence(
+            fixture.manifestSha256,
+            phase,
+            'claude-fable-5',
+          );
+          mutateEvidence(evidence);
+          return evidence;
+        },
+        driverFactory: async (binding) => ({
+          driver,
+          resolvedModelId: binding.modelId,
+          runtimeVersion: binding.runtimeVersion,
+        }),
+        prepareDecision: async (decision) => {
+          const record = wakeRecord(decision.wakeId, decision.fictionalAsOf);
+          return { record, candidateVisibleBytes: [JSON.stringify(record)] };
+        },
+        readTerminalArtifact: async () => { throw new Error('quota rejection must precede terminal read'); },
+        auditLedger: new D4SmokeCapabilityAuditLedger(),
+        now: () => NOW,
+      })).rejects.toThrow(/invalid|incomplete|reserve_exhausted/);
+
+      expect(driver.turnCalls).toHaveLength(0);
+      expect(driver.disposed).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('fails closed on the Claude SDK command event for an audit append failure', async () => {
