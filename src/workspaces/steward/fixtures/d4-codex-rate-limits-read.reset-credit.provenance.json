@@ -1,0 +1,52 @@
+{
+  "schema": "openalice-d4-codex-rate-limits-reset-credit-fixture-provenance/1",
+  "version": 1,
+  "issue": 220,
+  "capture": {
+    "attemptId": "d4-smoke-20260714T085538387Z",
+    "capturedAt": "2026-07-14T09:32:08.181Z",
+    "runtime": {
+      "version": "codex-cli 0.144.0",
+      "sha256": "901923c1808a151f6926d41d703c17ad48815662cefb1c8d832a052c44271429"
+    },
+    "sourceArtifacts": [
+      {
+        "file": "codex-rate-limits-read.first.raw.json",
+        "sha256": "9d5e18f5fae77b4960470711ce389284880a8e2caedd513fdc298bcb8cb9f41d"
+      },
+      {
+        "file": "codex-rate-limits-read.second.raw.json",
+        "sha256": "9d5e18f5fae77b4960470711ce389284880a8e2caedd513fdc298bcb8cb9f41d"
+      },
+      {
+        "file": "codex-rate-limits-read.protocol-evidence.json",
+        "sha256": "fde1ff69608e1d314a20c937d03107a4aa155d43876e5561fa264268787e836b"
+      }
+    ],
+    "sentMethods": [
+      "initialize",
+      "initialized",
+      "account/rateLimits/read",
+      "account/rateLimits/read"
+    ],
+    "consumeMethodSent": false,
+    "resetCreditMetadataStableAcrossReads": true
+  },
+  "sanitization": {
+    "reason": "Do not commit an account-scoped opaque reset-credit identifier.",
+    "jsonPointer": "/rateLimitResetCredits/credits/0/id",
+    "replacement": "RateLimitResetCredit_00000000000000000000000000000000",
+    "allOtherJsonValuesPreserved": true,
+    "responseShapePreserved": true
+  },
+  "fixture": {
+    "ref": "src/workspaces/steward/fixtures/d4-codex-rate-limits-read.reset-credit.sanitized.json",
+    "sha256": "b05272032d160d9e85cdc2e891cd241da43c069f8c2c138ce5f0f37547c91498"
+  },
+  "pinnedProtocol": {
+    "versionRef": "src/workspaces/steward/machine-driver/fixtures/schema/VERSION",
+    "versionSha256": "9de61da41de137501ff7eee06873c32b946fbed8993de974e4ba7fb2bea1522c",
+    "clientRequestRef": "src/workspaces/steward/machine-driver/fixtures/schema/ClientRequest.json",
+    "clientRequestSha256": "906d489cbc85e7292fe55c137a1b599bac64dbd772bfe8a0d7df20ca7158f04f"
+  }
+}

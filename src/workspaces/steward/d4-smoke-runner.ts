@@ -197,12 +197,25 @@ const codexRateLimitSnapshotSchema = z.object({
   planType: z.enum(['go', 'plus', 'pro', 'prolite', 'team', 'business', 'enterprise', 'edu']),
 }).passthrough();
 
+const codexRateLimitResetCreditSchema = z.object({
+  id: nonEmptyStringSchema,
+  resetType: z.literal('codexRateLimits'),
+  status: z.literal('available'),
+  grantedAt: z.number().int().positive(),
+  expiresAt: z.number().int().positive(),
+  title: nonEmptyStringSchema,
+  description: nonEmptyStringSchema,
+}).strict();
+
 const codexRateLimitsResponseSchema = z.object({
   rateLimitsByLimitId: z.record(z.string(), codexRateLimitSnapshotSchema),
   rateLimitResetCredits: z.object({
-    availableCount: z.literal(0),
-    credits: z.array(z.never()).length(0),
-  }).strict(),
+    availableCount: z.number().int().nonnegative(),
+    credits: z.array(codexRateLimitResetCreditSchema),
+  }).strict().refine(
+    ({ availableCount, credits }) => availableCount === credits.length,
+    'availableCount must equal credits length',
+  ),
 }).passthrough();
 
 const claudeUsageWindowSchema = z.object({

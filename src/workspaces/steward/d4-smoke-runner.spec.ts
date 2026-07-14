@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { access, appendFile, chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
@@ -297,6 +298,54 @@ function codexLiveQuotaResponse() {
     },
     rateLimitResetCredits: { availableCount: 0, credits: [] },
   };
+}
+
+interface CodexResetCreditQuotaFixture {
+  rateLimits: {
+    primary: { usedPercent: number };
+  };
+  rateLimitsByLimitId: Record<string, {
+    primary: { usedPercent: number };
+    credits: null | {
+      hasCredits: boolean;
+      unlimited: boolean;
+      balance: string | null;
+    };
+    individualLimit: unknown;
+  }>;
+  rateLimitResetCredits: {
+    availableCount: number;
+    credits: Array<Record<string, unknown>>;
+  };
+}
+
+async function codexResetCreditQuotaFixture(): Promise<{
+  readonly bytes: Buffer;
+  readonly response: CodexResetCreditQuotaFixture;
+}> {
+  const bytes = await readFile(new URL(
+    './fixtures/d4-codex-rate-limits-read.reset-credit.sanitized.json',
+    import.meta.url,
+  ));
+  return {
+    bytes,
+    response: JSON.parse(bytes.toString('utf8')) as CodexResetCreditQuotaFixture,
+  };
+}
+
+function makeCodexResetCreditFixtureAdmissible(response: CodexResetCreditQuotaFixture): void {
+  response.rateLimits.primary.usedPercent = 20;
+  response.rateLimitsByLimitId['codex']!.primary.usedPercent = 20;
+}
+
+async function d4LiveQuotaReaderTestPlan(): Promise<D4SmokeExecutionPlan> {
+  const fixture = await createD4SmokeTestFixture();
+  const stage = await validateD4SmokeStage({
+    ...fixture,
+    repoRoot: process.cwd(),
+    gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+  });
+  return planD4SmokeExecutions(stage, '/tmp/d4-live-quota-reader')[0]!;
 }
 
 function claudeLiveQuotaResponse() {
@@ -627,6 +676,103 @@ describe('D4 Smoke quota and planner', () => {
       now: () => NOW,
     });
     await expect(unsafeReader({ kind: 'layer_admission' }, plan)).rejects.toThrow(/Claude Max quota response/);
+  });
+
+  it('accepts passive nonempty Codex reset-credit metadata without consuming it', async () => {
+    const [{ bytes, response }, provenanceBytes, plan] = await Promise.all([
+      codexResetCreditQuotaFixture(),
+      readFile(new URL(
+        './fixtures/d4-codex-rate-limits-read.reset-credit.provenance.json',
+        import.meta.url,
+      )),
+      d4LiveQuotaReaderTestPlan(),
+    ]);
+    const provenance = JSON.parse(provenanceBytes.toString('utf8')) as {
+      capture: { consumeMethodSent: boolean };
+      fixture: { sha256: string };
+    };
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(provenance.fixture.sha256);
+    expect(provenance.capture.consumeMethodSent).toBe(false);
+    makeCodexResetCreditFixtureAdmissible(response);
+    const codexRequest = vi.fn(async (_method: string, _params: unknown) => response);
+    const reader = createD4SmokeLiveQuotaReader({
+      codexControl: { request: codexRequest },
+      claudeControl: {
+        usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () =>
+          claudeLiveQuotaResponse(),
+      },
+      forecastBounds: quotaForecastBounds(),
+      now: () => NOW,
+    });
+
+    const evidence = await reader({ kind: 'layer_admission' }, plan);
+
+    expect(evidence.cost.subscriptionQuota.windows[0]?.usedPercent).toBe(20);
+    expect(codexRequest.mock.calls.map(([method]) => method)).toEqual([
+      'account/rateLimits/read',
+    ]);
+    expect(codexRequest.mock.calls.map(([method]) => method)).not.toContain(
+      'account/rateLimitResetCredit/consume',
+    );
+  });
+
+  it('rejects malformed Codex reset-credit metadata', async () => {
+    const plan = await d4LiveQuotaReaderTestPlan();
+    const malformedVariants: Array<(response: CodexResetCreditQuotaFixture) => void> = [
+      (response) => { response.rateLimitResetCredits.availableCount = 2; },
+      (response) => { response.rateLimitResetCredits.credits[0]!.status = 'redeemed'; },
+      (response) => {
+        response.rateLimitResetCredits.credits[0]!.expiresAt = 'not-a-unix-timestamp';
+      },
+    ];
+
+    for (const makeMalformed of malformedVariants) {
+      const { response } = await codexResetCreditQuotaFixture();
+      makeCodexResetCreditFixtureAdmissible(response);
+      makeMalformed(response);
+      const reader = createD4SmokeLiveQuotaReader({
+        codexControl: { request: async () => response },
+        claudeControl: {
+          usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () =>
+            claudeLiveQuotaResponse(),
+        },
+        forecastBounds: quotaForecastBounds(),
+        now: () => NOW,
+      });
+
+      await expect(reader({ kind: 'layer_admission' }, plan)).rejects.toThrow(
+        /Codex subscription quota response/,
+      );
+    }
+  });
+
+  it('rejects Codex quota-bucket credits, overage, and individual spend controls', async () => {
+    const plan = await d4LiveQuotaReaderTestPlan();
+    const unsafeVariants: Array<(response: CodexResetCreditQuotaFixture) => void> = [
+      (response) => { response.rateLimitsByLimitId['codex']!.credits!.hasCredits = true; },
+      (response) => { response.rateLimitsByLimitId['codex']!.credits!.unlimited = true; },
+      (response) => { response.rateLimitsByLimitId['codex']!.credits!.balance = '1'; },
+      (response) => { response.rateLimitsByLimitId['codex']!.individualLimit = { limit: 1 }; },
+    ];
+
+    for (const makeUnsafe of unsafeVariants) {
+      const { response } = await codexResetCreditQuotaFixture();
+      makeCodexResetCreditFixtureAdmissible(response);
+      makeUnsafe(response);
+      const reader = createD4SmokeLiveQuotaReader({
+        codexControl: { request: async () => response },
+        claudeControl: {
+          usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () =>
+            claudeLiveQuotaResponse(),
+        },
+        forecastBounds: quotaForecastBounds(),
+        now: () => NOW,
+      });
+
+      await expect(reader({ kind: 'layer_admission' }, plan)).rejects.toThrow(
+        /Codex subscription quota response|credits\/overage|metered spend control/,
+      );
+    }
   });
 
   it('uses sequential provider-only preflight roots and cleans them on success and error', async () => {
