@@ -1,0 +1,8 @@
+{
+  "schema": "steward-d4-critic-receipt/1",
+  "version": 1,
+  "manifestSha256": "f03757cbd44052f0debb936b64e65cad030d4b1069e4659009067c9f4441d4c3",
+  "reviewerIdentity": "codex-issue-220-independent-critic:59188089-906a-453b-8bce-1c0a67b0cc1a",
+  "verdict": "APPROVE",
+  "reviewedCommit": "b3816275a8c086b1242bd4988983e934bf464060"
+}
