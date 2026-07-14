@@ -1,8 +1,8 @@
 {
   "schema": "steward-d4-critic-receipt/1",
   "version": 1,
-  "manifestSha256": "af013560fe771b27130ef9b9ea3a076afd990e86db292635c38973fe8c02318f",
-  "reviewerIdentity": "codex-issue-222-independent-critic:/root/critic_issue_222",
+  "manifestSha256": "3091ed7188dfaa79ddda62c90a2d116f0904869beb21601d7880fe371621e8be",
+  "reviewerIdentity": "codex-issue-224-independent-critic:/root/critic_issue_224",
   "verdict": "APPROVE",
-  "reviewedCommit": "1e19a3b141b356a3955b8951943b8ace51f0975c"
+  "reviewedCommit": "95abb2e9088bb667d1823b30b33a7770af4733af"
 }

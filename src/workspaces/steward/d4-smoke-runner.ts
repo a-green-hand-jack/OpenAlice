@@ -2131,6 +2131,7 @@ export interface D4OfficialClaudeProviderSerialExecutionResult {
   readonly executionId: string;
   readonly status: 'valid' | 'invalid';
   readonly reports: readonly StewardWakeEvaluationReport[];
+  readonly modelAttestations: readonly D4OfficialClaudeTurnModelAttestation[];
   readonly scheduling: {
     readonly mode: 'provider_serial';
     readonly activeProvider: 'claude';
@@ -2147,6 +2148,12 @@ export interface D4OfficialClaudeProviderSerialExecutionResult {
   };
   readonly credential: D4SmokeCredentialReceipt;
   readonly capabilityAttempts: readonly D4SmokeCapabilityAttempt[];
+}
+
+export interface D4OfficialClaudeTurnModelAttestation {
+  readonly decisionIndex: number;
+  readonly wakeId: string;
+  readonly roles: D4ModelRoleAttestation;
 }
 
 export interface D4SmokeExecutionInput {
@@ -2430,6 +2437,7 @@ async function runD4SmokeExecutionCore(
 
   let driver: StewardMachineDriver | null = null;
   const reports: StewardWakeEvaluationReport[] = [];
+  const officialClaudeModelAttestations: D4OfficialClaudeTurnModelAttestation[] = [];
   const dispatchQuotaEvidence: D4SmokeQuotaEvidence[] = [];
   const providerSerialQuotaEvidence: D4OfficialProviderSerialQuotaEvidence[] = [];
   let executionError: unknown;
@@ -2574,7 +2582,25 @@ async function runD4SmokeExecutionCore(
       if (outcome.agentMessage?.includes('D4_SMOKE_AUDIT_APPEND_FAILED')) {
         auditAppendFailure = true;
       }
-      assertD4ActualModelIds(outcome.actualModelIds, plan.candidate.modelId, wakeId);
+      const officialClaudeModelAttestation = admission.mode === 'claude_provider_serial'
+        ? attestD4ModelRoles({
+            outcome,
+            provider: 'claude',
+            requestedModelId: plan.candidate.modelId,
+            wakeId,
+          })
+        : null;
+      if (officialClaudeModelAttestation === null) {
+        assertD4ActualModelIds(outcome.actualModelIds, plan.candidate.modelId, wakeId);
+      } else {
+        assertD4ModelRoleEvidence(officialClaudeModelAttestation, wakeId);
+        assertD4SuccessfulModelRoles({
+          attestation: officialClaudeModelAttestation,
+          provider: 'claude',
+          requestedModelId: plan.candidate.modelId,
+          wakeId,
+        });
+      }
       auditCursor = await syncD4SmokeAuditLedger(
         plan.paths.auditCallLedger,
         input.auditLedger,
@@ -2614,6 +2640,13 @@ async function runD4SmokeExecutionCore(
         );
       }
       reports.push(report);
+      if (officialClaudeModelAttestation !== null) {
+        officialClaudeModelAttestations.push({
+          decisionIndex,
+          wakeId,
+          roles: officialClaudeModelAttestation,
+        });
+      }
       input.auditLedger.assertZero();
     }
   } catch (error) {
@@ -2679,6 +2712,7 @@ async function runD4SmokeExecutionCore(
   if (admission.mode === 'claude_provider_serial') {
     return {
       ...common,
+      modelAttestations: officialClaudeModelAttestations,
       scheduling: {
         mode: 'provider_serial',
         activeProvider: 'claude',
@@ -4915,10 +4949,10 @@ const shakedownRoleAttestationSchema = z.object({
   providerReportedModelIds: z.array(nonEmptyStringSchema),
 }).strict();
 
-type D4EngineeringShakedownRoleAttestation = z.infer<typeof shakedownRoleAttestationSchema>;
+export type D4ModelRoleAttestation = z.infer<typeof shakedownRoleAttestationSchema>;
 
-function addD4ShakedownRoleEvidenceIssues(
-  attestation: D4EngineeringShakedownRoleAttestation,
+function addD4ModelRoleEvidenceIssues(
+  attestation: D4ModelRoleAttestation,
   ctx: z.RefinementCtx,
 ): void {
   const providerReported = new Set(attestation.providerReportedModelIds);
@@ -4970,7 +5004,7 @@ function addD4ShakedownRoleEvidenceIssues(
 }
 
 function addD4ShakedownSuccessfulPrimaryIssues(
-  attestation: D4EngineeringShakedownRoleAttestation,
+  attestation: D4ModelRoleAttestation,
   requestedModelId: string,
   ctx: z.RefinementCtx,
 ): void {
@@ -4991,12 +5025,29 @@ function normalizedD4ModelIds(values: readonly string[] | undefined): string[] {
     .filter((value) => value !== ''))].sort();
 }
 
-function attestD4EngineeringShakedownModelRoles(input: {
+const d4ModelRoleEvidenceSchema = shakedownRoleAttestationSchema.superRefine(
+  addD4ModelRoleEvidenceIssues,
+);
+
+function assertD4ModelRoleEvidence(
+  attestation: D4ModelRoleAttestation,
+  wakeId: string,
+): void {
+  const parsed = d4ModelRoleEvidenceSchema.safeParse(attestation);
+  if (!parsed.success) {
+    throw new D4SmokePolicyError(
+      'model_binding_invalid',
+      `${wakeId}: invalid provider model role accounting: ${parsed.error.issues.map(({ message }) => message).join('; ')}`,
+    );
+  }
+}
+
+function attestD4ModelRoles(input: {
   readonly outcome: TurnOutcome;
   readonly provider: 'codex' | 'claude';
   readonly requestedModelId: string;
   readonly wakeId: string;
-}): D4EngineeringShakedownRoleAttestation {
+}): D4ModelRoleAttestation {
   const providerReportedModelIds = normalizedD4ModelIds(input.outcome.actualModelIds);
   const directDecisionAuthorModelIds = normalizedD4ModelIds(input.outcome.primaryModelIds);
   const primaryRoleGuardModelIds = input.provider === 'codex'
@@ -5032,8 +5083,8 @@ function attestD4EngineeringShakedownModelRoles(input: {
   };
 }
 
-function assertD4EngineeringShakedownSuccessfulModelRoles(input: {
-  readonly attestation: D4EngineeringShakedownRoleAttestation;
+function assertD4SuccessfulModelRoles(input: {
+  readonly attestation: D4ModelRoleAttestation;
   readonly provider: 'codex' | 'claude';
   readonly requestedModelId: string;
   readonly wakeId: string;
@@ -5100,7 +5151,7 @@ export const d4EngineeringShakedownResultSchema = z.object({
     ctx.addIssue({ code: 'custom', path: ['requestedModelId'], message: 'requested model/provider is not frozen' });
     return;
   }
-  addD4ShakedownRoleEvidenceIssues(artifact.modelAttestation, ctx);
+  addD4ModelRoleEvidenceIssues(artifact.modelAttestation, ctx);
   addD4ShakedownSuccessfulPrimaryIssues(artifact.modelAttestation, artifact.requestedModelId, ctx);
   if (!artifact.shakedownExecutionId.startsWith(
     `${D4_ENGINEERING_SHAKEDOWN_EXECUTION_PREFIX}:${artifact.provider}:${artifact.requestedModelId}:`,
@@ -5217,7 +5268,7 @@ export const d4EngineeringShakedownFailureSchema = z.object({
   )) {
     ctx.addIssue({ code: 'custom', path: ['shakedownExecutionId'], message: 'execution namespace/model mismatch' });
   }
-  addD4ShakedownRoleEvidenceIssues(artifact.modelAttestation, ctx);
+  addD4ModelRoleEvidenceIssues(artifact.modelAttestation, ctx);
   const applicable = D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS[
     artifact.requestedModelId as keyof typeof D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS
   ];
@@ -5474,7 +5525,7 @@ export async function runD4EngineeringShakedown(
   let dispatchQuota: D4EngineeringShakedownQuotaEvidence | null = null;
   let postTurnQuota: D4EngineeringShakedownQuotaEvidence | null = null;
   let terminalStatus: string | null = null;
-  let modelAttestation: D4EngineeringShakedownRoleAttestation | null = null;
+  let modelAttestation: D4ModelRoleAttestation | null = null;
   let durationMs: number | null = null;
   let latencyMs = 0;
   let tokenTelemetry: ThreadTelemetry | null = null;
@@ -5619,13 +5670,13 @@ export async function runD4EngineeringShakedown(
       now: now(),
     });
     tokenTelemetry = driver.readTelemetry(thread.threadId) ?? tokenTelemetry;
-    modelAttestation = attestD4EngineeringShakedownModelRoles({
+    modelAttestation = attestD4ModelRoles({
       outcome,
       provider,
       requestedModelId: plan.candidate.modelId,
       wakeId,
     });
-    assertD4EngineeringShakedownSuccessfulModelRoles({
+    assertD4SuccessfulModelRoles({
       attestation: modelAttestation,
       provider,
       requestedModelId: plan.candidate.modelId,
