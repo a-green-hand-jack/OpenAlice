@@ -24,9 +24,9 @@
             "sha256": "c86a6b69138816a816a6d60891f481f6e00fb0d61313a308a477a43c126ed9a2"
           },
           {
-            "byteLength": 206928,
+            "byteLength": 224274,
             "path": "src/workspaces/steward/d4-smoke-runner.ts",
-            "sha256": "6728a5be45f496cfaa5073c7852b6a024069dc223384804dae00fa75345eb193"
+            "sha256": "59ad6a5d67d49dc0748fe88be904a145b742ca50d87fb3de064dbf97d9013126"
           },
           {
             "byteLength": 49253,
@@ -166,7 +166,7 @@
           "src/workspaces/templates/steward/README.md"
         ],
         "schema": "steward-d4-runtime-tree/1",
-        "sha256": "847f4f98c313e29b91f7e2d30d2f5c02667a6d5631ba54334cc46fb832c8b49c",
+        "sha256": "7b9547b3f3e04ad581e63621263b374ba004f5047ae08e0a1b3895d9a964b90e",
         "version": 1
       }
     },

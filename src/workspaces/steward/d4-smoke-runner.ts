@@ -298,6 +298,92 @@ export type D4SmokeQuotaEvidence = z.infer<typeof d4SmokeQuotaEvidenceSchema>;
 export type D4SmokeQuotaPhase = D4SmokeQuotaEvidence['phase'];
 export type D4SmokeQuotaWindowId = typeof D4_SMOKE_QUOTA_WINDOWS[number]['id'];
 
+export const D4_OFFICIAL_CLAUDE_PROVIDER_SERIAL_DIRECTIVE =
+  'AUTH-D4-DEV:issue-222:claude-first' as const;
+export const D4_OFFICIAL_PROVIDER_SERIAL_QUOTA_SCHEMA =
+  'steward-d4-official-provider-serial-quota/1' as const;
+export const D4_OFFICIAL_PROVIDER_SERIAL_QUOTA_VERSION = 1 as const;
+export const D4_OFFICIAL_PROVIDER_SERIAL_FORECAST_BASIS =
+  'observed_delta_upper_bound_single_turn' as const;
+export const D4_OFFICIAL_PROVIDER_SERIAL_MODEL_TURN_COUNT = 1 as const;
+
+const d4SingleTurnApplicableWindowIds: Readonly<Record<
+  typeof D4_SMOKE_CANDIDATES[number]['modelId'],
+  readonly D4SmokeQuotaWindowId[]
+>> = {
+  'gpt-5.6-sol': ['codex-general-weekly'],
+  'gpt-5.6-terra': ['codex-general-weekly'],
+  'gpt-5.6-luna': ['codex-general-weekly'],
+  'gpt-5.5': ['codex-general-weekly'],
+  'gpt-5.3-codex-spark': ['codex-spark'],
+  'claude-fable-5': ['claude-all-model-weekly', 'claude-fable-weekly', 'claude-current-short'],
+  'claude-sonnet-5': ['claude-all-model-weekly', 'claude-current-short'],
+  'claude-opus-4-8': ['claude-all-model-weekly', 'claude-current-short'],
+  'claude-haiku-4-5-20251001': ['claude-all-model-weekly', 'claude-current-short'],
+};
+
+const d4OfficialProviderSerialQuotaWindowSchema = z.object({
+  id: nonEmptyStringSchema,
+  provider: z.literal('claude'),
+  usedPercent: percentageSchema,
+  perTurnForecastAdditionalPercent: percentageSchema,
+  sourceIdentity: nonEmptyStringSchema,
+  forecast: z.object({
+    basis: z.literal(D4_OFFICIAL_PROVIDER_SERIAL_FORECAST_BASIS),
+    observedDeltaUpperBoundPercentPerModelTurn: z.number().finite().positive().max(100),
+    forecastModelTurnCount: z.literal(D4_OFFICIAL_PROVIDER_SERIAL_MODEL_TURN_COUNT),
+    observationCount: z.number().int().positive(),
+    observedAt: isoTimestampSchema,
+    sourceIdentity: nonEmptyStringSchema,
+  }).strict(),
+}).strict();
+
+const d4OfficialProviderSerialQuotaPhaseSchema = z.object({
+  kind: z.literal('provider_serial_dispatch'),
+  executionId: nonEmptyStringSchema,
+  decisionIndex: z.number().int().min(0).max(D4_SMOKE_DECISION_COUNT - 1),
+  wakeId: nonEmptyStringSchema,
+}).strict();
+
+/** Official single-dispatch evidence for the maintainer-ordered Claude-first
+ * schedule. Its schema/purpose/target fields are intentionally incompatible
+ * with engineering shakedown quota evidence. */
+export const d4OfficialProviderSerialQuotaEvidenceSchema = z.object({
+  schema: z.literal(D4_OFFICIAL_PROVIDER_SERIAL_QUOTA_SCHEMA),
+  version: z.literal(D4_OFFICIAL_PROVIDER_SERIAL_QUOTA_VERSION),
+  purpose: z.literal('official_smoke'),
+  scheduleMode: z.literal('provider_serial'),
+  schedulingDirective: z.literal(D4_OFFICIAL_CLAUDE_PROVIDER_SERIAL_DIRECTIVE),
+  manifestSha256: sha256Schema,
+  provider: z.literal('claude'),
+  phase: d4OfficialProviderSerialQuotaPhaseSchema,
+  capturedAt: isoTimestampSchema,
+  validUntil: isoTimestampSchema,
+  officialTargetExecutionCount: z.literal(D4_SMOKE_EXECUTION_COUNT),
+  officialTargetModelTurnCount: z.literal(D4_SMOKE_MODEL_TURN_COUNT),
+  forecastModelTurnCount: z.literal(D4_OFFICIAL_PROVIDER_SERIAL_MODEL_TURN_COUNT),
+  cost: z.object({
+    actualIncrementalSpendUsd: z.literal(0),
+    forecastIncrementalSpendUsd: z.literal(0),
+    subscriptionQuota: z.object({
+      windows: z.array(d4OfficialProviderSerialQuotaWindowSchema),
+    }).strict(),
+    shadowApiEquivalent: z.discriminatedUnion('status', [
+      z.object({ status: z.literal('unknown'), amountUsd: z.null() }).strict(),
+      z.object({ status: z.literal('estimated'), amountUsd: z.number().finite().nonnegative() }).strict(),
+    ]),
+  }).strict(),
+}).strict();
+
+export type D4OfficialProviderSerialQuotaEvidence = z.infer<
+  typeof d4OfficialProviderSerialQuotaEvidenceSchema
+>;
+export type D4OfficialProviderSerialQuotaPhase = D4OfficialProviderSerialQuotaEvidence['phase'];
+export type D4OfficialProviderSerialQuotaReader = (
+  phase: D4OfficialProviderSerialQuotaPhase,
+  plan: D4SmokeExecutionPlan,
+) => Promise<unknown>;
+
 export interface D4SmokeQuotaForecastBound {
   readonly observedDeltaUpperBoundPercentPerModelTurn: number;
   readonly applicableModelTurnCount: number;
@@ -771,6 +857,223 @@ function forecastD4SmokeLayerPercent(bound: Pick<
     );
   }
   return Math.min(100, value * bound.applicableModelTurnCount);
+}
+
+function forecastD4SingleTurnPercent(bound: {
+  readonly observedDeltaUpperBoundPercentPerModelTurn: number;
+}): number {
+  const value = bound.observedDeltaUpperBoundPercentPerModelTurn;
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new D4SmokeQuotaError(
+      'incomplete',
+      'reliable observed delta upper bound per model turn is required; zero or guessed deltas are not admissible',
+    );
+  }
+  return Math.min(100, value);
+}
+
+function d4SingleTurnApplicableWindows(modelId: string): {
+  readonly candidate: D4SmokeCandidate;
+  readonly windows: readonly typeof D4_SMOKE_QUOTA_WINDOWS[number][];
+} {
+  const candidate = D4_SMOKE_CANDIDATES.find((item) => item.modelId === modelId);
+  const applicable = (d4SingleTurnApplicableWindowIds as Record<
+    string,
+    readonly D4SmokeQuotaWindowId[]
+  >)[modelId];
+  if (candidate === undefined || applicable === undefined) {
+    throw new D4SmokeQuotaError('invalid', `${modelId} is not a frozen D4 candidate`);
+  }
+  const windows = applicable.map((id) => {
+    const descriptor = D4_SMOKE_QUOTA_WINDOWS.find((window) => window.id === id);
+    if (descriptor === undefined || descriptor.provider !== candidate.provider) {
+      throw new D4SmokeQuotaError(
+        'invalid',
+        `${modelId}: applicable window ${id} is not a ${candidate.provider} window`,
+      );
+    }
+    return descriptor;
+  });
+  return { candidate, windows };
+}
+
+function d4OfficialClaudeApplicableWindows(modelId: string): {
+  readonly candidate: D4SmokeCandidate & { readonly provider: 'claude' };
+  readonly windows: readonly typeof D4_SMOKE_QUOTA_WINDOWS[number][];
+} {
+  const { candidate, windows } = d4SingleTurnApplicableWindows(modelId);
+  if (candidate.provider !== 'claude') {
+    throw new D4SmokePolicyError(
+      'model_binding_invalid',
+      `${modelId}: Claude-first official scheduling forbids ${candidate.provider}`,
+    );
+  }
+  return {
+    candidate: candidate as D4SmokeCandidate & { readonly provider: 'claude' },
+    windows,
+  };
+}
+
+export function validateD4OfficialProviderSerialQuotaEvidence(input: {
+  readonly evidence: unknown;
+  readonly manifestSha256: string;
+  readonly phase: D4OfficialProviderSerialQuotaPhase;
+  readonly modelId: string;
+  readonly now: Date;
+}): D4OfficialProviderSerialQuotaEvidence {
+  const parsed = d4OfficialProviderSerialQuotaEvidenceSchema.safeParse(input.evidence);
+  if (!parsed.success) {
+    throw new D4SmokeQuotaError('invalid', formatZodIssues(parsed.error));
+  }
+  const evidence = parsed.data;
+  const { windows: applicable } = d4OfficialClaudeApplicableWindows(input.modelId);
+  if (evidence.manifestSha256 !== input.manifestSha256) {
+    throw new D4SmokeQuotaError(
+      'invalid',
+      `evidence binds ${evidence.manifestSha256}, manifest is ${input.manifestSha256}`,
+    );
+  }
+  if (JSON.stringify(evidence.phase) !== JSON.stringify(input.phase)) {
+    throw new D4SmokeQuotaError(
+      'invalid',
+      `expected phase ${JSON.stringify(input.phase)}, received ${JSON.stringify(evidence.phase)}`,
+    );
+  }
+  const nowMs = input.now.getTime();
+  if (!Number.isFinite(nowMs)
+    || nowMs < Date.parse(evidence.capturedAt)
+    || nowMs > Date.parse(evidence.validUntil)) {
+    throw new D4SmokeQuotaError(
+      'stale',
+      `${input.now.toISOString()} is outside ${evidence.capturedAt}..${evidence.validUntil}`,
+    );
+  }
+  const expectedIdentities = applicable.map(({ id }) => ({ id, provider: 'claude' as const }));
+  const identities = evidence.cost.subscriptionQuota.windows.map(({ id, provider }) => ({ id, provider }));
+  if (JSON.stringify(identities) !== JSON.stringify(expectedIdentities)) {
+    throw new D4SmokeQuotaError(
+      'incomplete',
+      `${input.modelId} requires exactly [${applicable.map(({ id }) => id).join(',')}] in canonical order`,
+    );
+  }
+  for (const window of evidence.cost.subscriptionQuota.windows) {
+    if (Date.parse(window.forecast.observedAt) > Date.parse(evidence.capturedAt)) {
+      throw new D4SmokeQuotaError('invalid', `${window.id} observed upper bound is from the future`);
+    }
+    const expectedPerTurn = forecastD4SingleTurnPercent(window.forecast);
+    if (Math.abs(window.perTurnForecastAdditionalPercent - expectedPerTurn) > 1e-12) {
+      throw new D4SmokeQuotaError(
+        'invalid',
+        `${window.id} single-turn forecast must derive from its observed delta upper bound`,
+      );
+    }
+    const projected = window.usedPercent + window.perTurnForecastAdditionalPercent;
+    if (projected >= 80) {
+      throw new D4SmokeQuotaError(
+        'reserve_exhausted',
+        `${window.id} projects ${projected}% used; 20% reserve requires less than 80%`,
+      );
+    }
+  }
+  return evidence;
+}
+
+function buildD4OfficialProviderSerialEvidenceFromUsed(input: {
+  readonly phase: D4OfficialProviderSerialQuotaPhase;
+  readonly plan: D4SmokeExecutionPlan;
+  readonly liveUsed: Readonly<Partial<Record<D4SmokeQuotaWindowId, number>>>;
+  readonly forecastBounds: D4SmokeQuotaForecastBounds;
+  readonly captured: Date;
+  readonly validityMs: number;
+}): D4OfficialProviderSerialQuotaEvidence {
+  const { windows: applicable } = d4OfficialClaudeApplicableWindows(input.plan.candidate.modelId);
+  const windows = applicable.map(({ id }) => {
+    const bound = input.forecastBounds[id];
+    if (bound === undefined) {
+      throw new D4SmokeQuotaError('incomplete', `${id} has no observed delta upper bound`);
+    }
+    const usedPercent = input.liveUsed[id];
+    if (usedPercent === undefined) {
+      throw new D4SmokeQuotaError('incomplete', `${id} live quota value is missing`);
+    }
+    return {
+      id,
+      provider: 'claude' as const,
+      usedPercent,
+      perTurnForecastAdditionalPercent: forecastD4SingleTurnPercent(bound),
+      sourceIdentity: `claude:usage-control:${id}`,
+      forecast: {
+        basis: D4_OFFICIAL_PROVIDER_SERIAL_FORECAST_BASIS,
+        observedDeltaUpperBoundPercentPerModelTurn: bound.observedDeltaUpperBoundPercentPerModelTurn,
+        forecastModelTurnCount: D4_OFFICIAL_PROVIDER_SERIAL_MODEL_TURN_COUNT,
+        observationCount: bound.observationCount,
+        observedAt: bound.observedAt,
+        sourceIdentity: bound.sourceIdentity,
+      },
+    };
+  });
+  const evidence = {
+    schema: D4_OFFICIAL_PROVIDER_SERIAL_QUOTA_SCHEMA,
+    version: D4_OFFICIAL_PROVIDER_SERIAL_QUOTA_VERSION,
+    purpose: 'official_smoke' as const,
+    scheduleMode: 'provider_serial' as const,
+    schedulingDirective: D4_OFFICIAL_CLAUDE_PROVIDER_SERIAL_DIRECTIVE,
+    manifestSha256: input.plan.manifestSha256,
+    provider: 'claude' as const,
+    phase: input.phase,
+    capturedAt: input.captured.toISOString(),
+    validUntil: new Date(input.captured.getTime() + input.validityMs).toISOString(),
+    officialTargetExecutionCount: D4_SMOKE_EXECUTION_COUNT,
+    officialTargetModelTurnCount: D4_SMOKE_MODEL_TURN_COUNT,
+    forecastModelTurnCount: D4_OFFICIAL_PROVIDER_SERIAL_MODEL_TURN_COUNT,
+    cost: {
+      actualIncrementalSpendUsd: 0 as const,
+      forecastIncrementalSpendUsd: 0 as const,
+      subscriptionQuota: { windows },
+      shadowApiEquivalent: { status: 'unknown' as const, amountUsd: null },
+    },
+  };
+  return validateD4OfficialProviderSerialQuotaEvidence({
+    evidence,
+    manifestSha256: input.plan.manifestSha256,
+    phase: input.phase,
+    modelId: input.plan.candidate.modelId,
+    now: input.captured,
+  });
+}
+
+/** Claude-only native reader for the maintainer-ordered official schedule.
+ * Its API has no Codex runtime/control and therefore cannot read or consume a
+ * Codex reset credit. */
+export function createD4OfficialClaudeProviderSerialNativeQuotaReader(options: {
+  readonly forecastBounds: D4SmokeQuotaForecastBounds;
+  readonly claudeRuntime: D4SmokeClaudeNativeRuntime;
+  readonly readClaude?: D4SmokeNativeQuotaProbe;
+  readonly now?: () => Date;
+  readonly validityMs?: number;
+}): D4OfficialProviderSerialQuotaReader {
+  const now = options.now ?? (() => new Date());
+  const validityMs = options.validityMs ?? 60_000;
+  if (!Number.isInteger(validityMs) || validityMs <= 0) {
+    throw new D4SmokeQuotaError('invalid', 'official provider-serial quota validityMs must be positive');
+  }
+  return async (phase, plan) => {
+    d4OfficialClaudeApplicableWindows(plan.candidate.modelId);
+    await assertD4ClaudeNativeRuntimeIdentity(options.claudeRuntime, plan.candidate.runtimeVersion);
+    const captured = now();
+    const context = { cwd: plan.paths.workspace, env: plan.env };
+    const raw = options.readClaude?.(context)
+      ?? readNativeClaudeQuota(context, options.claudeRuntime);
+    const liveUsed = readD4SmokeClaudeQuotaWindows(await raw);
+    return buildD4OfficialProviderSerialEvidenceFromUsed({
+      phase,
+      plan,
+      liveUsed,
+      forecastBounds: options.forecastBounds,
+      captured,
+      validityMs,
+    });
+  };
 }
 
 function readD4SmokeLiveQuotaWindows(
@@ -1824,6 +2127,28 @@ export interface D4SmokeExecutionResult {
   readonly capabilityAttempts: readonly D4SmokeCapabilityAttempt[];
 }
 
+export interface D4OfficialClaudeProviderSerialExecutionResult {
+  readonly executionId: string;
+  readonly status: 'valid' | 'invalid';
+  readonly reports: readonly StewardWakeEvaluationReport[];
+  readonly scheduling: {
+    readonly mode: 'provider_serial';
+    readonly activeProvider: 'claude';
+    readonly directive: typeof D4_OFFICIAL_CLAUDE_PROVIDER_SERIAL_DIRECTIVE;
+    readonly pending: readonly [{
+      readonly provider: 'codex';
+      readonly status: 'pending';
+      readonly reason: 'maintainer_scheduled_later';
+      readonly inferentialOutcome: false;
+    }];
+  };
+  readonly quotaEvidence: {
+    readonly dispatches: readonly D4OfficialProviderSerialQuotaEvidence[];
+  };
+  readonly credential: D4SmokeCredentialReceipt;
+  readonly capabilityAttempts: readonly D4SmokeCapabilityAttempt[];
+}
+
 export interface D4SmokeExecutionInput {
   readonly manifestBytes: string | Uint8Array;
   readonly receipt: D4SmokeCriticReceipt | unknown;
@@ -1847,6 +2172,13 @@ export interface D4SmokeExecutionInput {
   readonly deadlineMs?: number;
 }
 
+export interface D4OfficialClaudeProviderSerialExecutionInput extends Omit<
+  D4SmokeExecutionInput,
+  'quotaReader' | 'codexRuntime'
+> {
+  readonly quotaReader: D4OfficialProviderSerialQuotaReader;
+}
+
 export interface D4SmokeFilesystemExecutionInput {
   readonly manifestBytes: string | Uint8Array;
   readonly receipt: D4SmokeCriticReceipt | unknown;
@@ -1858,6 +2190,22 @@ export interface D4SmokeFilesystemExecutionInput {
     readonly terminalWaitMs?: number;
   };
 }
+
+export type D4OfficialClaudeProviderSerialFilesystemExecutionInput = D4SmokeFilesystemExecutionInput;
+
+type D4SmokeExecutionCoreInput = Omit<D4SmokeExecutionInput, 'quotaReader'>;
+
+interface D4SmokeFullLayerAdmission {
+  readonly mode: 'full_layer';
+  readonly quotaReader: D4SmokeQuotaReader;
+}
+
+interface D4SmokeClaudeProviderSerialAdmission {
+  readonly mode: 'claude_provider_serial';
+  readonly quotaReader: D4OfficialProviderSerialQuotaReader;
+}
+
+type D4SmokeExecutionAdmission = D4SmokeFullLayerAdmission | D4SmokeClaudeProviderSerialAdmission;
 
 const D4_SMOKE_PRODUCTION_SEAMS = [
   'repoRoot',
@@ -1907,11 +2255,8 @@ function frozenD4SmokeClaudeRuntimeVersion(): string {
   return [...versions][0]!;
 }
 
-/** Watchdog-facing, single-execution production entrypoint. */
-export async function runD4SmokeFilesystemExecution(
-  input: D4SmokeFilesystemExecutionInput,
-): Promise<D4SmokeExecutionResult> {
-  const rawInput = input as unknown as Record<string, unknown>;
+function assertD4SmokeProductionInput(input: unknown): void {
+  const rawInput = input as Record<string, unknown>;
   const forbidden = D4_SMOKE_PRODUCTION_SEAMS.filter((key) =>
     Object.prototype.hasOwnProperty.call(rawInput, key));
   if (forbidden.length > 0) {
@@ -1920,6 +2265,13 @@ export async function runD4SmokeFilesystemExecution(
       `watchdog entrypoint does not accept ${forbidden.join(',')}`,
     );
   }
+}
+
+/** Watchdog-facing, single-execution production entrypoint. */
+export async function runD4SmokeFilesystemExecution(
+  input: D4SmokeFilesystemExecutionInput,
+): Promise<D4SmokeExecutionResult> {
+  assertD4SmokeProductionInput(input);
   const stage = await validateD4SmokeStage({
     manifestBytes: input.manifestBytes,
     receipt: input.receipt,
@@ -1969,7 +2321,78 @@ export async function runD4SmokeFilesystemExecution(
   });
 }
 
+/** Watchdog-facing Claude-first official entrypoint. It resolves, copies, and
+ * reads only Claude runtime state; Codex remains a non-inferential pending
+ * provider until a later maintainer directive. */
+export async function runD4OfficialClaudeProviderSerialFilesystemExecution(
+  input: D4OfficialClaudeProviderSerialFilesystemExecutionInput,
+): Promise<D4OfficialClaudeProviderSerialExecutionResult> {
+  assertD4SmokeProductionInput(input);
+  const stage = await validateD4SmokeStage({
+    manifestBytes: input.manifestBytes,
+    receipt: input.receipt,
+    repoRoot: D4_REPO_ROOT,
+    contentByRef: input.contentByRef,
+  });
+  const plan = planD4SmokeExecutions(stage, input.sandboxBase).find(
+    (candidate) => candidate.executionId === input.executionId,
+  );
+  if (plan === undefined) {
+    throw new D4SmokePlanError('coverage_invalid', `unknown execution ${input.executionId}`);
+  }
+  d4OfficialClaudeApplicableWindows(plan.candidate.modelId);
+  const forecastBounds = deriveD4SmokeQuotaForecastBounds({ stage, contentByRef: input.contentByRef });
+  const canonical = defaultD4SmokeCanonicalCredentialPaths();
+  const claudeRuntime = await resolveD4ClaudeNativeRuntime(frozenD4SmokeClaudeRuntimeVersion());
+  const adapter = createD4SmokeFilesystemWorkspaceAdapter(input.filesystemAdapterOptions);
+  const claudeCredential = D4_SMOKE_CREDENTIAL_SOURCES.find(({ provider }) => provider === 'claude')!;
+  return runD4OfficialClaudeProviderSerialExecution({
+    manifestBytes: input.manifestBytes,
+    receipt: input.receipt,
+    repoRoot: D4_REPO_ROOT,
+    contentByRef: input.contentByRef,
+    sandboxBase: input.sandboxBase,
+    executionId: input.executionId,
+    credentialSources: [{ ...claudeCredential, sourcePath: canonical.claude }],
+    canonicalCredentialPaths: canonical,
+    quotaReader: createD4OfficialClaudeProviderSerialNativeQuotaReader({
+      forecastBounds,
+      claudeRuntime,
+    }),
+    driverFactory: createD4SmokeNativeDriverFactory({ claudeRuntime }),
+    bootstrapWorkspace: adapter.bootstrapWorkspace,
+    prepareDecision: adapter.prepareDecision,
+    readTerminalArtifact: adapter.readTerminalArtifact,
+    auditLedger: new D4SmokeCapabilityAuditLedger(),
+    deadlineMs: input.deadlineMs,
+  });
+}
+
 export async function runD4SmokeExecution(input: D4SmokeExecutionInput): Promise<D4SmokeExecutionResult> {
+  return runD4SmokeExecutionCore(input, { mode: 'full_layer', quotaReader: input.quotaReader });
+}
+
+export async function runD4OfficialClaudeProviderSerialExecution(
+  input: D4OfficialClaudeProviderSerialExecutionInput,
+): Promise<D4OfficialClaudeProviderSerialExecutionResult> {
+  return runD4SmokeExecutionCore(input, {
+    mode: 'claude_provider_serial',
+    quotaReader: input.quotaReader,
+  });
+}
+
+function runD4SmokeExecutionCore(
+  input: D4SmokeExecutionCoreInput,
+  admission: D4SmokeFullLayerAdmission,
+): Promise<D4SmokeExecutionResult>;
+function runD4SmokeExecutionCore(
+  input: D4SmokeExecutionCoreInput,
+  admission: D4SmokeClaudeProviderSerialAdmission,
+): Promise<D4OfficialClaudeProviderSerialExecutionResult>;
+async function runD4SmokeExecutionCore(
+  input: D4SmokeExecutionCoreInput,
+  admission: D4SmokeExecutionAdmission,
+): Promise<D4SmokeExecutionResult | D4OfficialClaudeProviderSerialExecutionResult> {
   const now = input.now ?? (() => new Date());
   const stage = await validateD4SmokeStage(input);
   const plans = planD4SmokeExecutions(stage, input.sandboxBase);
@@ -1977,16 +2400,22 @@ export async function runD4SmokeExecution(input: D4SmokeExecutionInput): Promise
   if (plan === undefined) {
     throw new D4SmokePlanError('coverage_invalid', `unknown execution ${input.executionId}`);
   }
+  if (admission.mode === 'claude_provider_serial') {
+    d4OfficialClaudeApplicableWindows(plan.candidate.modelId);
+  }
   const source = selectCredentialSource(plan.candidate.provider, input.credentialSources);
   input.auditLedger.assertZero();
   const forbiddenBoundaries = createD4SmokeForbiddenCapabilityBoundaries(input.auditLedger, now);
-  const admissionPhase = { kind: 'layer_admission' } as const;
-  const admissionQuota = validateD4SmokeQuotaEvidence({
-    evidence: await input.quotaReader(admissionPhase, plan),
-    manifestSha256: stage.manifestSha256,
-    phase: admissionPhase,
-    now: now(),
-  });
+  let admissionQuota: D4SmokeQuotaEvidence | null = null;
+  if (admission.mode === 'full_layer') {
+    const admissionPhase = { kind: 'layer_admission' } as const;
+    admissionQuota = validateD4SmokeQuotaEvidence({
+      evidence: await admission.quotaReader(admissionPhase, plan),
+      manifestSha256: stage.manifestSha256,
+      phase: admissionPhase,
+      now: now(),
+    });
+  }
 
   await createFreshSandbox(plan.paths, plan.candidate.provider);
   let auditCursor: D4SmokeAuditCursor | null = null;
@@ -2002,6 +2431,7 @@ export async function runD4SmokeExecution(input: D4SmokeExecutionInput): Promise
   let driver: StewardMachineDriver | null = null;
   const reports: StewardWakeEvaluationReport[] = [];
   const dispatchQuotaEvidence: D4SmokeQuotaEvidence[] = [];
+  const providerSerialQuotaEvidence: D4OfficialProviderSerialQuotaEvidence[] = [];
   let executionError: unknown;
   try {
     const instructionValue = input.contentByRef[stage.manifest.content.baseline.instruction.ref]!;
@@ -2088,19 +2518,35 @@ export async function runD4SmokeExecution(input: D4SmokeExecutionInput): Promise
         decisionIndex,
         values: [prompt, ...prepared.candidateVisibleBytes],
       });
-      const dispatchPhase = {
-        kind: 'dispatch',
-        executionId: plan.executionId,
-        decisionIndex,
-        wakeId,
-      } as const;
-      dispatchQuotaEvidence.push(validateD4SmokeQuotaEvidence({
-        evidence: await input.quotaReader(dispatchPhase, plan),
-        manifestSha256: stage.manifestSha256,
-        phase: dispatchPhase,
-        provider: plan.candidate.provider,
-        now: now(),
-      }));
+      if (admission.mode === 'full_layer') {
+        const dispatchPhase = {
+          kind: 'dispatch',
+          executionId: plan.executionId,
+          decisionIndex,
+          wakeId,
+        } as const;
+        dispatchQuotaEvidence.push(validateD4SmokeQuotaEvidence({
+          evidence: await admission.quotaReader(dispatchPhase, plan),
+          manifestSha256: stage.manifestSha256,
+          phase: dispatchPhase,
+          provider: plan.candidate.provider,
+          now: now(),
+        }));
+      } else {
+        const dispatchPhase = {
+          kind: 'provider_serial_dispatch',
+          executionId: plan.executionId,
+          decisionIndex,
+          wakeId,
+        } as const;
+        providerSerialQuotaEvidence.push(validateD4OfficialProviderSerialQuotaEvidence({
+          evidence: await admission.quotaReader(dispatchPhase, plan),
+          manifestSha256: stage.manifestSha256,
+          phase: dispatchPhase,
+          modelId: plan.candidate.modelId,
+          now: now(),
+        }));
+      }
       auditCursor = await syncD4SmokeAuditLedger(
         plan.paths.auditCallLedger,
         input.auditLedger,
@@ -2221,18 +2667,38 @@ export async function runD4SmokeExecution(input: D4SmokeExecutionInput): Promise
   }
   if (executionError !== undefined) throw executionError;
 
-  return {
+  const common = {
     executionId: plan.executionId,
     status: reports.every((report) => report.protocol.verdict === 'pass' && report.decision.verdict === 'pass')
-      ? 'valid'
-      : 'invalid',
+      ? 'valid' as const
+      : 'invalid' as const,
     reports,
-    quotaEvidence: {
-      layerAdmission: admissionQuota,
-      dispatches: dispatchQuotaEvidence,
-    },
     credential: credential.receipt(),
     capabilityAttempts: input.auditLedger.snapshot(),
+  };
+  if (admission.mode === 'claude_provider_serial') {
+    return {
+      ...common,
+      scheduling: {
+        mode: 'provider_serial',
+        activeProvider: 'claude',
+        directive: D4_OFFICIAL_CLAUDE_PROVIDER_SERIAL_DIRECTIVE,
+        pending: [{
+          provider: 'codex',
+          status: 'pending',
+          reason: 'maintainer_scheduled_later',
+          inferentialOutcome: false,
+        }],
+      },
+      quotaEvidence: { dispatches: providerSerialQuotaEvidence },
+    };
+  }
+  return {
+    ...common,
+    quotaEvidence: {
+      layerAdmission: admissionQuota!,
+      dispatches: dispatchQuotaEvidence,
+    },
   };
 }
 
@@ -3896,17 +4362,7 @@ export const D4_ENGINEERING_SHAKEDOWN_FAILURE_VERSION = 2 as const;
 export const D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS: Readonly<Record<
   typeof D4_SMOKE_CANDIDATES[number]['modelId'],
   readonly D4SmokeQuotaWindowId[]
->> = {
-  'gpt-5.6-sol': ['codex-general-weekly'],
-  'gpt-5.6-terra': ['codex-general-weekly'],
-  'gpt-5.6-luna': ['codex-general-weekly'],
-  'gpt-5.5': ['codex-general-weekly'],
-  'gpt-5.3-codex-spark': ['codex-spark'],
-  'claude-fable-5': ['claude-all-model-weekly', 'claude-fable-weekly', 'claude-current-short'],
-  'claude-sonnet-5': ['claude-all-model-weekly', 'claude-current-short'],
-  'claude-opus-4-8': ['claude-all-model-weekly', 'claude-current-short'],
-  'claude-haiku-4-5-20251001': ['claude-all-model-weekly', 'claude-current-short'],
-};
+>> = d4SingleTurnApplicableWindowIds;
 
 export class D4EngineeringShakedownError extends Error {
   constructor(
@@ -3924,18 +4380,7 @@ function d4EngineeringShakedownApplicableWindows(modelId: string): {
   readonly provider: 'codex' | 'claude';
   readonly windows: readonly typeof D4_SMOKE_QUOTA_WINDOWS[number][];
 } {
-  const candidate = D4_SMOKE_CANDIDATES.find((item) => item.modelId === modelId);
-  const applicable = (D4_ENGINEERING_SHAKEDOWN_APPLICABLE_WINDOWS as Record<string, readonly D4SmokeQuotaWindowId[]>)[modelId];
-  if (candidate === undefined || applicable === undefined) {
-    throw new D4SmokeQuotaError('invalid', `${modelId} is not a frozen shakedown candidate`);
-  }
-  const windows = applicable.map((id) => {
-    const descriptor = D4_SMOKE_QUOTA_WINDOWS.find((window) => window.id === id);
-    if (descriptor === undefined || descriptor.provider !== candidate.provider) {
-      throw new D4SmokeQuotaError('invalid', `${modelId}: applicable window ${id} is not a ${candidate.provider} window`);
-    }
-    return descriptor;
-  });
+  const { candidate, windows } = d4SingleTurnApplicableWindows(modelId);
   return { provider: candidate.provider, windows };
 }
 
@@ -4173,19 +4618,6 @@ function d4EngineeringShakedownOfficialPlanView(plan: D4EngineeringShakedownPlan
   };
 }
 
-function forecastD4EngineeringShakedownPerTurnPercent(bound: {
-  readonly observedDeltaUpperBoundPercentPerModelTurn: number;
-}): number {
-  const value = bound.observedDeltaUpperBoundPercentPerModelTurn;
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new D4SmokeQuotaError(
-      'incomplete',
-      'reliable observed delta upper bound per model turn is required; zero or guessed deltas are not admissible',
-    );
-  }
-  return Math.min(100, value * D4_ENGINEERING_SHAKEDOWN_MODEL_TURN_COUNT);
-}
-
 export function validateD4EngineeringShakedownQuotaEvidence(input: {
   readonly evidence: unknown;
   readonly manifestSha256: string;
@@ -4239,7 +4671,7 @@ export function validateD4EngineeringShakedownQuotaEvidence(input: {
     if (Date.parse(window.forecast.observedAt) > Date.parse(evidence.capturedAt)) {
       throw new D4SmokeQuotaError('invalid', `${window.id} observed upper bound is from the future`);
     }
-    const expectedPerTurn = forecastD4EngineeringShakedownPerTurnPercent(window.forecast);
+    const expectedPerTurn = forecastD4SingleTurnPercent(window.forecast);
     if (Math.abs(window.perTurnForecastAdditionalPercent - expectedPerTurn) > 1e-12) {
       throw new D4SmokeQuotaError(
         'invalid',
@@ -4282,7 +4714,7 @@ function buildD4EngineeringShakedownEvidenceFromUsed(input: {
       id,
       provider,
       usedPercent,
-      perTurnForecastAdditionalPercent: forecastD4EngineeringShakedownPerTurnPercent(bound),
+      perTurnForecastAdditionalPercent: forecastD4SingleTurnPercent(bound),
       sourceIdentity: provider === 'codex'
         ? `codex:account/rateLimits/read:${id === 'codex-spark' ? 'codex_bengalfox' : 'codex'}`
         : `claude:usage-control:${id}`,
