@@ -1529,7 +1529,33 @@ describe('D4 Smoke single-execution runner', () => {
         readClaude,
         now: () => NOW,
       });
-      const driver = new FakeDriver(() => { events.push('turn'); });
+      const driver = new FakeDriver();
+      vi.spyOn(driver, 'runTurn').mockImplementation(async (_threadId, input, options = {}) => {
+        events.push('turn');
+        driver.turnCalls.push({ input, options });
+        return {
+          turnId: `turn-${driver.turnCalls.length}`,
+          status: 'completed',
+          agentMessage: 'terminal artifact is read from the isolated workspace',
+          durationMs: 1,
+          interrupted: false,
+          actualModelIds: ['claude-fable-5', 'claude-haiku-4-5-20251001'],
+          primaryModelIds: ['claude-fable-5'],
+          primaryRoleGuardModelIds: ['claude-fable-5'],
+          modelUsage: [
+            {
+              modelId: 'claude-fable-5', inputTokens: 100, outputTokens: 50,
+              cacheReadInputTokens: 10, cacheCreationInputTokens: 5, webSearchRequests: 0,
+              costUSD: 0.42, contextWindow: 200_000, maxOutputTokens: 8_192,
+            },
+            {
+              modelId: 'claude-haiku-4-5-20251001', inputTokens: 10, outputTokens: 5,
+              cacheReadInputTokens: 2, cacheCreationInputTokens: 1, webSearchRequests: 0,
+              costUSD: 0.01, contextWindow: 200_000, maxOutputTokens: 8_192,
+            },
+          ],
+        };
+      });
       const bindings: D4SmokeDriverBinding[] = [];
 
       const result = await runD4OfficialClaudeProviderSerialExecution({
@@ -1571,6 +1597,31 @@ describe('D4 Smoke single-execution runner', () => {
 
       expect(result.status).toBe('valid');
       expect(result.reports).toHaveLength(12);
+      expect(result.modelAttestations).toHaveLength(12);
+      expect(result.modelAttestations).toEqual(Array.from({ length: 12 }, (_, decisionIndex) => ({
+        decisionIndex,
+        wakeId: expect.any(String),
+        roles: {
+          directDecisionAuthorModelIds: ['claude-fable-5'],
+          primaryRoleGuardModelIds: ['claude-fable-5'],
+          primaryModelUsages: [expect.objectContaining({
+            modelId: 'claude-fable-5',
+            inputTokens: 100,
+            costUSD: 0.42,
+          })],
+          providerModelUsageIds: ['claude-fable-5', 'claude-haiku-4-5-20251001'],
+          auxiliaryModels: [{
+            modelId: 'claude-haiku-4-5-20251001',
+            modelUsage: expect.objectContaining({
+              modelId: 'claude-haiku-4-5-20251001',
+              inputTokens: 10,
+              costUSD: 0.01,
+            }),
+          }],
+          sidechainAssistantModelIds: [],
+          providerReportedModelIds: ['claude-fable-5', 'claude-haiku-4-5-20251001'],
+        },
+      })));
       expect(result.quotaEvidence.dispatches).toHaveLength(12);
       expect(result.scheduling).toEqual({
         mode: 'provider_serial',
@@ -1597,6 +1648,94 @@ describe('D4 Smoke single-execution runner', () => {
       expect(result.credential.provider).toBe('claude');
       await expect(access(codexCredential)).rejects.toThrow();
       await expect(access(join(plan.paths.codexHome, 'auth.json'))).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['missing direct primary', { primaryModelIds: [] }],
+    ['wrong direct primary', { primaryModelIds: ['claude-sonnet-5'] }],
+    ['multiple direct primaries', { primaryModelIds: ['claude-fable-5', 'claude-sonnet-5'] }],
+    ['missing primary-role guard', { primaryRoleGuardModelIds: [] }],
+    ['wrong primary-role guard', { primaryRoleGuardModelIds: ['claude-sonnet-5'] }],
+    ['multiple primary-role guards', {
+      primaryRoleGuardModelIds: ['claude-fable-5', 'claude-sonnet-5'],
+    }],
+    ['usage identity absent from provider report', {
+      actualModelIds: ['claude-fable-5'],
+      modelUsage: [{
+        modelId: 'claude-haiku-4-5-20251001', inputTokens: 10, outputTokens: 5,
+        cacheReadInputTokens: 2, cacheCreationInputTokens: 1, webSearchRequests: 0,
+        costUSD: 0.01, contextWindow: 200_000, maxOutputTokens: 8_192,
+      }],
+    }],
+  ] as const)('fails closed before terminal evaluation on official Claude %s evidence', async (_name, override) => {
+    const root = await mkdtemp(join(tmpdir(), 'openalice-d4-official-model-evidence-'));
+    try {
+      const fixture = await createD4SmokeTestFixture();
+      const stage = await validateD4SmokeStage({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+      });
+      const sandboxBase = join(root, 'sandboxes');
+      const plan = planD4SmokeExecutions(stage, sandboxBase).find(
+        ({ candidate }) => candidate.modelId === 'claude-fable-5',
+      )!;
+      const credentialSource = join(root, '.credentials.json');
+      await writeFile(credentialSource, subscriptionOAuthFixture('claude'), { mode: 0o600 });
+      const driver = new FakeDriver();
+      vi.spyOn(driver, 'runTurn').mockResolvedValue({
+        turnId: 'turn-invalid-role-evidence',
+        status: 'completed',
+        agentMessage: 'terminal artifact must not be evaluated',
+        durationMs: 1,
+        interrupted: false,
+        actualModelIds: ['claude-fable-5'],
+        primaryModelIds: ['claude-fable-5'],
+        primaryRoleGuardModelIds: ['claude-fable-5'],
+        ...override,
+      });
+      const readTerminalArtifact = vi.fn();
+
+      await expect(runD4OfficialClaudeProviderSerialExecution({
+        ...fixture,
+        repoRoot: process.cwd(),
+        gitVerifier: D4_SMOKE_TEST_GIT_VERIFIER,
+        contentByRef: fixture.contentByRef,
+        sandboxBase,
+        executionId: plan.executionId,
+        credentialSources: [{
+          provider: 'claude',
+          sourceIdentity: 'claude-max-oauth',
+          sourcePath: credentialSource,
+        }],
+        canonicalCredentialPaths: {
+          codex: join(root, 'codex-must-remain-unread.json'),
+          claude: credentialSource,
+        },
+        quotaReader: async (phase) => officialProviderSerialQuotaEvidence(
+          fixture.manifestSha256,
+          phase,
+          'claude-fable-5',
+        ),
+        driverFactory: async (binding) => ({
+          driver,
+          resolvedModelId: binding.modelId,
+          runtimeVersion: binding.runtimeVersion,
+        }),
+        prepareDecision: async (decision) => {
+          const record = wakeRecord(decision.wakeId, decision.fictionalAsOf);
+          return { record, candidateVisibleBytes: [JSON.stringify(record)] };
+        },
+        readTerminalArtifact,
+        auditLedger: new D4SmokeCapabilityAuditLedger(),
+        now: () => NOW,
+      })).rejects.toThrow(/model_binding_invalid/);
+
+      expect(readTerminalArtifact).not.toHaveBeenCalled();
+      expect(driver.disposed).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
