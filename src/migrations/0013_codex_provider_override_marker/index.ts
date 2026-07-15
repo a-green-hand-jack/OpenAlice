@@ -88,6 +88,12 @@ async function isStrictLegacyCodexOverride(workspaceDir: string): Promise<boolea
   try {
     const parsed: unknown = JSON.parse(envRaw)
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false
+    const keys = Object.keys(parsed as Record<string, unknown>)
+    const isEmptyShape = keys.length === 0
+    const isKeyOnlyShape = keys.length === 1
+      && keys[0] === 'OPENALICE_WORKSPACE_KEY'
+      && typeof (parsed as Record<string, unknown>)['OPENALICE_WORKSPACE_KEY'] === 'string'
+    if (!isEmptyShape && !isKeyOnlyShape) return false
   } catch {
     return false
   }

@@ -276,6 +276,42 @@ describe('codexAdapter AI-config', () => {
       expect(isStrictLegacyCodexOverride(dir)).toBe(true);
     });
 
+    it('returns true for an exact-empty env.json ({}) alongside the full provider TOML block (legacy no-apiKey shape)', async () => {
+      await mkdir(join(dir, '.codex'), { recursive: true });
+      await writeFile(
+        join(dir, '.codex', 'config.toml'),
+        'model = "gpt-x"\nmodel_provider = "workspace"\n\n'
+        + '[model_providers.workspace]\nname = "OpenAlice workspace provider"\n'
+        + 'base_url = "https://oai.test/v1"\nenv_key = "OPENALICE_WORKSPACE_KEY"\nwire_api = "responses"\n',
+      );
+      await writeFile(join(dir, '.codex', 'env.json'), '{}\n');
+      expect(isStrictLegacyCodexOverride(dir)).toBe(true);
+    });
+
+    it('returns false when env.json parses as an object but has no OPENALICE_WORKSPACE_KEY (issue #230 reviewer repro)', async () => {
+      await mkdir(join(dir, '.codex'), { recursive: true });
+      await writeFile(
+        join(dir, '.codex', 'config.toml'),
+        'model = "gpt-x"\nmodel_provider = "workspace"\n\n'
+        + '[model_providers.workspace]\nname = "OpenAlice workspace provider"\n'
+        + 'base_url = "https://oai.test/v1"\nenv_key = "OPENALICE_WORKSPACE_KEY"\nwire_api = "responses"\n',
+      );
+      await writeFile(join(dir, '.codex', 'env.json'), JSON.stringify({ UNRELATED_USER_SETTING: 'x' }) + '\n');
+      expect(isStrictLegacyCodexOverride(dir)).toBe(false);
+    });
+
+    it('returns false when env.json has the real key plus an extra unrelated field (issue #230 correction)', async () => {
+      await mkdir(join(dir, '.codex'), { recursive: true });
+      await writeFile(
+        join(dir, '.codex', 'config.toml'),
+        'model = "gpt-x"\nmodel_provider = "workspace"\n\n'
+        + '[model_providers.workspace]\nname = "OpenAlice workspace provider"\n'
+        + 'base_url = "https://oai.test/v1"\nenv_key = "OPENALICE_WORKSPACE_KEY"\nwire_api = "responses"\n',
+      );
+      await writeFile(join(dir, '.codex', 'env.json'), JSON.stringify({ OPENALICE_WORKSPACE_KEY: 'x', UNRELATED: 'y' }) + '\n');
+      expect(isStrictLegacyCodexOverride(dir)).toBe(false);
+    });
+
     it('returns false for Codex-cold-start-generated config.toml even with an unrelated env.json present', async () => {
       await mkdir(join(dir, '.codex'), { recursive: true });
       await writeFile(

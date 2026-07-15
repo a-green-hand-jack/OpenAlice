@@ -385,6 +385,12 @@ export function isStrictLegacyCodexOverride(cwd: string): boolean {
   try {
     const parsed: unknown = JSON.parse(envRaw);
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
+    const keys = Object.keys(parsed as Record<string, unknown>);
+    const isEmptyShape = keys.length === 0;
+    const isKeyOnlyShape = keys.length === 1
+      && keys[0] === CODEX_KEY_ENV_NAME
+      && typeof (parsed as Record<string, unknown>)[CODEX_KEY_ENV_NAME] === 'string';
+    if (!isEmptyShape && !isKeyOnlyShape) return false;
   } catch {
     return false;
   }

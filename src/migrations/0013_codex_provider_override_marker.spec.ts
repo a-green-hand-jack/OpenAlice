@@ -120,6 +120,43 @@ describe('0013 codex provider override marker backfill', () => {
     expect(res).toEqual({ backfilled: 0, workspaces: 0 })
   })
 
+  it('backfills when env.json is exactly {} alongside the full provider TOML (legacy no-apiKey shape)', async () => {
+    await makeLauncher(['ws1'])
+    await mkdir(join(wsDir['ws1'], '.codex'), { recursive: true })
+    await writeFile(join(wsDir['ws1'], '.codex', 'config.toml'), REAL_OVERRIDE_TOML, 'utf-8')
+    await writeFile(join(wsDir['ws1'], '.codex', 'env.json'), '{}\n', 'utf-8')
+
+    const res = await backfillCodexOverrideMarkers(root)
+    expect(res).toEqual({ backfilled: 1, workspaces: 1 })
+    expect(await markerExists('ws1')).toBe(true)
+  })
+
+  it('does NOT backfill when env.json has no OPENALICE_WORKSPACE_KEY (issue #230 reviewer repro)', async () => {
+    await makeLauncher(['ws1'])
+    await mkdir(join(wsDir['ws1'], '.codex'), { recursive: true })
+    await writeFile(join(wsDir['ws1'], '.codex', 'config.toml'), REAL_OVERRIDE_TOML, 'utf-8')
+    await writeFile(join(wsDir['ws1'], '.codex', 'env.json'), JSON.stringify({ UNRELATED_USER_SETTING: 'x' }), 'utf-8')
+
+    const res = await backfillCodexOverrideMarkers(root)
+    expect(res).toEqual({ backfilled: 0, workspaces: 0 })
+    expect(await markerExists('ws1')).toBe(false)
+  })
+
+  it('does NOT backfill when env.json has the real key plus an extra unrelated field (issue #230 correction)', async () => {
+    await makeLauncher(['ws1'])
+    await mkdir(join(wsDir['ws1'], '.codex'), { recursive: true })
+    await writeFile(join(wsDir['ws1'], '.codex', 'config.toml'), REAL_OVERRIDE_TOML, 'utf-8')
+    await writeFile(
+      join(wsDir['ws1'], '.codex', 'env.json'),
+      JSON.stringify({ OPENALICE_WORKSPACE_KEY: 'sk-legacy', UNRELATED: 'y' }),
+      'utf-8',
+    )
+
+    const res = await backfillCodexOverrideMarkers(root)
+    expect(res).toEqual({ backfilled: 0, workspaces: 0 })
+    expect(await markerExists('ws1')).toBe(false)
+  })
+
   it('skips (never throws on) a workspace with unparseable env.json', async () => {
     await makeLauncher(['ws1'])
     await mkdir(join(wsDir['ws1'], '.codex'), { recursive: true })
