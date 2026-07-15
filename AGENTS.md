@@ -1,5 +1,27 @@
 # OpenAlice
 
+## Mandatory Capability-Reuse Gate
+
+Before proposing or implementing any new OpenAlice runner, adapter, execution
+bridge, sizing layer, broker-mutation path, or Trading Team integration:
+
+1. Trace the current end-to-end capability in code, tests, and recent git
+   history. Do not infer absence from one experiment, prompt, or stale comment.
+2. Prove whether the observed gap is missing infrastructure or an existing
+   capability intentionally disabled by a prompt, template, authz setting,
+   manifest, or contract version.
+3. When runner comments, docs, prompts, and behavior disagree, treat the
+   comments as untrusted and inspect the change that introduced the mismatch.
+4. Reuse the existing AI -> workspace tool/CLI -> UTA -> TradingGit -> broker
+   path whenever it satisfies the task. Fix Trading Team prompt/config/seed
+   behavior before adding a parallel OpenAlice execution path.
+5. Any Trading Team-driven OpenAlice change must first record a short reuse
+   audit with exact file/test evidence and explain why the existing path cannot
+   satisfy the requirement. Without that evidence, stop before writing code.
+
+In particular, a zero-trade result under a proposal-only instruction is not
+evidence that OpenAlice lacks trading execution infrastructure.
+
 AI trading agent. From a code-writing perspective, the Alice process is two
 things: a **Workspace launcher** (PTY sessions running native agent CLIs —
 `claude`, `codex`, `opencode`, `pi`, `shell`; capability extension ships as workspace templates
