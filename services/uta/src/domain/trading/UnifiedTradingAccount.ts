@@ -1052,6 +1052,10 @@ export class UnifiedTradingAccount {
     return this.git.executeStewardMutation(params)
   }
 
+  readStewardSizingView<T>(read: () => Promise<T>): Promise<T> {
+    return this.git.readStewardSizingView(read)
+  }
+
   /** Narrow dispatch surface for the UTA-owned Steward adapter. It intentionally
    * bypasses stage/commit/push while still crossing the account containment
    * gate; TradingGit owns durability, idempotency, and admission sequencing. */

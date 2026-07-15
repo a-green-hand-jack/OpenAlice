@@ -103,7 +103,7 @@ export interface StewardMutationFixtureProducer {
 export interface StewardMutationCriticalSection {
   run<T>(
     accountId: string,
-    consume: (source: RiskEnvelopeAdmissionSource) => Promise<T>,
+    consume: (source: RiskEnvelopeAdmissionSource & { config?: UTAConfig | null }) => Promise<T>,
   ): Promise<T>
 }
 
@@ -295,11 +295,12 @@ export class UTAManager {
 
   // ==================== Registration ====================
 
-  add(uta: UnifiedTradingAccount): void {
+  add(uta: UnifiedTradingAccount, config?: UTAConfig): void {
     if (this.entries.has(uta.id)) {
       throw new Error(`UTA "${uta.id}" already registered`)
     }
     this.entries.set(uta.id, uta)
+    if (config) this.configs.set(uta.id, config)
   }
 
   remove(id: string): void {
@@ -355,11 +356,12 @@ export class UTAManager {
     const request = stewardSizingViewRequestSchema.parse(requestInput)
     const uta = this.entries.get(utaId)
     if (!uta) throw new Error(`UTA ${utaId} is not configured`)
-    return withLockedUTAsConfig(async (accounts) => {
-      const cfg = accounts.find((account) => account.id === utaId)
-      if (!cfg) throw new Error(`UTA ${utaId} is not configured`)
-      return this.buildStewardSizingView(uta, cfg, request.instrument)
-    })
+    // Match executeStewardMutation's order: account lease, then accounts
+    // config lock. Reversing it would let a view and a mutation deadlock.
+    return uta.readStewardSizingView(() => this.runStewardMutationCriticalSection(utaId, async (source) => {
+      if (!source.config) throw new Error(`UTA ${utaId} is not configured`)
+      return this.buildStewardSizingView(uta, source.config, request.instrument)
+    }))
   }
 
   /**
@@ -385,9 +387,6 @@ export class UTAManager {
       return { ...identity, status: 'rejected', code: 'mutation_capability_unavailable' }
     }
     const producer = this.stewardMutationFixtureProducer
-    if (producer.productionAdapter && !this.isVerifiedMockStewardAdapterConfig(utaId)) {
-      return { ...identity, status: 'rejected', code: 'mutation_capability_unavailable' }
-    }
     const payloadFingerprint = stewardMutationPayloadFingerprint(request)
 
     try {
@@ -396,6 +395,9 @@ export class UTAManager {
         payloadFingerprint,
         message: `Steward deterministic operation ${request.operation.operationId}`,
         boundary: (transaction) => this.runStewardMutationCriticalSection(utaId, async (source) => {
+          if (producer.productionAdapter && !isVerifiedMockStewardAdapterPolicy(source.config ?? undefined, this.tradingMode)) {
+            throw new StewardMutationBoundaryRejection('mutation_capability_unavailable')
+          }
           const admission = evaluateStewardAdmission({
             accountId: utaId,
             source,
@@ -422,7 +424,7 @@ export class UTAManager {
               if (producer.productionAdapter) {
                 const view = await this.buildStewardSizingView(
                   uta,
-                  this.configs.get(utaId) as UTAConfig,
+                  source.config ?? rejectMissingStewardConfig(utaId),
                   request.operation.instrument,
                 )
                 if (!supportsStewardMutationRequest(request, view)) {
@@ -501,10 +503,6 @@ export class UTAManager {
     }
   }
 
-  private isVerifiedMockStewardAdapterConfig(utaId: string): boolean {
-    return isVerifiedMockStewardAdapterPolicy(this.configs.get(utaId), this.tradingMode)
-  }
-
   private async buildStewardSizingView(
     uta: UnifiedTradingAccount,
     cfg: UTAConfig,
@@ -536,11 +534,10 @@ export class UTAManager {
           caps: {
             maxPositionPctOfEquity: String(envelope.envelope.maxPositionPctOfEquity),
             maxSingleOrderPctOfEquity: String(envelope.envelope.maxSingleOrderPctOfEquity),
-            // Risk-state evaluation is authoritative but does not yet expose a
-            // loss remainder. Zero is the conservative fail-closed projection.
-            remainingLossPctOfEquity: riskState.state === 'NORMAL'
-              ? String(Math.min(envelope.envelope.maxDailyLossPct, envelope.envelope.maxDrawdownPct))
-              : '0',
+            // UTA has threshold and breach state, but no authoritative
+            // consumed-budget ledger. Never mistake a policy ceiling for a
+            // remaining budget: until that input exists this is fail-closed.
+            remainingLossPctOfEquity: '0',
           },
         }
       : { kind: 'missing' as const }
@@ -592,13 +589,14 @@ export class UTAManager {
       return consume({
         riskEnvelope: fresh?.riskEnvelope ?? null,
         accountMaxAuthzLevel: fresh?.maxAuthzLevel ?? null,
+        config: fresh ?? null,
       })
     })
   }
 
   private runStewardMutationCriticalSection<T>(
     utaId: string,
-    consume: (source: RiskEnvelopeAdmissionSource) => Promise<T>,
+    consume: (source: RiskEnvelopeAdmissionSource & { config?: UTAConfig | null }) => Promise<T>,
   ): Promise<T> {
     return this.stewardMutationCriticalSection
       ? this.stewardMutationCriticalSection.run(utaId, consume)
@@ -816,6 +814,10 @@ function isPositiveDecimal(value: string | undefined): value is string {
   } catch {
     return false
   }
+}
+
+function rejectMissingStewardConfig(utaId: string): never {
+  throw new Error(`UTA ${utaId} is not configured`)
 }
 
 export function supportsStewardMutationRequest(

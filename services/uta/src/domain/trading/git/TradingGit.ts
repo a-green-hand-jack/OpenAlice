@@ -555,6 +555,16 @@ export class TradingGit implements ITradingGit {
     }))
   }
 
+  /** Shares the existing account mutation lease with an authoritative sizing
+   * read, so a broker dispatch cannot interleave an account/position/mark
+   * snapshot. This is deliberately not a new lock primitive. */
+  async readStewardSizingView<T>(read: () => Promise<T>): Promise<T> {
+    return this.mutationCoordinator.withLease({
+      hasLegacyPending: this.hasLegacyPending(),
+      operation: 'read Steward sizing view',
+    }, read)
+  }
+
   async resolveMutation(params: ResolveMutationParams): Promise<MutationResolveResult> {
     return this.mutationCoordinator.withLease({
       allowActiveAttempt: true,
