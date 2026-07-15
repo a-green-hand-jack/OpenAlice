@@ -18,6 +18,8 @@ export interface ServerConfig {
   readonly launcherRoot: string;
   /** Directory containing one subdirectory per template (each with bootstrap.sh). */
   readonly templatesDir: string;
+  /** Optional additive root for external instruction-only template overlays. */
+  readonly templateOverlayDir: string | null;
   /**
    * Legacy fallback: path to a single bootstrap script set via the old
    * `AQ_BOOTSTRAP_SCRIPT` env var. When present, registered as a synthetic
@@ -108,6 +110,9 @@ export function loadConfig(opts: LoadConfigOptions): ServerConfig {
     env['AQ_LAUNCHER_ROOT'] ?? join(homedir(), '.openalice', 'workspaces'),
   );
   const templatesDir = resolve(env['AQ_TEMPLATES_DIR'] ?? templatesPath());
+  const templateOverlayDir = env['AQ_TEMPLATE_OVERLAY_DIR']
+    ? resolve(env['AQ_TEMPLATE_OVERLAY_DIR'])
+    : null;
   const legacyBootstrapScript = env['AQ_BOOTSTRAP_SCRIPT']
     ? resolve(env['AQ_BOOTSTRAP_SCRIPT'])
     : null;
@@ -130,6 +135,7 @@ export function loadConfig(opts: LoadConfigOptions): ServerConfig {
     replayBufferBytes,
     launcherRoot,
     templatesDir,
+    templateOverlayDir,
     legacyBootstrapScript,
     templateDir,
     bootstrapTimeoutMs,

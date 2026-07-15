@@ -18,6 +18,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { dataPath, defaultPath } from '@/core/paths.js';
 
 import { injectWorkspaceContext, refreshWorkspaceInstructions } from './context-injector.js';
+import type { Logger } from './logger.js';
+import { TemplateRegistry } from './template-registry.js';
 import type { TemplateMeta } from './template-registry.js';
 
 // src/workspaces/ — this spec's directory.
@@ -25,12 +27,21 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 const CHAT_FILES = join(HERE, 'templates', 'chat', 'files');
 const STEWARD_DIR = join(HERE, 'templates', 'steward');
 const STEWARD_FILES = join(STEWARD_DIR, 'files');
+const testLogger: Logger = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+  event: () => undefined,
+  child: () => testLogger,
+};
 
 function makeTemplate(over: Partial<TemplateMeta>): TemplateMeta {
   return {
     name: 'test',
     bootstrapScript: '',
     filesDir: '',
+    instructionPath: '',
     templateDir: '',
     version: '0.0.0',
     defaultAgents: ['claude'],
@@ -77,7 +88,11 @@ describe('injectWorkspaceContext — persona', () => {
     const expected = `${persona}\n\n---\n\n${instruction}`;
 
     await injectWorkspaceContext({
-      template: makeTemplate({ injectPersona: true, filesDir: CHAT_FILES }),
+      template: makeTemplate({
+        injectPersona: true,
+        filesDir: CHAT_FILES,
+        instructionPath: join(CHAT_FILES, 'instruction.md'),
+      }),
       wsId: 'ws-abc',
       dir,
     });
@@ -97,6 +112,7 @@ describe('injectWorkspaceContext — persona', () => {
       name: 'steward',
       injectPersona: true,
       filesDir: STEWARD_FILES,
+      instructionPath: join(STEWARD_FILES, 'instruction.md'),
       templateDir: STEWARD_DIR,
     });
     await writeFile(join(dir, 'AGENTS.md'), 'stale v2 instructions\n', 'utf8');
@@ -107,6 +123,42 @@ describe('injectWorkspaceContext — persona', () => {
     expect(await read('AGENTS.md')).toContain('Decision Ledger Shape');
     expect(await read('AGENTS.md')).toContain('"version": 3');
     await expect(refreshWorkspaceInstructions({ template, dir })).resolves.toEqual({ changed: false });
+  });
+
+  it('uses a registry snapshot until a new registry load adopts changed overlay bytes', async () => {
+    const baseRoot = join(dir, 'base-templates');
+    const overlayRoot = join(dir, 'instruction-overlay');
+    const baseTemplateDir = join(baseRoot, 'chat');
+    const overlayTemplateDir = join(overlayRoot, 'chat');
+    const overlayInstruction = join(overlayTemplateDir, 'files', 'instruction.md');
+    await mkdir(join(baseTemplateDir, 'files'), { recursive: true });
+    await mkdir(join(overlayTemplateDir, 'files'), { recursive: true });
+    await Promise.all([
+      writeFile(join(baseTemplateDir, 'bootstrap.mjs'), 'export {};\n', 'utf8'),
+      writeFile(join(baseTemplateDir, 'files', 'instruction.md'), '# base instruction\n', 'utf8'),
+      writeFile(join(baseTemplateDir, 'template.json'), JSON.stringify({ injectPersona: true }), 'utf8'),
+      writeFile(join(overlayTemplateDir, 'template.json'), JSON.stringify({ extends: 'chat' }), 'utf8'),
+      writeFile(overlayInstruction, '# external overlay\n', 'utf8'),
+    ]);
+
+    const registry = await TemplateRegistry.load(baseRoot, testLogger, overlayRoot);
+    const template = registry.get('chat');
+    if (!template) throw new Error('expected overlay template');
+    await injectWorkspaceContext({ template, wsId: 'ws-overlay-create', dir });
+    expect(await read('AGENTS.md')).toContain('# external overlay');
+    expect(await read('CLAUDE.md')).toContain('# external overlay');
+
+    await writeFile(overlayInstruction, '# external overlay changed on disk\n', 'utf8');
+    await expect(refreshWorkspaceInstructions({ template, dir })).resolves.toEqual({ changed: false });
+    expect(await read('AGENTS.md')).toContain('# external overlay');
+    expect(await read('AGENTS.md')).not.toContain('changed on disk');
+
+    const reloaded = await TemplateRegistry.load(baseRoot, testLogger, overlayRoot);
+    const reloadedTemplate = reloaded.get('chat');
+    if (!reloadedTemplate) throw new Error('expected reloaded overlay template');
+    await expect(refreshWorkspaceInstructions({ template: reloadedTemplate, dir })).resolves.toEqual({ changed: true });
+    expect(await read('AGENTS.md')).toContain('# external overlay changed on disk');
+    expect(await read('CLAUDE.md')).toContain('# external overlay changed on disk');
   });
 });
 
@@ -169,6 +221,7 @@ describe('injectWorkspaceContext — steward context manifest', () => {
         name: 'steward',
         version: '0.1.0',
         filesDir: STEWARD_FILES,
+        instructionPath: join(STEWARD_FILES, 'instruction.md'),
         templateDir: STEWARD_DIR,
         injectPersona: true,
         injectTools: true,

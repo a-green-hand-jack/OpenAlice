@@ -8,7 +8,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,8 +16,12 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { injectWorkspaceContext } from './context-injector.js';
-import type { TemplateMeta } from './template-registry.js';
-import { commitInitial } from './workspace-creator.js';
+import { AdapterRegistry } from './cli-adapter.js';
+import { logger } from './logger.js';
+import { shellAdapter } from './adapters/shell.js';
+import { TemplateRegistry, type TemplateMeta } from './template-registry.js';
+import { WorkspaceCreator, commitInitial } from './workspace-creator.js';
+import { WorkspaceRegistry } from './workspace-registry.js';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url)); // src/workspaces/
 const CHAT_DIR = join(HERE, 'templates', 'chat');
@@ -51,6 +55,7 @@ function autoQuantMeta(): TemplateMeta {
     name: 'auto-quant',
     bootstrapScript: AQ_BOOTSTRAP,
     filesDir: join(AQ_DIR, 'files'),
+    instructionPath: join(AQ_DIR, 'files', 'instruction.md'),
     templateDir: AQ_DIR,
     version: '1.0.0',
     defaultAgents: ['claude', 'codex'],
@@ -77,6 +82,7 @@ function chatMeta(): TemplateMeta {
     name: 'chat',
     bootstrapScript: CHAT_BOOTSTRAP,
     filesDir: CHAT_FILES,
+    instructionPath: join(CHAT_FILES, 'instruction.md'),
     templateDir: CHAT_DIR,
     version: '1.0.0',
     defaultAgents: ['claude', 'codex'],
@@ -91,6 +97,7 @@ function stewardMeta(): TemplateMeta {
     name: 'steward',
     bootstrapScript: STEWARD_BOOTSTRAP,
     filesDir: STEWARD_FILES,
+    instructionPath: join(STEWARD_FILES, 'instruction.md'),
     templateDir: STEWARD_DIR,
     version: '0.1.0',
     defaultAgents: ['codex'],
@@ -267,5 +274,65 @@ describe('steward workspace create: scaffold → manifest → commit', () => {
     const statusAfterTick = await run('git', ['-C', dir, 'status', '--porcelain']);
     expect(statusAfterTick).not.toContain('supervisor.jsonl');
     expect(statusAfterTick.trim()).toBe('');
+  });
+});
+
+describe('steward instruction overlay: create and both runtime faces', () => {
+  it('uses the startup snapshot for creation and PTY/machine runtime leases', async () => {
+    const overlayRoot = join(parent, 'instruction-overlay');
+    const overlayInstruction = join(overlayRoot, 'steward', 'files', 'instruction.md');
+    await mkdir(join(overlayRoot, 'steward', 'files'), { recursive: true });
+    await Promise.all([
+      writeFile(join(overlayRoot, 'steward', 'template.json'), JSON.stringify({ extends: 'steward' }), 'utf8'),
+      writeFile(overlayInstruction, '# steward overlay startup snapshot\n', 'utf8'),
+    ]);
+
+    const templates = await TemplateRegistry.load(join(HERE, 'templates'), logger, overlayRoot);
+    const registry = await WorkspaceRegistry.load(join(parent, 'registry.json'), logger);
+    const adapters = new AdapterRegistry();
+    adapters.register(shellAdapter, { default: true });
+    const creator = new WorkspaceCreator({
+      workspacesRoot: parent,
+      templateRegistry: templates,
+      adapterRegistry: adapters,
+      bootstrapEnv: { templateDir: '', launcherRepoRoot: process.cwd() },
+      bootstrapTimeoutMs: 60_000,
+      registry,
+      logger,
+    });
+
+    const created = await creator.create('overlay-steward', 'steward', ['shell']);
+    expect(created.ok).toBe(true);
+    if (!created.ok) throw new Error(created.message);
+    expect(await readFile(join(created.workspace.dir, 'AGENTS.md'), 'utf8')).toContain(
+      '# steward overlay startup snapshot',
+    );
+    await writeFile(overlayInstruction, '# steward overlay changed on disk\n', 'utf8');
+
+    const pty = await creator.withStewardRuntimeLease(created.workspace, 'pty', async (runtime) => runtime);
+    const machine = await creator.withStewardRuntimeLease(created.workspace, 'machine', async (runtime) => runtime);
+    expect(pty.forceFresh).toBe(true);
+    expect(machine).toEqual({ desiredDigest: pty.desiredDigest, forceFresh: true });
+    expect(await readFile(join(created.workspace.dir, 'AGENTS.md'), 'utf8')).toContain(
+      '# steward overlay startup snapshot',
+    );
+    expect(await readFile(join(created.workspace.dir, 'AGENTS.md'), 'utf8')).not.toContain(
+      'changed on disk',
+    );
+
+    await expect(creator.withStewardRuntimeLease(
+      created.workspace,
+      'pty',
+      async (runtime) => runtime,
+    )).resolves.toEqual({ desiredDigest: pty.desiredDigest, forceFresh: false });
+    await expect(creator.withStewardRuntimeLease(
+      created.workspace,
+      'machine',
+      async (runtime) => runtime,
+    )).resolves.toEqual({ desiredDigest: pty.desiredDigest, forceFresh: false });
+    expect(JSON.parse(await readFile(join(created.workspace.dir, '.alice/steward/runtime-state.json'), 'utf8'))).toMatchObject({
+      desiredDigest: pty.desiredDigest,
+      acknowledged: { pty: pty.desiredDigest, machine: pty.desiredDigest },
+    });
   });
 });

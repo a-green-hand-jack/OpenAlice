@@ -54,4 +54,16 @@ describe('loadConfig (workspaces)', () => {
     })
     expect(cfg.allowAnyOrigin).toBe(true)
   })
+
+  it('keeps the optional instruction overlay root separate from AQ_TEMPLATES_DIR', () => {
+    const cfg = loadConfig({
+      webPort: 47331,
+      env: {
+        AQ_TEMPLATES_DIR: '/custom/base-templates',
+        AQ_TEMPLATE_OVERLAY_DIR: '/community/instruction-overlay',
+      },
+    })
+    expect(cfg.templatesDir).toBe('/custom/base-templates')
+    expect(cfg.templateOverlayDir).toBe('/community/instruction-overlay')
+  })
 })

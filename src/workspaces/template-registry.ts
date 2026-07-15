@@ -48,6 +48,10 @@ export interface TemplateMeta {
   readonly bootstrapScript: string;
   /** Absolute path to the template's `files/` directory (may not exist). */
   readonly filesDir: string;
+  /** Absolute source of launcher-injected instructions. */
+  readonly instructionPath: string;
+  /** Startup snapshot of an external overlay instruction, when configured. */
+  readonly instructionContent?: string;
   /** Absolute path to the template root (parent of `files/`). */
   readonly templateDir: string;
   /**
@@ -108,11 +112,14 @@ export class TemplateRegistry {
 
   private constructor() {}
 
-  static async load(dir: string, logger: Logger): Promise<TemplateRegistry> {
+  static async load(dir: string, logger: Logger, overlayDir?: string | null): Promise<TemplateRegistry> {
     const reg = new TemplateRegistry();
     const absDir = resolve(dir);
     if (!existsSync(absDir)) {
       logger.warn('templates.dir_missing', { dir: absDir });
+      if (overlayDir !== undefined && overlayDir !== null) {
+        throw new Error(`template overlay requires a readable base template root: ${absDir}`);
+      }
       return reg;
     }
     const entries = await readdir(absDir, { withFileTypes: true });
@@ -148,6 +155,7 @@ export class TemplateRegistry {
         ...(tplMeta.community !== undefined ? { community: tplMeta.community } : {}),
         bootstrapScript,
         filesDir,
+        instructionPath: join(filesDir, 'instruction.md'),
         templateDir,
         ...(hasReadme ? { readmePath } : {}),
         version,
@@ -160,7 +168,72 @@ export class TemplateRegistry {
       reg.byName.set(name, meta);
     }
     logger.info('templates.loaded', { dir: absDir, names: Array.from(reg.byName.keys()) });
+    if (overlayDir !== undefined && overlayDir !== null) {
+      await reg.applyInstructionOverlay(overlayDir);
+      logger.info('templates.overlay_loaded', { dir: resolve(overlayDir), names: Array.from(reg.byName.keys()) });
+    }
     return reg;
+  }
+
+  /**
+   * Applies one startup-only, instruction-only overlay root to already-loaded
+   * base templates. This intentionally is not a generic inheritance mechanism:
+   * an overlay must be named after its one base and may replace only the
+   * authoritative instruction source.
+   */
+  private async applyInstructionOverlay(dir: string): Promise<void> {
+    const absDir = resolve(dir);
+    if (!existsSync(absDir)) {
+      throw new Error(`template overlay root does not exist: ${absDir}`);
+    }
+    const entries = await readdir(absDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        throw new Error(`template overlay root may contain only template directories: ${join(absDir, entry.name)}`);
+      }
+      const name = entry.name;
+      const overlayDir = join(absDir, name);
+      const mjsBootstrap = join(overlayDir, 'bootstrap.mjs');
+      const shBootstrap = join(overlayDir, 'bootstrap.sh');
+      if (existsSync(mjsBootstrap) || existsSync(shBootstrap)) {
+        throw new Error(`template overlay "${name}" must not ship bootstrap scripts`);
+      }
+      const overlayEntries = await readdir(overlayDir, { withFileTypes: true });
+      const extraEntries = overlayEntries.filter((candidate) =>
+        candidate.name !== 'template.json' && candidate.name !== 'files',
+      );
+      if (extraEntries.length > 0) {
+        throw new Error(`template overlay "${name}" may contain only template.json and files/instruction.md`);
+      }
+
+      const extendsName = await readOverlayExtends(join(overlayDir, 'template.json'), name);
+      if (extendsName !== name) {
+        throw new Error(
+          `template overlay "${name}" must extend same-named base template "${name}"; recursive inheritance is unsupported`,
+        );
+      }
+      const base = this.byName.get(name);
+      if (!base) {
+        throw new Error(`template overlay "${name}" base template "${name}" is not registered`);
+      }
+      if (!base.injectPersona) {
+        throw new Error(
+          `template overlay "${name}" base template "${name}" does not enable persona instruction injection`,
+        );
+      }
+
+      const filesDir = join(overlayDir, 'files');
+      const instructionPath = join(filesDir, 'instruction.md');
+      if (!existsSync(instructionPath)) {
+        throw new Error(`template overlay "${name}" is missing files/instruction.md`);
+      }
+      const filesEntries = await readdir(filesDir, { withFileTypes: true });
+      if (filesEntries.length !== 1 || filesEntries[0]?.name !== 'instruction.md' || !filesEntries[0].isFile()) {
+        throw new Error(`template overlay "${name}" files directory may contain only instruction.md`);
+      }
+      const instructionContent = await readFile(instructionPath, 'utf8');
+      this.byName.set(name, { ...base, instructionPath, instructionContent });
+    }
   }
 
   /**
@@ -204,6 +277,25 @@ interface ParsedTemplateMeta {
   readonly injectPersona: boolean;
   readonly bundledSkills: readonly string[];
   readonly agentCredentials?: Readonly<Record<string, AgentCredentialDecl>>;
+}
+
+async function readOverlayExtends(path: string, name: string): Promise<string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(path, 'utf8'));
+  } catch (err) {
+    throw new Error(
+      `template overlay "${name}" has an unreadable template.json: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`template overlay "${name}" template.json must contain only an "extends" field`);
+  }
+  const fields = Object.keys(parsed);
+  if (fields.length !== 1 || fields[0] !== 'extends' || typeof (parsed as Record<string, unknown>)['extends'] !== 'string') {
+    throw new Error(`template overlay "${name}" template.json must contain only an "extends" field`);
+  }
+  return (parsed as { extends: string }).extends;
 }
 
 /**
