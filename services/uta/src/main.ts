@@ -38,6 +38,7 @@ import { createTradingRoutes } from './http/routes-trading.js'
 import { createSimulatorRoutes } from './http/routes-simulator.js'
 import type { UTAEngineContext } from './types.js'
 import { resolveTradingModePolicy } from '@/services/trading-mode.js'
+import { createVerifiedMockStewardMutationAdapter } from './domain/trading/steward-mutation-adapter.js'
 
 const UTA_PORT = Number(process.env['OPENALICE_UTA_PORT'] ?? 47333)
 const CATALOG_REFRESH_MS = 6 * 60 * 60 * 1000  // 6h
@@ -68,11 +69,15 @@ async function main(): Promise<void> {
   const eventLog = await createEventLog()
   const eventSink = createUtaEventSinkFromEnv()
   const toolCenter = new ToolCenter()
-  const utaManager = new UTAManager({
+  let utaManager: UTAManager
+  utaManager = new UTAManager({
     eventLog,
     toolCenter,
     eventSink,
     tradingMode: tradingModePolicy.mode,
+    ...(tradingModePolicy.mode === 'readonly'
+      ? { stewardMutationFixtureProducer: createVerifiedMockStewardMutationAdapter((id) => utaManager.get(id)) }
+      : {}),
   })
   if (tradingModePolicy.mode !== 'pro') {
     console.warn(`[uta] ${tradingModePolicy.mode} containment active for every unverified broker preset; only the verified isolation allowlist remains writable`)

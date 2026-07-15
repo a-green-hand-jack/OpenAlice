@@ -15,8 +15,10 @@ import {
   UTA_STEWARD_WORKSPACE_AUTHZ_HEADER,
   stewardUtaMutationRequestSchema,
   stewardUtaMutationResponseSchema,
+  stewardAuthoritativeSizingViewSchema,
   type StewardUtaMutationRequest,
   type StewardUtaMutationResponse,
+  type StewardAuthoritativeSizingView,
 } from '@traderalice/uta-protocol'
 import type {
   UTAClient,
@@ -283,6 +285,14 @@ export class UTAAccountSDK {
       `/api/trading/uta/${encodeURIComponent(this.id)}/steward/admission`,
       request,
     )
+  }
+
+  async readStewardSizingView(instrument: string): Promise<StewardAuthoritativeSizingView> {
+    const response = await this.client.get<StewardAuthoritativeSizingView>(
+      `/api/trading/uta/${encodeURIComponent(this.id)}/steward/sizing-view`,
+      { instrument },
+    )
+    return stewardAuthoritativeSizingViewSchema.parse(response)
   }
 
   bindStewardMutationCapability(

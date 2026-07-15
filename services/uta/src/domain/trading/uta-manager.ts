@@ -21,6 +21,8 @@ import {
   STEWARD_UTA_MUTATION_BOUNDARY_VERSION,
   STEWARD_UTA_MUTATION_MINIMUM_AUTHZ_LEVEL,
   stewardSizingSourceVersionsSchema,
+  stewardSizingViewRequestSchema,
+  stewardAuthoritativeSizingViewSchema,
   stewardUtaMutationRequestSchema,
   type GitExportState,
   type Operation,
@@ -29,6 +31,8 @@ import {
   type StewardAdmissionRequest,
   type StewardAdmissionResponse,
   type StewardSizingSourceVersions,
+  type StewardAuthoritativeSizingView,
+  type StewardSizingViewRequest,
   type StewardUtaMutationRequest,
   type StewardUtaMutationRejectionCode,
   type StewardUtaMutationResponse,
@@ -91,6 +95,9 @@ export interface StewardMutationFixtureProducer {
     readonly request: StewardUtaMutationRequest
     readonly operation: Operation
   }): Promise<unknown>
+  /** Production adapters may only be used under the explicit D5 containment
+   * policy below; legacy fixture producers remain test-only. */
+  readonly productionAdapter?: boolean
 }
 
 export interface StewardMutationCriticalSection {
@@ -145,6 +152,17 @@ export function resolveUtaRuntimePolicy(cfg: UTAConfig, tradingMode: TradingMode
       presetConfig: cfg.presetConfig,
     }),
   }
+}
+
+/** D5's production adapter is intentionally narrower than generic readonly
+ * containment: only the built-in in-memory simulator can receive this path. */
+export function isVerifiedMockStewardAdapterPolicy(
+  cfg: Pick<UTAConfig, 'presetId' | 'presetConfig'> | undefined,
+  tradingMode: TradingMode,
+): boolean {
+  return tradingMode === 'readonly'
+    && cfg?.presetId === 'mock-simulator'
+    && resolveBrokerMutationContainmentClass({ presetId: cfg.presetId, presetConfig: cfg.presetConfig }) === 'verified-isolated'
 }
 
 export class UTAManager {
@@ -326,6 +344,25 @@ export class UTAManager {
   }
 
   /**
+   * UTA is the only producer of sizing inputs. The config lock makes the
+   * envelope/authz snapshot linearizable with its version; broker reads are
+   * fingerprinted so the mutation boundary can reject any later drift.
+   */
+  async readStewardSizingView(
+    utaId: string,
+    requestInput: StewardSizingViewRequest,
+  ): Promise<StewardAuthoritativeSizingView> {
+    const request = stewardSizingViewRequestSchema.parse(requestInput)
+    const uta = this.entries.get(utaId)
+    if (!uta) throw new Error(`UTA ${utaId} is not configured`)
+    return withLockedUTAsConfig(async (accounts) => {
+      const cfg = accounts.find((account) => account.id === utaId)
+      if (!cfg) throw new Error(`UTA ${utaId} is not configured`)
+      return this.buildStewardSizingView(uta, cfg, request.instrument)
+    })
+  }
+
+  /**
    * Concrete D2 mutation boundary. TradingGit acquires the account mutation
    * lease first; its boundary callback then acquires the accounts-config lock
    * and keeps it through admission, durable external-key dedupe, any required
@@ -348,6 +385,9 @@ export class UTAManager {
       return { ...identity, status: 'rejected', code: 'mutation_capability_unavailable' }
     }
     const producer = this.stewardMutationFixtureProducer
+    if (producer.productionAdapter && !this.isVerifiedMockStewardAdapterConfig(utaId)) {
+      return { ...identity, status: 'rejected', code: 'mutation_capability_unavailable' }
+    }
     const payloadFingerprint = stewardMutationPayloadFingerprint(request)
 
     try {
@@ -379,9 +419,21 @@ export class UTAManager {
           return transaction(durableState, async () => {
             let actualVersions: StewardSizingSourceVersions
             try {
-              actualVersions = stewardSizingSourceVersionsSchema.parse(
-                await producer.readSourceVersions({ accountId: utaId, request }),
-              )
+              if (producer.productionAdapter) {
+                const view = await this.buildStewardSizingView(
+                  uta,
+                  this.configs.get(utaId) as UTAConfig,
+                  request.operation.instrument,
+                )
+                if (!supportsStewardMutationRequest(request, view)) {
+                  throw new Error('broker capabilities do not support deterministic Steward operation')
+                }
+                actualVersions = stewardSizingSourceVersionsSchema.parse(view.sourceStateVersions)
+              } else {
+                actualVersions = stewardSizingSourceVersionsSchema.parse(
+                  await producer.readSourceVersions({ accountId: utaId, request }),
+                )
+              }
             } catch {
               throw new StewardMutationBoundaryRejection('source_state_invalid')
             }
@@ -447,6 +499,88 @@ export class UTAManager {
       // missing envelope at the autonomous admission boundary.
       return { riskEnvelope: null, accountMaxAuthzLevel: null }
     }
+  }
+
+  private isVerifiedMockStewardAdapterConfig(utaId: string): boolean {
+    return isVerifiedMockStewardAdapterPolicy(this.configs.get(utaId), this.tradingMode)
+  }
+
+  private async buildStewardSizingView(
+    uta: UnifiedTradingAccount,
+    cfg: UTAConfig,
+    instrument: string,
+  ): Promise<StewardAuthoritativeSizingView> {
+    const contract = uta.contractFromAliceId(instrument)
+    const [account, positions, quote] = await Promise.all([
+      uta.getAccount(),
+      uta.getPositions(),
+      uta.getQuote(contract),
+    ])
+    const position = positions.find((item) => item.contract.aliceId === instrument)
+    const quantity = position
+      ? (position.side === 'short' ? position.quantity.negated() : position.quantity).toString()
+      : '0'
+    const mark = position?.marketPrice ?? quote.last
+    const markPrice = isPositiveDecimal(mark) ? mark : null
+    const envelope = resolveProductionRiskEnvelope(cfg.riskEnvelope)
+    const riskState = uta.getRiskState()
+    const capabilities = uta.getCapabilities()
+    const available = envelope.ok
+      ? {
+          kind: 'available' as const,
+          envelopeVersion: envelope.envelope.version,
+          scopeAllowed: envelope.envelope.scope.symbols.includes(instrument)
+            || envelope.envelope.scope.symbols.includes(contract.localSymbol)
+            || envelope.envelope.scope.symbols.includes(contract.symbol),
+          increaseAllowed: !envelope.envelope.revoked && riskState.state === 'NORMAL',
+          caps: {
+            maxPositionPctOfEquity: String(envelope.envelope.maxPositionPctOfEquity),
+            maxSingleOrderPctOfEquity: String(envelope.envelope.maxSingleOrderPctOfEquity),
+            // Risk-state evaluation is authoritative but does not yet expose a
+            // loss remainder. Zero is the conservative fail-closed projection.
+            remainingLossPctOfEquity: riskState.state === 'NORMAL'
+              ? String(Math.min(envelope.envelope.maxDailyLossPct, envelope.envelope.maxDrawdownPct))
+              : '0',
+          },
+        }
+      : { kind: 'missing' as const }
+    const accountStateVersion = fingerprint({ account, positions, quote: markPrice, instrument })
+    const riskStateVersion = fingerprint(riskState)
+    const capabilitiesStateVersion = fingerprint(capabilities)
+    return stewardAuthoritativeSizingViewSchema.parse({
+      version: 1,
+      account: {
+        accountId: uta.id,
+        accountStateVersion,
+        equity: account.netLiquidation,
+        instrument: {
+          instrument,
+          positionQuantity: quantity,
+          markPrice,
+          contractMultiplier: contract.multiplier || position?.multiplier || '1',
+          quantityIncrement: '1',
+        },
+      },
+      risk: {
+        accountId: uta.id,
+        riskStateVersion,
+        envelope: available,
+      },
+      brokerCapabilities: {
+        capabilitiesStateVersion,
+        market: capabilities.supportedOrderTypes.includes('MKT'),
+        stop: capabilities.supportedOrderTypes.includes('STP'),
+        stopLimit: capabilities.supportedOrderTypes.includes('STP LMT')
+          ? { supported: true, limitOffsetBps: 25 }
+          : { supported: false },
+      },
+      sourceStateVersions: {
+        accountState: accountStateVersion,
+        riskState: riskStateVersion,
+        riskEnvelope: available.kind === 'available' ? available.envelopeVersion : null,
+        brokerCapabilities: capabilitiesStateVersion,
+      },
+    })
   }
 
   private async withLockedAdmissionSource<T>(
@@ -669,4 +803,27 @@ function canonicalizeJson(value: unknown): unknown {
   return Object.fromEntries(
     Object.keys(source).sort().map((key) => [key, canonicalizeJson(source[key])]),
   )
+}
+
+function fingerprint(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(canonicalizeJson(value))).digest('hex')
+}
+
+function isPositiveDecimal(value: string | undefined): value is string {
+  if (!value) return false
+  try {
+    return new Decimal(value).isFinite() && new Decimal(value).gt(0)
+  } catch {
+    return false
+  }
+}
+
+export function supportsStewardMutationRequest(
+  request: StewardUtaMutationRequest,
+  view: StewardAuthoritativeSizingView,
+): boolean {
+  if (!('protection' in request)) return view.brokerCapabilities.market
+  return request.protection.orderType === 'STP'
+    ? view.brokerCapabilities.stop
+    : view.brokerCapabilities.stopLimit.supported
 }

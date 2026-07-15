@@ -1052,6 +1052,21 @@ export class UnifiedTradingAccount {
     return this.git.executeStewardMutation(params)
   }
 
+  /** Narrow dispatch surface for the UTA-owned Steward adapter. It intentionally
+   * bypasses stage/commit/push while still crossing the account containment
+   * gate; TradingGit owns durability, idempotency, and admission sequencing. */
+  async dispatchStewardOperation(operation: Operation): Promise<unknown> {
+    this.assertBrokerMutationAllowed(operation.action)
+    switch (operation.action) {
+      case 'placeOrder':
+        return this._callBroker(() => this.broker.placeOrder(operation.contract, operation.order, operation.tpsl))
+      case 'closePosition':
+        return this._callBroker(() => this.broker.closePosition(operation.contract, operation.quantity))
+      default:
+        throw new LocalNoDispatchError(`Unsupported Steward operation: ${operation.action}`)
+    }
+  }
+
   private _emitRiskRejectedPush(err: unknown, approver?: ApproverIdentity): void {
     const status = this.git.status()
     const reason = err instanceof Error ? err.message : String(err)

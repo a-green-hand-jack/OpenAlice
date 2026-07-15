@@ -11,7 +11,7 @@ const persistenceMock = vi.hoisted(() => ({
 vi.mock('./brokers/factory.js', () => ({ createBroker: factoryMock.createBroker }))
 vi.mock('./git-persistence.js', () => persistenceMock)
 
-import { UTAManager } from './uta-manager.js'
+import { isVerifiedMockStewardAdapterPolicy, UTAManager } from './uta-manager.js'
 
 const managers: UTAManager[] = []
 let latestBroker: MockBroker
@@ -67,6 +67,17 @@ async function exercise(cfg: UTAConfig, tradingMode: TradingMode) {
 }
 
 describe('UTAManager containment propagation', () => {
+  it.each([
+    ['readonly verified mock', verifiedMock, 'readonly', true],
+    ['lite mock', verifiedMock, 'lite', false],
+    ['pro mock', verifiedMock, 'pro', false],
+    ['readonly external preset', externalPaper, 'readonly', false],
+    ['unknown preset', policyConfig('unknown', {}), 'readonly', false],
+    ['missing config', undefined, 'readonly', false],
+  ] as const)('allows the production Steward adapter only for %s', (_label, cfg, mode, expected) => {
+    expect(isVerifiedMockStewardAdapterPolicy(cfg, mode)).toBe(expected)
+  })
+
   it.each(['readonly', 'lite'] as const)(
     '%s propagates real preset config as unverified and blocks broker mutation',
     async (tradingMode) => {

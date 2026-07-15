@@ -144,6 +144,34 @@ async function createHarness() {
 }
 
 describe('Steward mutation internal HTTP + SDK binding', () => {
+  it('serves the authoritative sizing view through the strict route and SDK schema', async () => {
+    const harness = await createHarness()
+    const view = {
+      version: 1 as const,
+      account: { accountId: ACCOUNT_ID, accountStateVersion: 'account:1', equity: '100000', instrument: {
+        instrument: `${ACCOUNT_ID}|ASSET-A`, positionQuantity: '0', markPrice: '100', contractMultiplier: '1', quantityIncrement: '1',
+      } },
+      risk: { accountId: ACCOUNT_ID, riskStateVersion: 'risk:1', envelope: { kind: 'available' as const, envelopeVersion: 3,
+        scopeAllowed: true, increaseAllowed: true, caps: { maxPositionPctOfEquity: '25', maxSingleOrderPctOfEquity: '20', remainingLossPctOfEquity: '5' },
+      } },
+      brokerCapabilities: { capabilitiesStateVersion: 'caps:1', market: true, stop: true, stopLimit: { supported: true as const, limitOffsetBps: 25 } },
+      sourceStateVersions: { accountState: 'account:1', riskState: 'risk:1', riskEnvelope: 3, brokerCapabilities: 'caps:1' },
+    }
+    const read = vi.spyOn(harness.manager, 'readStewardSizingView').mockResolvedValue(view)
+    const client = createUTAClient({
+      baseUrl: 'http://uta.test', internalToken: INTERNAL_TOKEN,
+      fetch: async (input, init) => harness.app.fetch(new Request(input, init)),
+    })
+    try {
+      await expect(new UTAAccountSDK({ client, id: ACCOUNT_ID })
+        .readStewardSizingView(`${ACCOUNT_ID}|ASSET-A`)).resolves.toEqual(view)
+      expect(read).toHaveBeenCalledWith(ACCOUNT_ID, { version: 1, instrument: `${ACCOUNT_ID}|ASSET-A` })
+      await expect(client.get(`/api/trading/uta/${ACCOUNT_ID}/steward/sizing-view`)).rejects.toMatchObject({ status: 400 })
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('durably deduplicates a retry after the first HTTP acknowledgement is lost', async () => {
     const harness = await createHarness()
     let loseFirstAcceptedResponse = true

@@ -9,3 +9,4 @@
 
 export * from './risk-envelope.js'
 export * from './steward-mutation.js'
+export * from './steward-sizing-view.js'

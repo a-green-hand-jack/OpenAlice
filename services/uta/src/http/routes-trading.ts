@@ -12,6 +12,7 @@ import {
   AUTHZ_LEVELS,
   UTA_STEWARD_WORKSPACE_AUTHZ_HEADER,
   stewardAdmissionRequestSchema,
+  stewardSizingViewRequestSchema,
   stewardUtaMutationRequestSchema,
   stewardUtaMutationResponseSchema,
   type ApproverIdentity,
@@ -598,6 +599,21 @@ export function createTradingRoutes(ctx: UTAEngineContext) {
   })
 
   // ==================== Per-account wallet/git routes ====================
+
+  app.get('/uta/:id/steward/sizing-view', async (c) => {
+    const id = c.req.param('id')
+    if (!ctx.utaManager.has(id)) return c.json({ error: 'Account not found' }, 404)
+    try {
+      const request = stewardSizingViewRequestSchema.parse({
+        version: 1,
+        instrument: c.req.query('instrument'),
+      })
+      return c.json(await ctx.utaManager.readStewardSizingView(id, request))
+    } catch (err) {
+      if (err instanceof z.ZodError) return c.json({ error: err.message }, 400)
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
 
   app.post('/uta/:id/steward/admission', async (c) => {
     const id = c.req.param('id')

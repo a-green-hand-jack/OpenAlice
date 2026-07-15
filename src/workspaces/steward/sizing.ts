@@ -2,10 +2,16 @@ import Decimal from 'decimal.js';
 import { z } from 'zod';
 import {
   compareStewardSizingSourceVersions,
+  stewardSizingAccountViewSchema,
+  stewardSizingRiskViewSchema,
+  stewardBrokerProtectionCapabilitiesSchema,
   stewardDeterministicOperationSchema,
   stewardProtectiveEntryPlanSchema,
   stewardSizingSourceVersionsSchema,
   type StewardDeterministicOperation,
+  type StewardSizingAccountView,
+  type StewardSizingRiskView,
+  type StewardBrokerProtectionCapabilities,
   type StewardProtectiveEntryPlan,
   type StewardSizingSourceVersions,
   type StewardSourceVersionBarrierResult,
@@ -19,10 +25,6 @@ export const PORTFOLIO_PROPOSAL_ONLY_CODE = 'portfolio_proposal_only';
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
-const sourceVersionSchema = z.union([
-  nonEmptyStringSchema,
-  z.number().int().nonnegative(),
-]);
 
 function decimalStringSchema(options: { readonly positive?: boolean } = {}) {
   return z.string().refine((value) => {
@@ -38,76 +40,18 @@ function decimalStringSchema(options: { readonly positive?: boolean } = {}) {
     : { message: 'expected a finite decimal string' });
 }
 
-const decimalSchema = decimalStringSchema();
 const positiveDecimalSchema = decimalStringSchema({ positive: true });
-const percentDecimalSchema = positiveDecimalSchema.or(z.literal('0')).refine((value) => new Decimal(value).lte(100), {
-  message: 'expected a decimal percentage from 0 through 100',
-});
 
-/**
- * Normalized account view supplied by the future #185 adapter. This is not a
- * persisted account schema: the sizing core needs one versioned instrument
- * projection and deliberately knows nothing about #185's storage shape.
- */
-export const stewardSizingAccountViewSchema = z.object({
-  accountId: nonEmptyStringSchema,
-  accountStateVersion: sourceVersionSchema,
-  equity: positiveDecimalSchema,
-  instrument: z.object({
-    instrument: nonEmptyStringSchema,
-    positionQuantity: decimalSchema,
-    markPrice: positiveDecimalSchema.nullable(),
-    contractMultiplier: positiveDecimalSchema,
-    quantityIncrement: positiveDecimalSchema,
-  }).strict(),
-}).strict();
-export type StewardSizingAccountView = z.infer<typeof stewardSizingAccountViewSchema>;
-
-const normalizedRiskCapsSchema = z.object({
-  maxPositionPctOfEquity: percentDecimalSchema,
-  maxSingleOrderPctOfEquity: percentDecimalSchema,
-  // #185 computes this conservative remainder by intersecting every active
-  // loss ceiling (including daily-loss and drawdown state). The sizing core
-  // consumes the normalized remainder rather than duplicating envelope logic.
-  remainingLossPctOfEquity: percentDecimalSchema,
-}).strict();
-
-/**
- * Normalized Risk Envelope view supplied by #185. `riskStateVersion` covers
- * mutable loss/drawdown state; `envelopeVersion` covers the governing policy.
- * Production envelope persistence and compilation remain #185's concern.
- */
-export const stewardSizingRiskViewSchema = z.object({
-  accountId: nonEmptyStringSchema,
-  riskStateVersion: sourceVersionSchema,
-  envelope: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('missing') }).strict(),
-    z.object({
-      kind: z.literal('available'),
-      envelopeVersion: sourceVersionSchema,
-      scopeAllowed: z.boolean(),
-      increaseAllowed: z.boolean(),
-      caps: normalizedRiskCapsSchema,
-    }).strict(),
-  ]),
-}).strict();
-export type StewardSizingRiskView = z.infer<typeof stewardSizingRiskViewSchema>;
-
-export const stewardBrokerProtectionCapabilitiesSchema = z.object({
-  capabilitiesStateVersion: sourceVersionSchema,
-  market: z.boolean(),
-  stop: z.boolean(),
-  stopLimit: z.discriminatedUnion('supported', [
-    z.object({ supported: z.literal(false) }).strict(),
-    z.object({
-      supported: z.literal(true),
-      limitOffsetBps: z.number().finite().positive().lt(10_000),
-    }).strict(),
-  ]),
-}).strict();
-export type StewardBrokerProtectionCapabilities = z.infer<
-  typeof stewardBrokerProtectionCapabilitiesSchema
->;
+export {
+  stewardSizingAccountViewSchema,
+  stewardSizingRiskViewSchema,
+  stewardBrokerProtectionCapabilitiesSchema,
+};
+export type {
+  StewardSizingAccountView,
+  StewardSizingRiskView,
+  StewardBrokerProtectionCapabilities,
+};
 
 const protectionRequestSchema = z.discriminatedUnion('kind', [
   z.object({
