@@ -15,6 +15,15 @@ const CODEX_PROVIDER_NAME = 'workspace';
 /** Exported so callers (and tests) can locate the override file without
  *  duplicating the path literal — issue #146 MAJOR-2 review. */
 export const CODEX_MODEL_OVERRIDE_PATH = '.alice/steward/core-agent-model.txt';
+// Outside .codex/ on purpose (issue #230 correction): Codex CLI itself does a
+// cold-start bootstrap the FIRST time it's pointed at any CODEX_HOME — it
+// writes its own config.toml/skills/sessions/sqlite state/version.json/
+// installation_id — so nothing inside .codex/ can reliably distinguish
+// "OpenAlice wrote a provider override" from "Codex initialized itself after
+// CODEX_HOME got redirected for an unrelated reason (e.g. the workspace
+// merely has .codex/agents/*.toml subagent defs)". This marker lives in
+// OpenAlice's own namespace, where Codex has no reason to ever write.
+export const CODEX_OVERRIDE_MARKER_PATH = '.alice/codex-provider-override.marker';
 
 /**
  * OpenAI Codex CLI (Rust rewrite, `codex-cli`).
@@ -37,18 +46,31 @@ export const CODEX_MODEL_OVERRIDE_PATH = '.alice/steward/core-agent-model.txt';
  *
  * AI provider model — two modes, mutually exclusive:
  *
- *   1. **Default (no override).** Workspace has no `.codex/` directory.
- *      Adapter doesn't set `CODEX_HOME`. Codex reads the user's global
- *      `~/.codex/auth.json` + `~/.codex/config.toml` — exactly what a
- *      vanilla `codex` invocation in any project does. The OpenAlice MCP
- *      servers are wired via per-invocation `-c mcp_servers...url=...`
- *      flags in `composeCommand` below, so MCP is visible without polluting
- *      the user's global config.
+ *   1. **Default (no override).** Workspace has no
+ *      `.alice/codex-provider-override.marker`. Adapter doesn't set
+ *      `CODEX_HOME`. Codex reads the user's global `~/.codex/auth.json` +
+ *      `~/.codex/config.toml` — exactly what a vanilla `codex` invocation in
+ *      any project does. The OpenAlice MCP servers are wired via
+ *      per-invocation `-c mcp_servers...url=...` flags in `composeCommand`
+ *      below, so MCP is visible without polluting the user's global config.
  *
  *   2. **Override (user-configured via OpenAlice UI).** Workspace has its
- *      own `.codex/{config.toml, env.json[, auth.json]}`. Adapter sets
- *      `CODEX_HOME=<cwd>/.codex`. Codex reads workspace files only,
- *      isolated from global state.
+ *      own `.codex/{config.toml, env.json[, auth.json]}` PLUS the marker
+ *      above. Adapter sets `CODEX_HOME=<cwd>/.codex`. Codex reads workspace
+ *      files only, isolated from global state.
+ *
+ * Issue #230 (two correction rounds): the judgment used to be "does
+ * `.codex/` exist" — but Codex CLI's own cold-start bootstrap writes a whole
+ * `.codex/` tree (config.toml/sqlite/skills/sessions/version.json) the FIRST
+ * time CODEX_HOME points anywhere new, and `.codex/agents/*.toml` (Codex's
+ * own project-scoped subagent defs, unrelated to provider override) also
+ * makes `.codex/` non-empty. Either one used to falsely trigger
+ * `CODEX_HOME` redirection into a "home" with no `auth.json`, breaking auth
+ * (401) or leaving the PTY stuck. The marker above is the only thing this
+ * adapter treats as proof of an OpenAlice-configured override; the reset
+ * path likewise only removes files it can prove it owns (marker or an exact
+ * legacy `writeAiConfig` signature — see `isStrictLegacyCodexOverride`) and
+ * always leaves Codex-native / user content in `.codex/` untouched.
  *
  * No symlinks, no global-fallback inheritance. The `-c` flag is OpenAlice's
  * workspace-scoped MCP registration — analogous to claude's `.mcp.json` cwd
@@ -141,15 +163,19 @@ export const codexAdapter: CliAdapter = {
     const hasProvider = !!(cred.baseUrl || cred.model);
 
     if (!hasProvider) {
-      // Reset: tear down the workspace's entire `.codex/` directory. The
-      // adapter's `composeEnv` won't set `CODEX_HOME` when the directory is
-      // absent, so codex falls back to the user's global `~/.codex/`. We
-      // don't leave empty stubs behind — workspace files exist only when
-      // there's an actual override. Note: `CODEX_HOME` is exclusive (not a
-      // merge layer), so a half-empty `.codex/` would *shadow* the user's
-      // global login and break auth. Full teardown is the only safe reset.
-      const codexDir = join(cwd, '.codex');
-      await rm(codexDir, { recursive: true, force: true });
+      // Reset must only remove files OpenAlice can PROVE it owns — the
+      // marker, or (pre-migration edge case) an exact legacy `writeAiConfig`
+      // signature (see `isStrictLegacyCodexOverride`). Everything else in
+      // `.codex/` — Codex-native cold-start content, `.codex/agents/*.toml`,
+      // `.codex/sessions/`, hand-authored config — is left untouched (issue
+      // #230 round-3 correction: a prior version of this reset deleted the
+      // ENTIRE `.codex/` directory, which also destroyed content this
+      // adapter never wrote).
+      const owned = existsSync(join(cwd, CODEX_OVERRIDE_MARKER_PATH)) || isStrictLegacyCodexOverride(cwd);
+      if (!owned) return; // nothing OpenAlice-owned to reset
+      await rm(join(cwd, CODEX_CONFIG_PATH), { force: true });
+      await rm(join(cwd, CODEX_ENV_PATH), { force: true });
+      await rm(join(cwd, CODEX_OVERRIDE_MARKER_PATH), { force: true });
       return;
     }
 
@@ -181,6 +207,10 @@ export const codexAdapter: CliAdapter = {
     } else {
       await writeWorkspaceFile(cwd, CODEX_ENV_PATH, '{}\n');
     }
+
+    // Marker: the sole thing composeEnv/listOnDisk/readCodexContextTelemetry
+    // trust as proof this workspace has an OpenAlice-configured override.
+    await writeWorkspaceFile(cwd, CODEX_OVERRIDE_MARKER_PATH, '');
   },
 
   async readAiConfig(cwd: string): Promise<WorkspaceAiCred | null> {
@@ -223,11 +253,15 @@ export const codexAdapter: CliAdapter = {
   },
 
   /**
-   * Set `CODEX_HOME` only when workspace has its own `.codex/` directory
-   * (override mode). Otherwise codex falls back to its own `~/.codex/`,
-   * which is its normal behavior in any uninvolved project. The "reset
-   * to default" UI action deletes the entire `.codex/` directory so the
-   * adapter naturally falls back here.
+   * Set `CODEX_HOME` only when the workspace carries OpenAlice's own
+   * override marker (`.alice/codex-provider-override.marker`) — NOT merely
+   * because `.codex/` exists (issue #230: Codex's own cold-start bootstrap,
+   * or an unrelated `.codex/agents/*.toml` subagent def, can make `.codex/`
+   * non-empty without OpenAlice ever configuring a provider override).
+   * Otherwise codex falls back to its own `~/.codex/`, which is its normal
+   * behavior in any uninvolved project. The "reset to default" UI action
+   * removes the marker (see `writeAiConfig`) so the adapter naturally falls
+   * back here.
    *
    * `.codex/env.json` is OpenAlice's per-workspace key bridge. Codex's
    * `[model_providers.X].env_key` field indirects through an env var; the
@@ -239,7 +273,7 @@ export const codexAdapter: CliAdapter = {
   composeEnv(ctx: SpawnContext): Record<string, string> {
     const result: Record<string, string> = {};
     const workspaceCodex = join(ctx.cwd, '.codex');
-    if (!existsSync(workspaceCodex)) return result;
+    if (!existsSync(join(ctx.cwd, CODEX_OVERRIDE_MARKER_PATH))) return result;
     result['CODEX_HOME'] = workspaceCodex;
     const envFile = join(workspaceCodex, 'env.json');
     if (existsSync(envFile)) {
@@ -273,7 +307,7 @@ export const codexAdapter: CliAdapter = {
    * newest dated leaves since a just-spawned session is today's.
    */
   async listOnDisk(cwd: string): Promise<readonly OnDiskSession[]> {
-    const root = existsSync(join(cwd, '.codex'))
+    const root = existsSync(join(cwd, CODEX_OVERRIDE_MARKER_PATH))
       ? join(cwd, '.codex', 'sessions')
       : join(homedir(), '.codex', 'sessions');
     const target = resolve(cwd);
@@ -319,6 +353,65 @@ export const codexAdapter: CliAdapter = {
     return readCodexContextTelemetry(cwd, sessionId);
   },
 };
+
+/**
+ * A workspace's `.codex/{config.toml,env.json}` were produced by THIS
+ * adapter's `writeAiConfig` — never inferred from "a `.codex/` file happens
+ * to exist", because Codex CLI's own cold-start bootstrap can and does
+ * create a `config.toml` with unrelated content (issue #230 round-2
+ * correction: observed `personality = "pragmatic"` +
+ * `[projects."<abs>"] trust_level = "trusted"`, byte-identical in shape to
+ * what `ensureTrustedProject()` itself writes — NOT `writeAiConfig`'s
+ * shape). Every one of the checks below is a literal string `writeAiConfig`
+ * hardcodes (the provider name / env-key literal / the fixed `"responses"`
+ * wire / the top-level `model_provider` literal) — Codex's own generated
+ * config cannot coincidentally satisfy all of them at once.
+ *
+ * Used ONLY for the pre-migration edge case in `writeAiConfig`'s reset path
+ * (a legacy override that predates this issue's marker). Going forward every
+ * override write also writes the marker directly, so this signature check is
+ * never on the `composeEnv`/`listOnDisk`/telemetry hot path.
+ *
+ * Known, deliberately accepted blind spot: `writeAiConfig` also has a
+ * "model-only" shape (`cred.model` set, no `cred.baseUrl`) that writes just
+ * `model = "..."` with no `[model_providers.workspace]` block — this is
+ * indistinguishable from Codex-native/user config, so it is NOT recognized
+ * here. Such a legacy workspace falls back to the global login until the
+ * user re-saves a provider config in the UI (which writes a fresh marker).
+ */
+export function isStrictLegacyCodexOverride(cwd: string): boolean {
+  const envRaw = readFileIfExists(join(cwd, CODEX_ENV_PATH));
+  if (envRaw === null) return false;
+  try {
+    const parsed: unknown = JSON.parse(envRaw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
+  } catch {
+    return false;
+  }
+
+  const tomlRaw = readFileIfExists(join(cwd, CODEX_CONFIG_PATH));
+  if (tomlRaw === null) return false;
+
+  const providerBlock = tomlRaw.match(/\[model_providers\.workspace\][^\[]*/);
+  if (!providerBlock) return false;
+  const block = providerBlock[0];
+
+  const hasName = /name\s*=\s*"OpenAlice workspace provider"/.test(block);
+  const hasEnvKey = /env_key\s*=\s*"OPENALICE_WORKSPACE_KEY"/.test(block);
+  const hasWire = /wire_api\s*=\s*"responses"/.test(block);
+  const hasTopLevelProvider = /^model_provider\s*=\s*"workspace"\s*$/m.test(tomlRaw);
+
+  return hasName && hasEnvKey && hasWire && hasTopLevelProvider;
+}
+
+function readFileIfExists(path: string): string | null {
+  if (!existsSync(path)) return null;
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Find `sessionId`'s rollout by walking dated leaves NEWEST-FIRST across
@@ -418,7 +511,7 @@ async function sortedNumericDirNames(dir: string): Promise<string[]> {
  * never blocked on telemetry.
  */
 export async function readCodexContextTelemetry(cwd: string, sessionId: string): Promise<ContextTelemetry | null> {
-  const root = existsSync(join(cwd, '.codex'))
+  const root = existsSync(join(cwd, CODEX_OVERRIDE_MARKER_PATH))
     ? join(cwd, '.codex', 'sessions')
     : join(homedir(), '.codex', 'sessions');
   const match = await findCodexRolloutById(root, resolve(cwd), sessionId);

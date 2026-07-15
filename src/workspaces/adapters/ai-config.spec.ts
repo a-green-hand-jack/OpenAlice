@@ -8,12 +8,12 @@
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { claudeAdapter } from './claude.js';
-import { codexAdapter } from './codex.js';
+import { CODEX_OVERRIDE_MARKER_PATH, codexAdapter, isStrictLegacyCodexOverride } from './codex.js';
 import { opencodeAdapter } from './opencode.js';
 import { piAdapter } from './pi.js';
 
@@ -147,7 +147,7 @@ describe('codexAdapter AI-config', () => {
     ]);
   });
 
-  it('writes full provider config byte-exact (config.toml + env.json)', async () => {
+  it('writes full provider config byte-exact (config.toml + env.json) plus the override marker', async () => {
     await codexAdapter.writeAiConfig!(dir, {
       baseUrl: 'https://oai.test/v1', apiKey: 'sk-c', model: 'gpt-x', wireApi: 'responses',
     });
@@ -157,6 +157,7 @@ describe('codexAdapter AI-config', () => {
       + 'base_url = "https://oai.test/v1"\nenv_key = "OPENALICE_WORKSPACE_KEY"\nwire_api = "responses"\n',
     );
     expect(await read('.codex/env.json')).toBe('{\n  "OPENALICE_WORKSPACE_KEY": "sk-c"\n}\n');
+    expect(existsSync(join(dir, CODEX_OVERRIDE_MARKER_PATH))).toBe(true);
   });
 
   it('always writes wire_api = responses (codex is Responses-only)', async () => {
@@ -164,16 +165,126 @@ describe('codexAdapter AI-config', () => {
     expect(await read('.codex/config.toml')).toContain('wire_api = "responses"\n');
   });
 
-  it('model-only writes no provider block and an empty env.json', async () => {
+  it('model-only writes no provider block, an empty env.json, but still writes the marker', async () => {
     await codexAdapter.writeAiConfig!(dir, { model: 'gpt-y' });
     expect(await read('.codex/config.toml')).toBe('model = "gpt-y"\n');
     expect(await read('.codex/env.json')).toBe('{}\n');
+    expect(existsSync(join(dir, CODEX_OVERRIDE_MARKER_PATH))).toBe(true);
   });
 
-  it('reset (empty cred) tears down the entire .codex/ directory', async () => {
-    await codexAdapter.writeAiConfig!(dir, { baseUrl: 'u', model: 'm' });
-    await codexAdapter.writeAiConfig!(dir, {});
-    expect(existsSync(join(dir, '.codex'))).toBe(false);
+  // Issue #230 round-3 correction: reset must only remove files OpenAlice can
+  // prove it owns (marker, or an exact legacy writeAiConfig signature) — never
+  // the entire .codex/ directory, which would also destroy Codex-native
+  // content (.codex/agents/*.toml, sessions/, cold-start state) it never wrote.
+  describe('reset (empty cred) — issue #230 scoped teardown', () => {
+    it('removes only config.toml/env.json/marker, preserving .codex/agents/*.toml', async () => {
+      await mkdir(join(dir, '.codex', 'agents'), { recursive: true });
+      await writeFile(join(dir, '.codex', 'agents', 'note-taker.toml'), 'name = "note-taker"\n');
+
+      await codexAdapter.writeAiConfig!(dir, { baseUrl: 'u', model: 'm' });
+      await codexAdapter.writeAiConfig!(dir, {});
+
+      expect(existsSync(join(dir, '.codex', 'config.toml'))).toBe(false);
+      expect(existsSync(join(dir, '.codex', 'env.json'))).toBe(false);
+      expect(existsSync(join(dir, CODEX_OVERRIDE_MARKER_PATH))).toBe(false);
+      expect(await read('.codex/agents/note-taker.toml')).toBe('name = "note-taker"\n');
+    });
+
+    it('is a no-op on a strict-legacy-signature workspace whose marker was never written (pre-migration)', async () => {
+      // Simulates a workspace that configured a real override under the OLD
+      // adapter (before the marker existed) and hasn't been migrated yet.
+      await codexAdapter.writeAiConfig!(dir, { baseUrl: 'u', apiKey: 'k', model: 'm' });
+      await rm(join(dir, CODEX_OVERRIDE_MARKER_PATH), { force: true });
+      expect(isStrictLegacyCodexOverride(dir)).toBe(true);
+
+      await codexAdapter.writeAiConfig!(dir, {});
+
+      expect(existsSync(join(dir, '.codex', 'config.toml'))).toBe(false);
+      expect(existsSync(join(dir, '.codex', 'env.json'))).toBe(false);
+    });
+
+    it('is a no-op (preserves everything) on a workspace with no marker and no strict legacy signature', async () => {
+      // Simulates the exact issue #230 repro: .codex/agents/*.toml plus a
+      // Codex-CLI-generated config.toml (cold-start pollution), no env.json.
+      await mkdir(join(dir, '.codex', 'agents'), { recursive: true });
+      await writeFile(join(dir, '.codex', 'agents', 'note-taker.toml'), 'name = "note-taker"\n');
+      await writeFile(
+        join(dir, '.codex', 'config.toml'),
+        'personality = "pragmatic"\n[projects."/abs/path"]\ntrust_level = "trusted"\n',
+      );
+
+      await codexAdapter.writeAiConfig!(dir, {});
+
+      expect(await read('.codex/agents/note-taker.toml')).toBe('name = "note-taker"\n');
+      expect(await read('.codex/config.toml')).toBe(
+        'personality = "pragmatic"\n[projects."/abs/path"]\ntrust_level = "trusted"\n',
+      );
+    });
+  });
+
+  describe('composeEnv — CODEX_HOME gated on the override marker, not .codex/ existence', () => {
+    it('does NOT set CODEX_HOME when only .codex/agents/*.toml exists (issue #230 exact repro)', async () => {
+      await mkdir(join(dir, '.codex', 'agents'), { recursive: true });
+      await writeFile(join(dir, '.codex', 'agents', 'note-taker.toml'), 'name = "note-taker"\n');
+
+      expect(codexAdapter.composeEnv!({ cwd: dir, env: {} })).toEqual({});
+    });
+
+    it('does NOT set CODEX_HOME when .codex/ also has Codex-cold-start-generated config.toml (polluted state)', async () => {
+      await mkdir(join(dir, '.codex', 'agents'), { recursive: true });
+      await writeFile(join(dir, '.codex', 'agents', 'note-taker.toml'), 'name = "note-taker"\n');
+      await writeFile(
+        join(dir, '.codex', 'config.toml'),
+        'personality = "pragmatic"\n[projects."/abs/path"]\ntrust_level = "trusted"\n',
+      );
+
+      expect(codexAdapter.composeEnv!({ cwd: dir, env: {} })).toEqual({});
+    });
+
+    it('sets CODEX_HOME (and exports env.json string values) once the marker is present', async () => {
+      await codexAdapter.writeAiConfig!(dir, { baseUrl: 'https://oai.test/v1', apiKey: 'sk-c', model: 'gpt-x' });
+
+      const env = codexAdapter.composeEnv!({ cwd: dir, env: {} });
+      expect(env['CODEX_HOME']).toBe(join(dir, '.codex'));
+      expect(env['OPENALICE_WORKSPACE_KEY']).toBe('sk-c');
+    });
+  });
+
+  describe('isStrictLegacyCodexOverride — six-literal signature, no weak/partial matches', () => {
+    it('returns false for a bare .codex/config.toml with no env.json (weak signal)', async () => {
+      // Looks complete (has the provider block) but is missing env.json —
+      // must never be treated as a proven OpenAlice override on its own.
+      await mkdir(join(dir, '.codex'), { recursive: true });
+      await writeFile(
+        join(dir, '.codex', 'config.toml'),
+        'model = "gpt-x"\nmodel_provider = "workspace"\n\n'
+        + '[model_providers.workspace]\nname = "OpenAlice workspace provider"\n'
+        + 'base_url = "https://oai.test/v1"\nenv_key = "OPENALICE_WORKSPACE_KEY"\nwire_api = "responses"\n',
+      );
+      expect(isStrictLegacyCodexOverride(dir)).toBe(false);
+    });
+
+    it('returns false for the known model-only blind spot (documented, not a regression)', async () => {
+      await mkdir(join(dir, '.codex'), { recursive: true });
+      await writeFile(join(dir, '.codex', 'config.toml'), 'model = "gpt-y"\n');
+      await writeFile(join(dir, '.codex', 'env.json'), '{}\n');
+      expect(isStrictLegacyCodexOverride(dir)).toBe(false);
+    });
+
+    it('returns true only when writeAiConfig actually produced the full provider shape', async () => {
+      await codexAdapter.writeAiConfig!(dir, { baseUrl: 'https://oai.test/v1', apiKey: 'sk-c', model: 'gpt-x' });
+      expect(isStrictLegacyCodexOverride(dir)).toBe(true);
+    });
+
+    it('returns false for Codex-cold-start-generated config.toml even with an unrelated env.json present', async () => {
+      await mkdir(join(dir, '.codex'), { recursive: true });
+      await writeFile(
+        join(dir, '.codex', 'config.toml'),
+        'personality = "pragmatic"\n[projects."/abs/path"]\ntrust_level = "trusted"\n',
+      );
+      await writeFile(join(dir, '.codex', 'env.json'), '{}\n');
+      expect(isStrictLegacyCodexOverride(dir)).toBe(false);
+    });
   });
 
   it('round-trips through readAiConfig', async () => {
@@ -190,7 +301,11 @@ describe('codexAdapter AI-config', () => {
   });
 
   it('listOnDisk returns only rollouts whose session_meta cwd matches this workspace', async () => {
-    // Workspace has its own .codex → adapter reads <cwd>/.codex/sessions (not ~).
+    // Workspace carries the override marker → adapter reads
+    // <cwd>/.codex/sessions (not ~), issue #230: marker-gated, not
+    // ".codex/ exists"-gated.
+    await mkdir(dirname(join(dir, CODEX_OVERRIDE_MARKER_PATH)), { recursive: true });
+    await writeFile(join(dir, CODEX_OVERRIDE_MARKER_PATH), '');
     const leaf = join(dir, '.codex', 'sessions', '2026', '06', '05');
     await mkdir(leaf, { recursive: true });
     const mine = { type: 'session_meta', payload: { id: 'mine-uuid-0001', cwd: dir } };

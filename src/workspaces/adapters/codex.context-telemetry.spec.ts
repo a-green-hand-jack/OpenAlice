@@ -11,11 +11,23 @@
  */
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { findCodexRolloutById, readCodexContextTelemetry, readLastTokenCount } from './codex.js';
+import { CODEX_OVERRIDE_MARKER_PATH, findCodexRolloutById, readCodexContextTelemetry, readLastTokenCount } from './codex.js';
+
+/**
+ * `readCodexContextTelemetry` resolves its scan root off the OpenAlice
+ * override marker (issue #230), not ".codex/ exists" — so any test writing a
+ * workspace-local rollout under `<cwd>/.codex/sessions` must also lay down
+ * the marker, or the reader falls back to the (irrelevant, real) homedir.
+ */
+async function writeMarker(cwd: string): Promise<void> {
+  const markerPath = join(cwd, CODEX_OVERRIDE_MARKER_PATH);
+  await mkdir(dirname(markerPath), { recursive: true });
+  await writeFile(markerPath, '', 'utf8');
+}
 
 let dir: string;
 
@@ -150,6 +162,7 @@ async function writeRolloutAt(
 
 describe('readCodexContextTelemetry', () => {
   it('returns the session rollout tail attributed to this cwd', async () => {
+    await writeMarker(dir);
     await writeRollout(dir, 'sess-1', dir, [tokenCountLine(24345, 121600), tokenCountLine(80000, 121600)]);
 
     const tel = await readCodexContextTelemetry(dir, 'sess-1');
@@ -160,12 +173,22 @@ describe('readCodexContextTelemetry', () => {
   });
 
   it('returns null when no rollout matches the sessionId', async () => {
+    await writeMarker(dir);
     await writeRollout(dir, 'sess-1', dir, [tokenCountLine(24345, 121600)]);
 
     expect(await readCodexContextTelemetry(dir, 'other-session')).toBeNull();
   });
 
   it('returns null when the on-disk directory does not exist', async () => {
+    await writeMarker(dir);
+    expect(await readCodexContextTelemetry(dir, 'sess-1')).toBeNull();
+  });
+
+  it('returns null when there is no override marker, even if a workspace-local .codex/sessions rollout exists (issue #230)', async () => {
+    // No marker written: the reader must NOT fall back to reading this
+    // workspace-local rollout — it should resolve against the (irrelevant)
+    // homedir root instead, exactly like composeEnv/listOnDisk now do.
+    await writeRollout(dir, 'sess-1', dir, [tokenCountLine(24345, 121600)]);
     expect(await readCodexContextTelemetry(dir, 'sess-1')).toBeNull();
   });
 
@@ -174,6 +197,7 @@ describe('readCodexContextTelemetry', () => {
       'foreign rollout exists (issue #132 PR #133 review — the old listOnDisk-based ' +
       '2-leaf window would miss this)',
     async () => {
+      await writeMarker(dir);
       const threeMonthsAgo = new Date();
       threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
 
