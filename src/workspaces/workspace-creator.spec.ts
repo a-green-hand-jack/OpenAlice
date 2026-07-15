@@ -233,6 +233,7 @@ describe('WorkspaceCreator.refreshStewardRuntime (issue #140 merge gate)', () =>
   const stewardTemplate = {
     bootstrapScript: '/tpl/steward/bootstrap.mjs',
     filesDir: '/tpl/steward/files',
+    instructionPath: '/overlay/steward/files/instruction.md',
     templateDir: '/tpl/steward',
   };
 
@@ -284,6 +285,30 @@ describe('WorkspaceCreator.refreshStewardRuntime (issue #140 merge gate)', () =>
       const args = mockSpawn.mock.calls[0][1] as string[];
       expect(args).toContain('--refresh-runtime');
       expect(args).toContain(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['pty', 'machine'] as const)('refreshes the overlay instructions before a %s wake', async (face) => {
+    const dir = await mkdtemp(join(tmpdir(), `workspace-creator-runtime-${face}-overlay-`));
+    try {
+      await prepareRuntimeArtifacts(dir);
+      const creator = makeCreator((name) => (name === 'steward' ? stewardTemplate : undefined));
+      const child = makeFakeChild();
+      mockSpawn.mockReturnValueOnce(child as unknown as childProcess.ChildProcess);
+      const pending = creator.withStewardRuntimeLease(
+        { template: 'steward', dir },
+        face,
+        async () => undefined,
+      );
+      await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledOnce());
+      child.emit('close', 0);
+      await expect(pending).resolves.toBeUndefined();
+      expect(vi.mocked(refreshWorkspaceInstructions)).toHaveBeenLastCalledWith({
+        template: expect.objectContaining({ instructionPath: '/overlay/steward/files/instruction.md' }),
+        dir,
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

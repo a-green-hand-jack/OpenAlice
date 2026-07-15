@@ -31,6 +31,7 @@ function makeTemplate(over: Partial<TemplateMeta>): TemplateMeta {
     name: 'test',
     bootstrapScript: '',
     filesDir: '',
+    instructionPath: '',
     templateDir: '',
     version: '0.0.0',
     defaultAgents: ['claude'],
@@ -77,7 +78,11 @@ describe('injectWorkspaceContext — persona', () => {
     const expected = `${persona}\n\n---\n\n${instruction}`;
 
     await injectWorkspaceContext({
-      template: makeTemplate({ injectPersona: true, filesDir: CHAT_FILES }),
+      template: makeTemplate({
+        injectPersona: true,
+        filesDir: CHAT_FILES,
+        instructionPath: join(CHAT_FILES, 'instruction.md'),
+      }),
       wsId: 'ws-abc',
       dir,
     });
@@ -97,6 +102,7 @@ describe('injectWorkspaceContext — persona', () => {
       name: 'steward',
       injectPersona: true,
       filesDir: STEWARD_FILES,
+      instructionPath: join(STEWARD_FILES, 'instruction.md'),
       templateDir: STEWARD_DIR,
     });
     await writeFile(join(dir, 'AGENTS.md'), 'stale v2 instructions\n', 'utf8');
@@ -107,6 +113,40 @@ describe('injectWorkspaceContext — persona', () => {
     expect(await read('AGENTS.md')).toContain('Decision Ledger Shape');
     expect(await read('AGENTS.md')).toContain('"version": 3');
     await expect(refreshWorkspaceInstructions({ template, dir })).resolves.toEqual({ changed: false });
+  });
+
+  it('uses an external authoritative instruction path while retaining base filesDir', async () => {
+    const overlay = join(dir, 'overlay-instruction.md');
+    await writeFile(overlay, '# external overlay\n', 'utf8');
+
+    await injectWorkspaceContext({
+      template: makeTemplate({
+        name: 'overlay-test',
+        injectPersona: true,
+        filesDir: STEWARD_FILES,
+        instructionPath: overlay,
+        templateDir: STEWARD_DIR,
+      }),
+      wsId: 'ws-overlay-create',
+      dir,
+    });
+
+    expect(await read('AGENTS.md')).toContain('# external overlay');
+    expect(await read('CLAUDE.md')).toContain('# external overlay');
+
+    await writeFile(overlay, '# external overlay refreshed\n', 'utf8');
+    await expect(refreshWorkspaceInstructions({
+      template: makeTemplate({
+        name: 'overlay-test',
+        injectPersona: true,
+        filesDir: STEWARD_FILES,
+        instructionPath: overlay,
+        templateDir: STEWARD_DIR,
+      }),
+      dir,
+    })).resolves.toEqual({ changed: true });
+    expect(await read('AGENTS.md')).toContain('# external overlay refreshed');
+    expect(await read('CLAUDE.md')).toContain('# external overlay refreshed');
   });
 });
 
@@ -169,6 +209,7 @@ describe('injectWorkspaceContext — steward context manifest', () => {
         name: 'steward',
         version: '0.1.0',
         filesDir: STEWARD_FILES,
+        instructionPath: join(STEWARD_FILES, 'instruction.md'),
         templateDir: STEWARD_DIR,
         injectPersona: true,
         injectTools: true,

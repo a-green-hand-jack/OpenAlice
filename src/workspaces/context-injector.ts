@@ -95,12 +95,12 @@ export async function refreshWorkspaceInstructions(opts: {
   const { template, dir } = opts;
   if (!template.injectPersona) return { changed: false };
 
-  // One neutral instruction source (`<template>/instruction.md`), composed
+  // One authoritative instruction source, composed
   // with the persona, then written byte-identically to BOTH CLAUDE.md (Claude
   // Code's filename) and AGENTS.md (Codex's). A missing instruction is a
   // template error and fails loudly.
   const persona = await resolvePersona();
-  const instruction = await readFile(join(template.filesDir, 'instruction.md'), 'utf8');
+  const instruction = await readFile(template.instructionPath, 'utf8');
   const composed = persona !== null ? `${persona}\n\n---\n\n${instruction}` : instruction;
   let changed = false;
   for (const relPath of ['CLAUDE.md', 'AGENTS.md'] as const) {

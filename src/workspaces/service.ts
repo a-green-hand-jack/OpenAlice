@@ -354,6 +354,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
   const templates = await TemplateRegistry.load(
     config.templatesDir,
     launcherLogger.child({ scope: 'templates' }),
+    config.templateOverlayDir,
   );
   if (config.legacyBootstrapScript) {
     launcherLogger.warn('config.legacy_bootstrap_script', {
@@ -364,6 +365,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       description: 'legacy AQ_BOOTSTRAP_SCRIPT entry — migrate to a real template',
       bootstrapScript: config.legacyBootstrapScript,
       filesDir: '',
+      instructionPath: '',
       templateDir: '',
       version: '0.0.0',
       defaultAgents: ['claude'],
