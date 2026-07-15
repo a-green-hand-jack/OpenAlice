@@ -50,6 +50,8 @@ export interface TemplateMeta {
   readonly filesDir: string;
   /** Absolute source of launcher-injected instructions. */
   readonly instructionPath: string;
+  /** Startup snapshot of an external overlay instruction, when configured. */
+  readonly instructionContent?: string;
   /** Absolute path to the template root (parent of `files/`). */
   readonly templateDir: string;
   /**
@@ -214,6 +216,11 @@ export class TemplateRegistry {
       if (!base) {
         throw new Error(`template overlay "${name}" base template "${name}" is not registered`);
       }
+      if (!base.injectPersona) {
+        throw new Error(
+          `template overlay "${name}" base template "${name}" does not enable persona instruction injection`,
+        );
+      }
 
       const filesDir = join(overlayDir, 'files');
       const instructionPath = join(filesDir, 'instruction.md');
@@ -224,7 +231,8 @@ export class TemplateRegistry {
       if (filesEntries.length !== 1 || filesEntries[0]?.name !== 'instruction.md' || !filesEntries[0].isFile()) {
         throw new Error(`template overlay "${name}" files directory may contain only instruction.md`);
       }
-      this.byName.set(name, { ...base, instructionPath });
+      const instructionContent = await readFile(instructionPath, 'utf8');
+      this.byName.set(name, { ...base, instructionPath, instructionContent });
     }
   }
 

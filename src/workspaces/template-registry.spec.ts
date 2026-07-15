@@ -27,13 +27,13 @@ async function makeRoot(prefix: string): Promise<string> {
   return root;
 }
 
-async function writeBase(root: string, name: string): Promise<void> {
+async function writeBase(root: string, name: string, injectPersona = true): Promise<void> {
   const templateDir = join(root, name);
   await mkdir(join(templateDir, 'files'), { recursive: true });
   await Promise.all([
     writeFile(join(templateDir, 'bootstrap.mjs'), 'export {};\n'),
     writeFile(join(templateDir, 'files', 'instruction.md'), `${name} base instruction\n`),
-    writeFile(join(templateDir, 'template.json'), JSON.stringify({ injectPersona: true })),
+    writeFile(join(templateDir, 'template.json'), JSON.stringify({ injectPersona })),
   ]);
 }
 
@@ -76,7 +76,19 @@ describe('TemplateRegistry instruction overlays', () => {
       templateDir: join(baseRoot, 'steward'),
       filesDir: join(baseRoot, 'steward', 'files'),
       instructionPath: join(overlayRoot, 'steward', 'files', 'instruction.md'),
+      instructionContent: 'steward overlay instruction\n',
     });
+  });
+
+  it('rejects an overlay for a base that does not inject persona instructions', async () => {
+    const baseRoot = await makeRoot('template-registry-base-');
+    const overlayRoot = await makeRoot('template-registry-overlay-');
+    await writeBase(baseRoot, 'auto-quant', false);
+    await writeOverlay(overlayRoot, 'auto-quant');
+
+    await expect(TemplateRegistry.load(baseRoot, logger, overlayRoot)).rejects.toThrow(
+      /base template "auto-quant" does not enable persona instruction injection/i,
+    );
   });
 
   it.each([
