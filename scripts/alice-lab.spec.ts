@@ -8,6 +8,7 @@ import {
   generateRunId,
   isPortFreeError,
   lastLogLines,
+  parseLabArgs,
   validateExperimentConfig,
 } from '../tools/campaigns/_lib.mjs'
 
@@ -211,6 +212,40 @@ describe('deriveBootOutcome (issue #259 review HIGH)', () => {
     expect(result.ok).toBe(false)
     expect(result.status).toBe('timeout')
     expect(result.reason).toBe('stack did not become ready within 240000ms')
+  })
+})
+
+describe('parseLabArgs (issue #261)', () => {
+  it('parses "run <cfg>" without a leading --', () => {
+    expect(parseLabArgs(['run', 'experiments/foo.json'])).toEqual({ configPath: 'experiments/foo.json' })
+  })
+
+  it('tolerates a single leading -- (pnpm 11 passes it through argv)', () => {
+    expect(parseLabArgs(['--', 'run', 'experiments/foo.json'])).toEqual({ configPath: 'experiments/foo.json' })
+  })
+
+  it('still usage-errors on a bare --', () => {
+    expect(() => parseLabArgs(['--'])).toThrow(/usage: lab\.mjs run <experiment\.json>/)
+  })
+
+  it('still usage-errors when cmd is missing entirely', () => {
+    expect(() => parseLabArgs([])).toThrow(/usage: lab\.mjs run <experiment\.json>/)
+  })
+
+  it('still rejects a wrong command after a leading --', () => {
+    expect(() => parseLabArgs(['--', 'walk', 'experiments/foo.json'])).toThrow(/usage: lab\.mjs run <experiment\.json>/)
+  })
+
+  it('still rejects extra trailing arguments', () => {
+    expect(() => parseLabArgs(['run', 'experiments/foo.json', 'extra'])).toThrow(/unexpected extra argument\(s\): extra/)
+  })
+
+  it('still rejects extra trailing arguments after a leading --', () => {
+    expect(() => parseLabArgs(['--', 'run', 'experiments/foo.json', 'extra'])).toThrow(/unexpected extra argument\(s\): extra/)
+  })
+
+  it('rejects a second leading -- (only one is stripped)', () => {
+    expect(() => parseLabArgs(['--', '--', 'run', 'experiments/foo.json'])).toThrow(/usage: lab\.mjs run <experiment\.json>/)
   })
 })
 

@@ -29,7 +29,8 @@
  * `report.mjs`, and a machine-readable `summary.json` is written.
  *
  * Usage:
- *   pnpm lab -- run experiments/<name>.json
+ *   pnpm lab run experiments/<name>.json
+ *   (a leading `--` is tolerated: `pnpm lab -- run experiments/<name>.json`)
  *
  * Exit codes: 0 = every run in the matrix succeeded; 2 = the matrix
  * completed but at least one run/arm failed or was skipped; 1 = a
@@ -44,7 +45,7 @@ import { spawn } from 'node:child_process';
 
 import {
   validateExperimentConfig, generateRunId, derivePortBlock, deriveExitCode, tokenFromLog, login, makeClient, sleep,
-  isPortFreeError, deriveTeardownOutcome, deriveBootOutcome, lastLogLines,
+  isPortFreeError, deriveTeardownOutcome, deriveBootOutcome, lastLogLines, parseLabArgs,
 } from './_lib.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -113,13 +114,6 @@ function installSignalHandlers() {
   };
   process.on('SIGINT', () => onSignal('SIGINT'));
   process.on('SIGTERM', () => onSignal('SIGTERM'));
-}
-
-function parseArgs(argv) {
-  const [cmd, configPath, ...rest] = argv;
-  if (cmd !== 'run' || !configPath) throw new Error('usage: lab.mjs run <experiment.json>');
-  if (rest.length) throw new Error(`unexpected extra argument(s): ${rest.join(' ')}`);
-  return { configPath };
 }
 
 function loadConfig(configPath) {
@@ -480,7 +474,7 @@ function writeSummary({ config, startedAt, armSummaries, runsList, reportPath, e
 async function main() {
   installSignalHandlers();
 
-  const { configPath } = parseArgs(process.argv.slice(2));
+  const { configPath } = parseLabArgs(process.argv.slice(2));
   const config = loadConfig(configPath);
   const startedAt = new Date().toISOString();
   log(`experiment "${config.name}": ${config.arms.length} arms × ${config.cells.length} cells × ${config.rounds} rounds = ${config.totalRuns} runs (maxRuns ${config.maxRuns})`);
