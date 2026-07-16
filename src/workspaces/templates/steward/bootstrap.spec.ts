@@ -825,3 +825,13 @@ describe('generated validate-ledger.mjs — concurrent atomic writes (issue #140
     expect(existsSync(ledgerLockFile())).toBe(false);
   });
 });
+
+describe('generated README.md — mechanics only, no policy (issue #251)', () => {
+  it('describes tmp/ as launcher scratch without asserting proposal-only policy', async () => {
+    const readme = await readFile(join(wsDir, '.alice', 'steward', 'README.md'), 'utf8');
+
+    expect(readme).toContain('tmp/: gitignored launcher scratch.');
+    expect(readme).not.toContain('broker-mutation surface');
+    expect(readme).not.toContain('contract slice');
+  });
+});

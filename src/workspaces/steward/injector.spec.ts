@@ -121,3 +121,14 @@ describe('injectStewardWake', () => {
     expect(calls).toHaveLength(2);
   });
 });
+
+describe('formatStewardWakeMessage', () => {
+  it('carries mechanics but leaves act-vs-record-only policy to the workspace instruction (issue #251)', () => {
+    const message = formatStewardWakeMessage(record);
+
+    expect(message).not.toContain('actions is [] and pendingHash is null');
+    expect(message).not.toContain('broker mutation');
+    expect(message).toContain('node .alice/steward/validate-ledger.mjs');
+    expect(message).toContain('Do not inspect OpenAlice source. Do not call push.');
+  });
+});
