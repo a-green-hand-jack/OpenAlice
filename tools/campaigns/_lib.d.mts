@@ -71,3 +71,78 @@ export function buildCampaignAccountCreatePayload(
 // Added for issue #256 so the keep-on-error regression spec can import
 // `shouldCleanup` under the root `tsc --noEmit`.
 export function shouldCleanup(input: { succeeded: boolean; keep: boolean }): boolean;
+
+// Added for issue #259 (alice-lab experiment matrix runner) so
+// `scripts/alice-lab.spec.ts` can import the pure decision-logic exports
+// under the root `tsc --noEmit`.
+export const DEFAULT_LAB_BASE_PORT: number;
+
+export interface LabArm {
+  id: string;
+  agent: string;
+  model: string;
+  overlayDir?: string;
+}
+
+export interface LabExperimentConfig {
+  name: string;
+  weeks: number;
+  rounds: number;
+  cells: string[];
+  arms: LabArm[];
+  maxRuns: number;
+  allowHoldout: boolean;
+  basePort: number;
+  totalRuns: number;
+}
+
+export function validateExperimentConfig(config: unknown): LabExperimentConfig;
+
+export function generateRunId(name: string, armId: string, cell: string, round: number): string;
+
+export interface LabPortBlock {
+  web: number;
+  mcp: number;
+  uta: number;
+  ui: number;
+}
+
+export function derivePortBlock(basePort?: number): LabPortBlock;
+
+export interface LabRunResult {
+  status: 'ok' | 'failed' | 'skipped';
+}
+
+export function deriveExitCode(runs: LabRunResult[]): number;
+
+// Added for issue #259 review follow-up (CRITICAL/HIGH/LOW fixes) so
+// `scripts/alice-lab.spec.ts` can import the stack-teardown / boot-race
+// decision helpers under the root `tsc --noEmit`.
+export function isPortFreeError(err: unknown): boolean;
+
+export interface LabTeardownOutcomeInput {
+  armId: string;
+  port: number;
+  freed: boolean;
+  timeoutMs: number;
+}
+
+export type LabTeardownOutcome = { ok: true } | { ok: false; reason: string };
+
+export function deriveTeardownOutcome(input: LabTeardownOutcomeInput): LabTeardownOutcome;
+
+export interface LabBootOutcomeInput {
+  ready: boolean;
+  exited: boolean;
+  exitCode?: number | null;
+  exitSignal?: string | null;
+  timeoutMs: number;
+}
+
+export type LabBootOutcome =
+  | { ok: true }
+  | { ok: false; status: 'exited' | 'timeout'; reason: string };
+
+export function deriveBootOutcome(input: LabBootOutcomeInput): LabBootOutcome;
+
+export function lastLogLines(text: string, n?: number): string;

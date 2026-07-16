@@ -417,3 +417,214 @@ export function tokenFromLog(logText) {
   const m = tail.match(/([A-Za-z0-9_-]{40,})/);
   return m ? m[1] : null;
 }
+
+// ── alice-lab experiment matrix (issue #259) ─────────────────────────────
+//
+// Pure decision logic for `lab.mjs` — config validation/normalization,
+// run-id generation, port-block derivation, and exit-code derivation from
+// completed run results. Process/stack-lifecycle orchestration stays in
+// lab.mjs itself (not spec'd here — the smoke run covers that surface).
+
+/** Default web port when an experiment.json doesn't set `basePort`. */
+export const DEFAULT_LAB_BASE_PORT = 49631;
+
+const EXPERIMENT_REQUIRED_FIELDS = ['name', 'weeks', 'rounds', 'cells', 'arms', 'maxRuns'];
+const EXPERIMENT_ALLOWED_FIELDS = new Set([...EXPERIMENT_REQUIRED_FIELDS, 'basePort', 'allowHoldout']);
+const ARM_ALLOWED_FIELDS = new Set(['id', 'agent', 'model', 'overlayDir']);
+
+/**
+ * Validate + normalize an experiment.json body (v1 shape — see issue #259).
+ * Pure function: no filesystem access (cell-file-exists checks happen in
+ * lab.mjs, which needs the real `tools/campaigns/cells/` directory).
+ * Throws a descriptive Error on any violation; never partially validates.
+ *
+ * @param {unknown} config
+ * @returns {{ name: string, weeks: number, rounds: number, cells: string[],
+ *   arms: Array<{ id: string, agent: string, model: string, overlayDir?: string }>,
+ *   maxRuns: number, allowHoldout: boolean, basePort: number, totalRuns: number }}
+ */
+export function validateExperimentConfig(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error('experiment config must be a JSON object');
+  }
+  const unknownFields = Object.keys(config).filter((k) => !EXPERIMENT_ALLOWED_FIELDS.has(k));
+  if (unknownFields.length) {
+    throw new Error(`experiment.json has unknown field(s): ${unknownFields.join(', ')}`);
+  }
+  for (const field of EXPERIMENT_REQUIRED_FIELDS) {
+    if (config[field] === undefined) throw new Error(`experiment.json missing required field: ${field}`);
+  }
+
+  const { name, weeks, rounds, cells, arms, maxRuns } = config;
+  if (typeof name !== 'string' || !name.trim()) throw new Error('experiment.json "name" must be a non-empty string');
+  if (!Number.isInteger(weeks) || weeks <= 0) throw new Error('experiment.json "weeks" must be a positive integer');
+  if (!Number.isInteger(rounds) || rounds <= 0) throw new Error('experiment.json "rounds" must be a positive integer');
+  if (!Number.isInteger(maxRuns) || maxRuns <= 0) throw new Error('experiment.json "maxRuns" must be a positive integer');
+
+  if (!Array.isArray(cells) || cells.length === 0) throw new Error('experiment.json "cells" must be a non-empty array');
+  for (const cell of cells) {
+    if (typeof cell !== 'string' || !cell.trim()) throw new Error(`experiment.json "cells" entries must be non-empty strings (got ${JSON.stringify(cell)})`);
+  }
+
+  const allowHoldout = config.allowHoldout ?? false;
+  if (typeof allowHoldout !== 'boolean') throw new Error('experiment.json "allowHoldout" must be a boolean');
+  if (!allowHoldout) {
+    const holdoutCells = cells.filter((c) => c.startsWith('holdout-'));
+    if (holdoutCells.length) {
+      throw new Error(
+        `experiment.json references holdout cell(s) [${holdoutCells.join(', ')}] without "allowHoldout": true — ` +
+        'holdout discipline requires an explicit opt-in',
+      );
+    }
+  }
+
+  const basePort = config.basePort ?? DEFAULT_LAB_BASE_PORT;
+  if (!Number.isInteger(basePort) || basePort <= 0 || basePort > 65_000) {
+    throw new Error('experiment.json "basePort" must be an integer port number (<= 65000)');
+  }
+
+  if (!Array.isArray(arms) || arms.length === 0) throw new Error('experiment.json "arms" must be a non-empty array');
+  const seenArmIds = new Set();
+  const normalizedArms = arms.map((arm, i) => {
+    if (!arm || typeof arm !== 'object' || Array.isArray(arm)) throw new Error(`experiment.json arms[${i}] must be an object`);
+    const unknownArmFields = Object.keys(arm).filter((k) => !ARM_ALLOWED_FIELDS.has(k));
+    if (unknownArmFields.length) throw new Error(`experiment.json arms[${i}] has unknown field(s): ${unknownArmFields.join(', ')}`);
+    if (typeof arm.id !== 'string' || !arm.id.trim()) throw new Error(`experiment.json arms[${i}] missing required field: id`);
+    if (seenArmIds.has(arm.id)) throw new Error(`experiment.json has duplicate arm id: "${arm.id}"`);
+    seenArmIds.add(arm.id);
+    if (arm.agent !== 'codex') {
+      throw new Error(
+        `experiment.json arms[${i}] ("${arm.id}") has agent "${arm.agent}" — v1 only supports "codex" arms ` +
+        '(per-arm claude model pinning has no per-workspace write surface yet; see issue #259 audit §7)',
+      );
+    }
+    if (typeof arm.model !== 'string' || !arm.model.trim()) throw new Error(`experiment.json arms[${i}] ("${arm.id}") missing required field: model`);
+    if (arm.overlayDir !== undefined && (typeof arm.overlayDir !== 'string' || !arm.overlayDir.trim())) {
+      throw new Error(`experiment.json arms[${i}] ("${arm.id}") "overlayDir" must be a non-empty string when present`);
+    }
+    return { id: arm.id, agent: arm.agent, model: arm.model, ...(arm.overlayDir ? { overlayDir: arm.overlayDir } : {}) };
+  });
+
+  const totalRuns = normalizedArms.length * cells.length * rounds;
+  if (totalRuns > maxRuns) {
+    throw new Error(
+      `experiment.json budget exceeded: ${normalizedArms.length} arms × ${cells.length} cells × ${rounds} rounds ` +
+      `= ${totalRuns} runs > maxRuns ${maxRuns} — refusing to start`,
+    );
+  }
+
+  return { name, weeks, rounds, cells: [...cells], arms: normalizedArms, maxRuns, allowHoldout, basePort, totalRuns };
+}
+
+/** Deterministic run-id for one (arm, cell, round) cell of the matrix. */
+export function generateRunId(name, armId, cell, round) {
+  return `${name}-${armId}-${cell}-r${round}`;
+}
+
+/**
+ * Derive the four dev-stack ports for one arm's sandboxed `pnpm dev` from a
+ * single base port, matching `scripts/guardian/shared.ts` port roles
+ * (web/mcp/uta/ui). Leaves a gap at +3 (mirrors the checked-in default
+ * 49631/49632/49633/49635) so an adjacent manual dev stack on +3 doesn't
+ * collide.
+ */
+export function derivePortBlock(basePort = DEFAULT_LAB_BASE_PORT) {
+  return { web: basePort, mcp: basePort + 1, uta: basePort + 2, ui: basePort + 4 };
+}
+
+/**
+ * Runner exit code from the final list of per-run results. 0 only when
+ * every run in the matrix succeeded; 2 when the matrix completed but at
+ * least one run failed or was skipped (arm boot failure). Runner-level
+ * fatal errors (bad config, budget exceeded, etc.) are a separate path in
+ * lab.mjs that exits 1 before any run result exists.
+ *
+ * @param {Array<{ status: 'ok' | 'failed' | 'skipped' }>} runs
+ */
+export function deriveExitCode(runs) {
+  if (!Array.isArray(runs) || runs.length === 0) return 2;
+  return runs.every((r) => r.status === 'ok') ? 0 : 2;
+}
+
+// ── stack teardown / boot-race decision logic (issue #259 review) ───────
+//
+// Pure classification helpers pulled out of lab.mjs's process-lifecycle code
+// so the decision logic itself (not the spawn/signal plumbing) can be unit
+// spec'd without booting a real stack.
+
+/**
+ * Classify a `fetch()` rejection against a port lab.mjs is polling for
+ * "freed". Only ECONNREFUSED means nothing is listening (the process that
+ * held the port is gone) — any other rejection (abort/timeout, DNS oddity,
+ * a transient network error) must NOT be read as "free", or a teardown poll
+ * could declare victory while the old stack is still mid-shutdown holding
+ * the port. Node's fetch (undici) wraps a refused TCP connect as
+ * `TypeError('fetch failed')` with `err.cause` set to the underlying
+ * `node:net` error carrying `.code`.
+ *
+ * @param {unknown} err
+ * @returns {boolean}
+ */
+export function isPortFreeError(err) {
+  return Boolean(err) && typeof err === 'object' && err.cause?.code === 'ECONNREFUSED';
+}
+
+/**
+ * Pure decision for whether a stack teardown succeeded: given the final
+ * port-free poll result after the SIGTERM→grace→SIGKILL sequence, either
+ * teardown is done, or — since every arm in an experiment shares the same
+ * port block (`derivePortBlock(config.basePort)` is derived once per
+ * experiment, not per arm) — a still-bound port means a leaked process
+ * would corrupt every subsequent arm's boot. That must stop the whole
+ * matrix, not just fail one arm.
+ *
+ * @param {{ armId: string, port: number, freed: boolean, timeoutMs: number }} input
+ * @returns {{ ok: true } | { ok: false, reason: string }}
+ */
+export function deriveTeardownOutcome({ armId, port, freed, timeoutMs }) {
+  if (freed) return { ok: true };
+  return {
+    ok: false,
+    reason: `arm ${armId}: stack teardown failed — port ${port} still bound ${timeoutMs}ms after SIGTERM+SIGKILL; ` +
+      'refusing to continue (would corrupt subsequent arms sharing this port block)',
+  };
+}
+
+/**
+ * Pure decision for `waitStackReady`'s race between stack readiness and the
+ * boot child dying early (e.g. a port conflict from a previous arm's
+ * teardown not having freed in time). Distinguishes "timed out waiting" from
+ * "the process is already dead, waiting longer can't help" so lab.mjs fails
+ * the arm immediately in the latter case instead of polling for the full
+ * `STACK_READY_TIMEOUT_MS`.
+ *
+ * @param {{ ready: boolean, exited: boolean, exitCode?: number | null, exitSignal?: string | null, timeoutMs: number }} input
+ * @returns {{ ok: true } | { ok: false, status: 'exited' | 'timeout', reason: string }}
+ */
+export function deriveBootOutcome({ ready, exited, exitCode = null, exitSignal = null, timeoutMs }) {
+  if (ready) return { ok: true };
+  if (exited) {
+    return {
+      ok: false,
+      status: 'exited',
+      reason: `stack process exited during boot (code ${exitCode ?? 'null'} / signal ${exitSignal ?? 'null'})`,
+    };
+  }
+  return { ok: false, status: 'timeout', reason: `stack did not become ready within ${timeoutMs}ms` };
+}
+
+/**
+ * Last `n` lines of a log buffer, for embedding a compact tail in a
+ * failure reason (e.g. "why did the stack die during boot"). Drops a single
+ * trailing empty element from a final `\n` so typical log text (which
+ * usually ends in a newline) isn't off-by-one on the line count.
+ *
+ * @param {string} text
+ * @param {number} [n]
+ * @returns {string}
+ */
+export function lastLogLines(text, n = 20) {
+  const lines = String(text ?? '').split('\n');
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  return lines.slice(-n).join('\n');
+}

@@ -24,6 +24,7 @@
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:bbProvider": "vitest run --config vitest.bbProvider.config.ts",
     "test:smoke": "tsx scripts/guardian/smoke.ts",
+    "lab": "node tools/campaigns/lab.mjs",
     "postinstall": "node scripts/fix-pty-perms.mjs"
   },
   "keywords": [
