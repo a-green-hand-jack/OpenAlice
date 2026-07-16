@@ -42,7 +42,10 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
-import { validateExperimentConfig, generateRunId, derivePortBlock, deriveExitCode, tokenFromLog, login, makeClient, sleep } from './_lib.mjs';
+import {
+  validateExperimentConfig, generateRunId, derivePortBlock, deriveExitCode, tokenFromLog, login, makeClient, sleep,
+  isPortFreeError, deriveTeardownOutcome, deriveBootOutcome, lastLogLines,
+} from './_lib.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..', '..');
@@ -51,11 +54,65 @@ const RUNS_ROOT = join(REPO_ROOT, 'tools', 'campaigns', 'runs');
 
 const STACK_READY_TIMEOUT_MS = 240_000;
 const STACK_TEARDOWN_GRACE_MS = 15_000;
-const STACK_TEARDOWN_KILL_TIMEOUT_MS = 10_000;
 const PORT_FREE_TIMEOUT_MS = 30_000;
+const LOG_TAIL_LINES = 20;
 
 function log(msg) {
   process.stderr.write(`[lab] ${new Date().toISOString().slice(11, 19)} ${msg}\n`);
+}
+
+// ── signal handling (issue #259 review LOW 1) ────────────────────────────
+//
+// Populated as main() progresses so a SIGINT/SIGTERM mid-experiment (e.g.
+// the operator Ctrl-C'ing an unattended run) still tears down the active
+// sandboxed stack via group-kill instead of leaking it, and leaves a
+// partial summary.json instead of no record at all. `runsList`/`armSummaries`
+// are populated in place (push, not reassignment) so this object always
+// reflects the latest state without extra plumbing.
+const runState = {
+  activeStack: null, // { child, ports, armId }
+  config: null,
+  experimentRoot: null,
+  startedAt: null,
+  runsList: [],
+  armSummaries: [],
+};
+
+let shuttingDown = false;
+
+function installSignalHandlers() {
+  const onSignal = (sig) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log(`received ${sig} — tearing down active stack and writing partial summary`);
+    (async () => {
+      if (runState.activeStack) {
+        const { child, ports, armId } = runState.activeStack;
+        try {
+          await stopStack(child, ports, armId);
+        } catch (err) {
+          log(`teardown during ${sig} handling failed (continuing to write partial summary): ${err.message}`);
+        }
+      }
+      if (runState.config && runState.experimentRoot) {
+        writeSummary({
+          config: runState.config,
+          startedAt: runState.startedAt,
+          armSummaries: runState.armSummaries,
+          runsList: runState.runsList,
+          reportPath: null,
+          experimentRoot: runState.experimentRoot,
+          interrupted: sig,
+        });
+      }
+      process.exit(1);
+    })().catch((err) => {
+      process.stderr.write(`[lab] FATAL during ${sig} shutdown: ${err.stack ?? err.message}\n`);
+      process.exit(1);
+    });
+  };
+  process.on('SIGINT', () => onSignal('SIGINT'));
+  process.on('SIGTERM', () => onSignal('SIGTERM'));
 }
 
 function parseArgs(argv) {
@@ -103,7 +160,14 @@ function bootStack(arm, ports, armDir) {
     OPENALICE_UI_PORT: String(ports.ui),
     ...(arm.overlayDir ? { AQ_TEMPLATE_OVERLAY_DIR: arm.overlayDir } : {}),
   };
-  const child = spawn('pnpm', ['dev'], { cwd: REPO_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  // detached: true makes `child` the leader of a NEW process group (POSIX
+  // pgid == child.pid), so `process.kill(-child.pid, sig)` below reaches
+  // every descendant directly instead of relying on pnpm to forward the
+  // signal to tsx/Guardian — pnpm does NOT do that on SIGTERM (issue #259
+  // review CRITICAL, empirically reproduced against pnpm 11.9.0), so a
+  // plain `child.kill()` only killed pnpm itself and orphaned the whole
+  // Guardian/UTA/Alice/Vite tree holding the port block.
+  const child = spawn('pnpm', ['dev'], { cwd: REPO_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   const onData = (chunk) => {
     buf.text += chunk.toString('utf8');
     logStream.write(chunk);
@@ -113,46 +177,80 @@ function bootStack(arm, ports, armDir) {
   return { child, logPath, logStream, buf };
 }
 
-async function waitStackReady(webPort, buf, timeoutMs) {
+/**
+ * Poll for stack readiness (log markers + a live `/api/version`), racing it
+ * against the boot child dying early — e.g. a port still held by a leaked
+ * previous arm. Without the race, a dead child was previously invisible
+ * until the full `STACK_READY_TIMEOUT_MS` (240s) elapsed (issue #259 review
+ * HIGH). Decision logic lives in `deriveBootOutcome` (`_lib.mjs`) so it can
+ * be unit spec'd without spawning a process.
+ */
+async function waitStackReady(child, webPort, buf, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (buf.text.includes('Alice ready') && buf.text.includes('UTA ready')) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${webPort}/api/version`, { signal: AbortSignal.timeout(3_000) });
-        if (res.ok) return true;
-      } catch { /* not there yet */ }
+  let exit = null;
+  const onExit = (code, signal) => { exit = { code, signal }; };
+  child.once('exit', onExit);
+  try {
+    while (Date.now() < deadline) {
+      if (exit) return deriveBootOutcome({ ready: false, exited: true, exitCode: exit.code, exitSignal: exit.signal, timeoutMs });
+      if (buf.text.includes('Alice ready') && buf.text.includes('UTA ready')) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${webPort}/api/version`, { signal: AbortSignal.timeout(3_000) });
+          if (res.ok) return deriveBootOutcome({ ready: true });
+        } catch { /* not there yet */ }
+      }
+      await sleep(1_000);
     }
-    await sleep(1_000);
-  }
-  return false;
-}
-
-function waitForExit(child, timeoutMs) {
-  return new Promise((resolveExit) => {
-    if (child.exitCode !== null || child.signalCode !== null) { resolveExit(true); return; }
-    const timer = setTimeout(() => resolveExit(false), timeoutMs);
-    child.once('exit', () => { clearTimeout(timer); resolveExit(true); });
-  });
-}
-
-async function stopStack(child) {
-  if (!child || child.exitCode !== null) return;
-  try { child.kill('SIGTERM'); } catch { /* already gone */ }
-  const exited = await waitForExit(child, STACK_TEARDOWN_GRACE_MS);
-  if (!exited) {
-    log('stack did not exit on SIGTERM — escalating to SIGKILL');
-    try { child.kill('SIGKILL'); } catch { /* already gone */ }
-    await waitForExit(child, STACK_TEARDOWN_KILL_TIMEOUT_MS);
+    return deriveBootOutcome({ ready: false, exited: Boolean(exit), exitCode: exit?.code, exitSignal: exit?.signal, timeoutMs });
+  } finally {
+    child.off('exit', onExit);
   }
 }
 
+/** Signal the whole process GROUP (not just `pid`), tolerating a group that
+ *  is already gone (ESRCH) — the normal case when the leader already exited
+ *  on its own. */
+function killProcessGroup(pid, signal) {
+  if (pid == null) return;
+  try {
+    process.kill(-pid, signal);
+  } catch (err) {
+    if (err && err.code === 'ESRCH') return;
+    throw err;
+  }
+}
+
+/**
+ * Tear down a sandboxed stack: SIGTERM the whole process group, grace
+ * period, SIGKILL the group, then gate "torn down" on the arm's web port
+ * actually freeing (not on any child's `exit` event — pnpm itself exits
+ * immediately on SIGTERM without waiting for its children, which made the
+ * old SIGKILL-escalation branch dead code; see issue #259 review CRITICAL).
+ * Since every arm in an experiment shares the same port block, a port that
+ * never frees would corrupt every subsequent arm's boot — so this throws a
+ * runner-fatal error instead of continuing.
+ */
+async function stopStack(child, ports, armId) {
+  if (!child || child.pid == null) return;
+  killProcessGroup(child.pid, 'SIGTERM');
+  await sleep(STACK_TEARDOWN_GRACE_MS);
+  killProcessGroup(child.pid, 'SIGKILL');
+  const freed = await waitPortFree(ports.web, PORT_FREE_TIMEOUT_MS);
+  const outcome = deriveTeardownOutcome({ armId, port: ports.web, freed, timeoutMs: PORT_FREE_TIMEOUT_MS });
+  if (!outcome.ok) throw new Error(outcome.reason);
+}
+
+/** Only ECONNREFUSED means the port is actually free (classified by
+ *  `isPortFreeError` in `_lib.mjs`) — any other rejection (abort/timeout,
+ *  transient network hiccup) keeps polling until the bounded timeout
+ *  instead of being misread as "freed" (issue #259 review LOW). */
 async function waitPortFree(webPort, timeoutMs = PORT_FREE_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
       await fetch(`http://127.0.0.1:${webPort}/api/version`, { signal: AbortSignal.timeout(1_500) });
-    } catch {
-      return true;
+    } catch (err) {
+      if (isPortFreeError(err)) return true;
     }
     await sleep(1_000);
   }
@@ -243,6 +341,7 @@ async function runArm(arm, config, experimentRoot, runsList) {
 
   log(`arm ${arm.id}: booting sandboxed stack on port ${ports.web} (overlay=${arm.overlayDir ?? 'none'})`);
   const stack = bootStack(arm, ports, armDir);
+  runState.activeStack = { child: stack.child, ports, armId: arm.id };
 
   const plannedRuns = () => {
     const out = [];
@@ -252,22 +351,28 @@ async function runArm(arm, config, experimentRoot, runsList) {
     return out;
   };
 
-  const ready = await waitStackReady(ports.web, stack.buf, STACK_READY_TIMEOUT_MS);
-  if (!ready) {
-    log(`arm ${arm.id}: stack did not become ready within ${STACK_READY_TIMEOUT_MS}ms — failing arm, skipping its runs`);
-    await stopStack(stack.child);
+  const readiness = await waitStackReady(stack.child, ports.web, stack.buf, STACK_READY_TIMEOUT_MS);
+  if (!readiness.ok) {
+    let reason = readiness.reason;
+    if (readiness.status === 'exited') {
+      reason += `\n--- last ${LOG_TAIL_LINES} lines of stack.log ---\n${lastLogLines(stack.buf.text, LOG_TAIL_LINES)}`;
+    }
+    log(`arm ${arm.id}: ${readiness.reason} — failing arm, skipping its runs`);
+    await stopStack(stack.child, ports, arm.id);
+    runState.activeStack = null;
     stack.logStream.end();
     for (const { cell, round } of plannedRuns()) {
-      runsList.push({ runId: generateRunId(config.name, arm.id, cell, round), arm: arm.id, cell, round, status: 'skipped', exitCode: null, resultPath: null, reason: 'arm stack boot failed' });
+      runsList.push({ runId: generateRunId(config.name, arm.id, cell, round), arm: arm.id, cell, round, status: 'skipped', exitCode: null, resultPath: null, reason });
     }
-    return { id: arm.id, status: 'failed', reason: `stack did not become ready within ${STACK_READY_TIMEOUT_MS}ms`, dir: armDir };
+    return { id: arm.id, status: 'failed', reason, dir: armDir };
   }
   log(`arm ${arm.id}: stack ready`);
 
   const token = tokenFromLog(stack.buf.text);
   if (!token) {
     log(`arm ${arm.id}: could not scrape first-run admin token from stack.log — failing arm, skipping its runs`);
-    await stopStack(stack.child);
+    await stopStack(stack.child, ports, arm.id);
+    runState.activeStack = null;
     stack.logStream.end();
     for (const { cell, round } of plannedRuns()) {
       runsList.push({ runId: generateRunId(config.name, arm.id, cell, round), arm: arm.id, cell, round, status: 'skipped', exitCode: null, resultPath: null, reason: 'no admin token found in stack.log' });
@@ -304,10 +409,9 @@ async function runArm(arm, config, experimentRoot, runsList) {
 
   await batchCleanup(armRuns, baseUrl, token, armDir);
 
-  await stopStack(stack.child);
+  await stopStack(stack.child, ports, arm.id);
+  runState.activeStack = null;
   stack.logStream.end();
-  const freed = await waitPortFree(ports.web);
-  if (!freed) log(`arm ${arm.id}: warning — port ${ports.web} did not free within ${PORT_FREE_TIMEOUT_MS}ms`);
 
   return { id: arm.id, status: 'ok', dir: armDir };
 }
@@ -331,23 +435,12 @@ async function generateReport(config, runsList) {
   return outPath;
 }
 
-async function main() {
-  const { configPath } = parseArgs(process.argv.slice(2));
-  const config = loadConfig(configPath);
-  const startedAt = new Date().toISOString();
-  log(`experiment "${config.name}": ${config.arms.length} arms × ${config.cells.length} cells × ${config.rounds} rounds = ${config.totalRuns} runs (maxRuns ${config.maxRuns})`);
-
-  const experimentRoot = join(RUNS_ROOT, config.name);
-  mkdirSync(experimentRoot, { recursive: true });
-
-  const runsList = [];
-  const armSummaries = [];
-  for (const arm of config.arms) {
-    armSummaries.push(await runArm(arm, config, experimentRoot, runsList));
-  }
-
-  const reportPath = await generateReport(config, runsList);
-  const exitCode = deriveExitCode(runsList);
+/** Builds and writes summary.json. Shared by the normal completion path
+ *  (main(), reportPath + a status-derived exitCode) and the SIGINT/SIGTERM
+ *  handler (no report, exitCode forced to 1, `interrupted` records which
+ *  signal cut the run short). */
+function writeSummary({ config, startedAt, armSummaries, runsList, reportPath, experimentRoot, interrupted = null }) {
+  const exitCode = interrupted ? 1 : deriveExitCode(runsList);
   const finishedAt = new Date().toISOString();
   const totals = {
     total: runsList.length,
@@ -361,6 +454,7 @@ async function main() {
     name: config.name,
     startedAt,
     finishedAt,
+    ...(interrupted ? { interrupted } : {}),
     config: {
       weeks: config.weeks,
       rounds: config.rounds,
@@ -380,6 +474,32 @@ async function main() {
   writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
   log(`summary → ${summaryPath}`);
   log(`totals: ${totals.ok} ok / ${totals.failed} failed / ${totals.skipped} skipped (of ${totals.total})`);
+  return exitCode;
+}
+
+async function main() {
+  installSignalHandlers();
+
+  const { configPath } = parseArgs(process.argv.slice(2));
+  const config = loadConfig(configPath);
+  const startedAt = new Date().toISOString();
+  log(`experiment "${config.name}": ${config.arms.length} arms × ${config.cells.length} cells × ${config.rounds} rounds = ${config.totalRuns} runs (maxRuns ${config.maxRuns})`);
+
+  const experimentRoot = join(RUNS_ROOT, config.name);
+  mkdirSync(experimentRoot, { recursive: true });
+
+  runState.config = config;
+  runState.experimentRoot = experimentRoot;
+  runState.startedAt = startedAt;
+  const runsList = runState.runsList;
+  const armSummaries = runState.armSummaries;
+
+  for (const arm of config.arms) {
+    armSummaries.push(await runArm(arm, config, experimentRoot, runsList));
+  }
+
+  const reportPath = await generateReport(config, runsList);
+  const exitCode = writeSummary({ config, startedAt, armSummaries, runsList, reportPath, experimentRoot });
   log(`exit code ${exitCode}`);
   process.exit(exitCode);
 }

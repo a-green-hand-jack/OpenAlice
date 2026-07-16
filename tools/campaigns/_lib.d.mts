@@ -114,3 +114,35 @@ export interface LabRunResult {
 }
 
 export function deriveExitCode(runs: LabRunResult[]): number;
+
+// Added for issue #259 review follow-up (CRITICAL/HIGH/LOW fixes) so
+// `scripts/alice-lab.spec.ts` can import the stack-teardown / boot-race
+// decision helpers under the root `tsc --noEmit`.
+export function isPortFreeError(err: unknown): boolean;
+
+export interface LabTeardownOutcomeInput {
+  armId: string;
+  port: number;
+  freed: boolean;
+  timeoutMs: number;
+}
+
+export type LabTeardownOutcome = { ok: true } | { ok: false; reason: string };
+
+export function deriveTeardownOutcome(input: LabTeardownOutcomeInput): LabTeardownOutcome;
+
+export interface LabBootOutcomeInput {
+  ready: boolean;
+  exited: boolean;
+  exitCode?: number | null;
+  exitSignal?: string | null;
+  timeoutMs: number;
+}
+
+export type LabBootOutcome =
+  | { ok: true }
+  | { ok: false; status: 'exited' | 'timeout'; reason: string };
+
+export function deriveBootOutcome(input: LabBootOutcomeInput): LabBootOutcome;
+
+export function lastLogLines(text: string, n?: number): string;

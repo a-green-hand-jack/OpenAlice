@@ -545,3 +545,86 @@ export function deriveExitCode(runs) {
   if (!Array.isArray(runs) || runs.length === 0) return 2;
   return runs.every((r) => r.status === 'ok') ? 0 : 2;
 }
+
+// ── stack teardown / boot-race decision logic (issue #259 review) ───────
+//
+// Pure classification helpers pulled out of lab.mjs's process-lifecycle code
+// so the decision logic itself (not the spawn/signal plumbing) can be unit
+// spec'd without booting a real stack.
+
+/**
+ * Classify a `fetch()` rejection against a port lab.mjs is polling for
+ * "freed". Only ECONNREFUSED means nothing is listening (the process that
+ * held the port is gone) — any other rejection (abort/timeout, DNS oddity,
+ * a transient network error) must NOT be read as "free", or a teardown poll
+ * could declare victory while the old stack is still mid-shutdown holding
+ * the port. Node's fetch (undici) wraps a refused TCP connect as
+ * `TypeError('fetch failed')` with `err.cause` set to the underlying
+ * `node:net` error carrying `.code`.
+ *
+ * @param {unknown} err
+ * @returns {boolean}
+ */
+export function isPortFreeError(err) {
+  return Boolean(err) && typeof err === 'object' && err.cause?.code === 'ECONNREFUSED';
+}
+
+/**
+ * Pure decision for whether a stack teardown succeeded: given the final
+ * port-free poll result after the SIGTERM→grace→SIGKILL sequence, either
+ * teardown is done, or — since every arm in an experiment shares the same
+ * port block (`derivePortBlock(config.basePort)` is derived once per
+ * experiment, not per arm) — a still-bound port means a leaked process
+ * would corrupt every subsequent arm's boot. That must stop the whole
+ * matrix, not just fail one arm.
+ *
+ * @param {{ armId: string, port: number, freed: boolean, timeoutMs: number }} input
+ * @returns {{ ok: true } | { ok: false, reason: string }}
+ */
+export function deriveTeardownOutcome({ armId, port, freed, timeoutMs }) {
+  if (freed) return { ok: true };
+  return {
+    ok: false,
+    reason: `arm ${armId}: stack teardown failed — port ${port} still bound ${timeoutMs}ms after SIGTERM+SIGKILL; ` +
+      'refusing to continue (would corrupt subsequent arms sharing this port block)',
+  };
+}
+
+/**
+ * Pure decision for `waitStackReady`'s race between stack readiness and the
+ * boot child dying early (e.g. a port conflict from a previous arm's
+ * teardown not having freed in time). Distinguishes "timed out waiting" from
+ * "the process is already dead, waiting longer can't help" so lab.mjs fails
+ * the arm immediately in the latter case instead of polling for the full
+ * `STACK_READY_TIMEOUT_MS`.
+ *
+ * @param {{ ready: boolean, exited: boolean, exitCode?: number | null, exitSignal?: string | null, timeoutMs: number }} input
+ * @returns {{ ok: true } | { ok: false, status: 'exited' | 'timeout', reason: string }}
+ */
+export function deriveBootOutcome({ ready, exited, exitCode = null, exitSignal = null, timeoutMs }) {
+  if (ready) return { ok: true };
+  if (exited) {
+    return {
+      ok: false,
+      status: 'exited',
+      reason: `stack process exited during boot (code ${exitCode ?? 'null'} / signal ${exitSignal ?? 'null'})`,
+    };
+  }
+  return { ok: false, status: 'timeout', reason: `stack did not become ready within ${timeoutMs}ms` };
+}
+
+/**
+ * Last `n` lines of a log buffer, for embedding a compact tail in a
+ * failure reason (e.g. "why did the stack die during boot"). Drops a single
+ * trailing empty element from a final `\n` so typical log text (which
+ * usually ends in a newline) isn't off-by-one on the line count.
+ *
+ * @param {string} text
+ * @param {number} [n]
+ * @returns {string}
+ */
+export function lastLogLines(text, n = 20) {
+  const lines = String(text ?? '').split('\n');
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  return lines.slice(-n).join('\n');
+}

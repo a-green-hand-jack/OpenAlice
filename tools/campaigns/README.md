@@ -35,8 +35,7 @@ Runs an unattended `arms × cells × rounds` matrix, serially:
    every run that succeeded via the same HTTP APIs `run-cell.mjs` uses.
    Failed runs keep everything for forensics; `summary.json` records what
    was left behind.
-4. **Tear down** the stack, wait for its ports to free, move to the next
-   arm.
+4. **Tear down** the stack (see below), then move to the next arm.
 
 A `run-cell.mjs` failure marks that run failed and the arm continues to the
 next round/cell. A stack-boot failure marks the WHOLE arm failed (its
@@ -48,7 +47,39 @@ aggregated through the existing `report.mjs` into
 
 Exit codes: `0` every run succeeded · `2` the matrix completed but at least
 one run/arm failed or was skipped · `1` a runner-level fatal error (bad
-config, budget exceeded, missing cell) before any run was attempted.
+config, budget exceeded, missing cell, unrecoverable stack teardown, an
+operator SIGINT/SIGTERM) — `1` can happen either before any run was
+attempted or mid-experiment.
+
+### Stack teardown
+
+Every arm's `pnpm dev` sandbox is spawned `detached: true` (its own POSIX
+process group) and torn down by signaling that whole group —
+`process.kill(-pid, 'SIGTERM')`, a grace period, then
+`process.kill(-pid, 'SIGKILL')` — not just the top-level `pnpm` pid. This
+matters because pnpm does **not** forward SIGTERM to the `tsx`/Guardian
+process it spawns, so a plain `child.kill()` only killed `pnpm` itself and
+orphaned the whole Guardian/UTA/Alice/Vite tree still holding the port
+block (empirically reproduced against pnpm 11.9.0). "Torn down" is gated on
+the arm's web port actually freeing (polled up to 30s after the SIGKILL),
+never on a child `exit` event — because every arm in one experiment reuses
+the *same* port block (`derivePortBlock(config.basePort)` is derived once
+per experiment, not per arm), a port that never frees would silently break
+every subsequent arm's boot. If the port is still bound after
+SIGTERM+SIGKILL+timeout, `lab.mjs` treats that as a runner-fatal error
+(exit `1`) rather than continuing into a corrupted next arm.
+
+Stack boot itself races readiness (log markers + a live `/api/version`)
+against the boot child exiting early (e.g. a port conflict) — a dead child
+fails the arm immediately instead of polling for the full 240s readiness
+timeout, and the failure reason recorded in `summary.json` includes the
+last ~20 lines of that arm's `stack.log`.
+
+`lab.mjs` also installs `SIGINT`/`SIGTERM` handlers: an operator
+Ctrl-C'ing (or otherwise signaling) an unattended run tears down the
+currently-active stack via the same group-kill path, writes a partial
+`summary.json` (with an `interrupted: "SIGINT" | "SIGTERM"` field), and
+exits `1`.
 
 ### experiment.json (v1 shape)
 

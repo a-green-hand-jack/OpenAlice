@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import {
   derivePortBlock,
+  deriveBootOutcome,
   deriveExitCode,
+  deriveTeardownOutcome,
   generateRunId,
+  isPortFreeError,
+  lastLogLines,
   validateExperimentConfig,
 } from '../tools/campaigns/_lib.mjs'
 
@@ -11,10 +15,11 @@ import {
  * Regression spec for issue #259: `tools/campaigns/lab.mjs` (one-command
  * experiment matrix runner). Covers the pure decision-logic surface the
  * runner delegates to `_lib.mjs` — config validation/normalization,
- * run-id generation, port-block derivation, and exit-code derivation from
- * completed run results. Process/stack lifecycle (stack boot, run-cell
- * child spawning, batch cleanup, teardown) is not covered here — that
- * surface is exercised by a live smoke run, not a unit spec.
+ * run-id generation, port-block derivation, exit-code derivation from
+ * completed run results, and (review follow-up) the stack-teardown /
+ * boot-race decision helpers. Process/stack lifecycle itself (spawning,
+ * signal handling, actually polling a real port) is not covered here —
+ * that surface is exercised by a live smoke run, not a unit spec.
  */
 
 function baseConfig(overrides: Record<string, unknown> = {}) {
@@ -135,5 +140,97 @@ describe('deriveExitCode (issue #259)', () => {
 
   it('returns 2 for an empty result set', () => {
     expect(deriveExitCode([])).toBe(2)
+  })
+})
+
+describe('isPortFreeError (issue #259 review LOW 2)', () => {
+  it('treats a fetch ECONNREFUSED rejection as port-free', () => {
+    const err = Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:1'), { code: 'ECONNREFUSED' }),
+    })
+    expect(isPortFreeError(err)).toBe(true)
+  })
+
+  it('does not treat an abort/timeout rejection as port-free', () => {
+    const err = new DOMException('The operation was aborted', 'TimeoutError')
+    expect(isPortFreeError(err)).toBe(false)
+  })
+
+  it('does not treat a cause-less TypeError as port-free', () => {
+    expect(isPortFreeError(new TypeError('fetch failed'))).toBe(false)
+  })
+
+  it('does not treat an unrelated cause code as port-free', () => {
+    const err = Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }),
+    })
+    expect(isPortFreeError(err)).toBe(false)
+  })
+
+  it('handles non-object input without throwing', () => {
+    expect(isPortFreeError(null)).toBe(false)
+    expect(isPortFreeError(undefined)).toBe(false)
+    expect(isPortFreeError('nope')).toBe(false)
+  })
+})
+
+describe('deriveTeardownOutcome (issue #259 review CRITICAL)', () => {
+  it('is ok when the port freed', () => {
+    expect(deriveTeardownOutcome({ armId: 'a1', port: 49631, freed: true, timeoutMs: 30_000 })).toEqual({ ok: true })
+  })
+
+  it('is a runner-fatal failure when the port never freed', () => {
+    const result = deriveTeardownOutcome({ armId: 'a1', port: 49631, freed: false, timeoutMs: 30_000 })
+    expect(result.ok).toBe(false)
+    expect(result.reason).toMatch(/arm a1/)
+    expect(result.reason).toMatch(/port 49631/)
+    expect(result.reason).toMatch(/still bound/)
+    expect(result.reason).toMatch(/SIGTERM\+SIGKILL/)
+  })
+})
+
+describe('deriveBootOutcome (issue #259 review HIGH)', () => {
+  it('is ok when the stack became ready', () => {
+    expect(deriveBootOutcome({ ready: true, exited: false, timeoutMs: 240_000 })).toEqual({ ok: true })
+  })
+
+  it('fails immediately with an "exited" status when the child died during boot', () => {
+    const result = deriveBootOutcome({ ready: false, exited: true, exitCode: 1, exitSignal: null, timeoutMs: 240_000 })
+    expect(result.ok).toBe(false)
+    expect(result.status).toBe('exited')
+    expect(result.reason).toBe('stack process exited during boot (code 1 / signal null)')
+  })
+
+  it('reports a null exit code/signal when neither is available', () => {
+    const result = deriveBootOutcome({ ready: false, exited: true, timeoutMs: 240_000 })
+    expect(result.reason).toBe('stack process exited during boot (code null / signal null)')
+  })
+
+  it('falls back to a "timeout" status when the deadline passed without exit or readiness', () => {
+    const result = deriveBootOutcome({ ready: false, exited: false, timeoutMs: 240_000 })
+    expect(result.ok).toBe(false)
+    expect(result.status).toBe('timeout')
+    expect(result.reason).toBe('stack did not become ready within 240000ms')
+  })
+})
+
+describe('lastLogLines (issue #259 review HIGH)', () => {
+  it('returns the last n lines', () => {
+    const text = Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\n')
+    const result = lastLogLines(text, 5)
+    expect(result.split('\n')).toEqual(['line 25', 'line 26', 'line 27', 'line 28', 'line 29'])
+  })
+
+  it('drops a single trailing empty line from a final newline', () => {
+    expect(lastLogLines('a\nb\nc\n', 5)).toBe('a\nb\nc')
+  })
+
+  it('returns the whole text when it has fewer lines than n', () => {
+    expect(lastLogLines('only one line', 20)).toBe('only one line')
+  })
+
+  it('handles empty/undefined input without throwing', () => {
+    expect(lastLogLines('', 5)).toBe('')
+    expect(lastLogLines(undefined as unknown as string, 5)).toBe('')
   })
 })
