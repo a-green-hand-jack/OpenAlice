@@ -27,6 +27,10 @@ export const STEWARD_LEDGER_RECEIPT_SCHEMA_VERSION = 1;
  *  the first time a violation is detected so the supervisor appends a given
  *  (kind, fingerprints) violation event exactly once instead of every tick. */
 export const STEWARD_LEDGER_INTEGRITY_SCHEMA_VERSION = 1;
+/** Clock-skew tolerance for a draft ledger entry's `at` timestamp (issue #255).
+ *  Mirrored, same value, in the generated `validate-ledger.mjs`
+ *  (`FUTURE_AT_TOLERANCE_MS`) -- keep the two in lockstep if this changes. */
+export const LEDGER_ENTRY_FUTURE_AT_TOLERANCE_MS = 60_000;
 /** Current finalization-marker version (issue #136). The generated validator
  *  writes one per wake AFTER all checks pass; it is the commit point the
  *  supervisor waits for before terminalizing a marker-protocol wake. */
@@ -709,6 +713,14 @@ export const stewardDecisionLedgerEntryV3Schema = z.object({
   intent: stewardDecisionIntentSchema.nullable(),
   thesisDispositions: z.array(stewardThesisDispositionSchema),
 }).strict().superRefine((entry, ctx) => {
+  if (Date.parse(entry.at) > Date.now() + LEDGER_ENTRY_FUTURE_AT_TOLERANCE_MS) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['at'],
+      message: 'draft at is in the future -- set at to the actual current UTC time (it must not be ahead of the validator clock by more than 60s)',
+    });
+  }
+
   const dispositionIdentities = new Set<string>();
   entry.thesisDispositions.forEach((disposition, index) => {
     const identity = stewardThesisIdentity(disposition);

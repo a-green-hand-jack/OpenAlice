@@ -149,6 +149,7 @@ const requiredCost = ['model', 'inputTokens', 'outputTokens', 'modelCostUsd', 'a
 const actionKinds = ['order_place', 'order_commit', 'order_modify', 'order_cancel', 'position_close', 'git_reject']
 const actionOutcomes = ['executed', 'awaiting_approval', 'policy_denied', 'failed']
 const decisions = ['no_trade', 'propose_change', 'reduce_risk', 'blocked']
+const FUTURE_AT_TOLERANCE_MS = 60_000
 
 function isObject(value) { return value && typeof value === 'object' && !Array.isArray(value) }
 function isNonEmpty(value) { return typeof value === 'string' && value.trim().length > 0 }
@@ -266,6 +267,7 @@ if (unknownTopLevel.length) fail('draft has unknown top-level field(s): ' + unkn
 if (entry.version !== 3) fail('draft version must be 3')
 if (!isNonEmpty(entry.wakeId)) fail('draft wakeId is required')
 if (!isIsoTimestamp(entry.at)) fail('draft at must be an ISO-8601 timestamp')
+if (Date.parse(entry.at) > Date.now() + FUTURE_AT_TOLERANCE_MS) fail('draft at is in the future -- set at to the actual current UTC time (it must not be ahead of the validator clock by more than 60s)')
 if (!isNonEmpty(entry.accountId)) fail('draft accountId is required')
 if (!decisions.includes(entry.decision)) fail('draft has invalid decision')
 if (!['done', 'blocked', 'error'].includes(entry.status)) fail('draft has invalid status')

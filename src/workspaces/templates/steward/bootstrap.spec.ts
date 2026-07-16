@@ -342,6 +342,27 @@ describe('generated validate-ledger.mjs — strict schema on the draft (issue #1
     expect(res.stderr).toMatch(/must equal the wake you are finalizing/);
   });
 
+  it('rejects a draft at timestamp in the future beyond the 60s tolerance (issue #255)', async () => {
+    await expectRejected(
+      { at: new Date(Date.now() + 120_000).toISOString() },
+      /draft at is in the future -- set at to the actual current UTC time/,
+    );
+  });
+
+  it('accepts a draft at timestamp at the current time or slightly in the past (issue #255)', async () => {
+    const wakeId = 'wake-at-now';
+    await writeDraft(wakeId, { at: new Date(Date.now() - 5_000).toISOString() });
+    await seedWakeRecord(wakeId);
+    expect(runValidate(wakeId).code).toBe(0);
+  });
+
+  it('accepts a draft at timestamp within the 60s future tolerance boundary (issue #255)', async () => {
+    const wakeId = 'wake-at-boundary';
+    await writeDraft(wakeId, { at: new Date(Date.now() + 45_000).toISOString() });
+    await seedWakeRecord(wakeId);
+    expect(runValidate(wakeId).code).toBe(0);
+  });
+
   it('rejects every representative malformed-v3 draft that the TypeScript schema rejects', async () => {
     const singleIntent = (wakeId: unknown): Record<string, unknown> => ({
       kind: 'single',
@@ -360,6 +381,7 @@ describe('generated validate-ledger.mjs — strict schema on the draft (issue #1
       ['empty pendingHash', (candidate) => { candidate.pendingHash = ''; }],
       ['blank pendingHash', (candidate) => { candidate.pendingHash = '   '; }],
       ['invalid timestamp', (candidate) => { candidate.at = 'not-an-iso-timestamp'; }],
+      ['future timestamp beyond tolerance', (candidate) => { candidate.at = new Date(Date.now() + 120_000).toISOString(); }],
       ['blank account id', (candidate) => { candidate.accountId = '   '; }],
       ['null context', (candidate) => { candidate.context = null; }],
       ['empty context path', (candidate) => { candidate.context = { manifestPath: '', manifestSha256: 'hash' }; }],
