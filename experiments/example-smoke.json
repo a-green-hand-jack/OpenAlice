@@ -1,0 +1,12 @@
+{
+  "name": "example-smoke",
+  "weeks": 2,
+  "rounds": 1,
+  "cells": ["bull-cx"],
+  "arms": [
+    { "id": "a1", "agent": "codex", "model": "gpt-5.3-codex-spark" },
+    { "id": "a2", "agent": "codex", "model": "gpt-5.3-codex-spark" }
+  ],
+  "maxRuns": 4,
+  "basePort": 49661
+}

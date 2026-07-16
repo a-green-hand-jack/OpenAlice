@@ -71,3 +71,46 @@ export function buildCampaignAccountCreatePayload(
 // Added for issue #256 so the keep-on-error regression spec can import
 // `shouldCleanup` under the root `tsc --noEmit`.
 export function shouldCleanup(input: { succeeded: boolean; keep: boolean }): boolean;
+
+// Added for issue #259 (alice-lab experiment matrix runner) so
+// `scripts/alice-lab.spec.ts` can import the pure decision-logic exports
+// under the root `tsc --noEmit`.
+export const DEFAULT_LAB_BASE_PORT: number;
+
+export interface LabArm {
+  id: string;
+  agent: string;
+  model: string;
+  overlayDir?: string;
+}
+
+export interface LabExperimentConfig {
+  name: string;
+  weeks: number;
+  rounds: number;
+  cells: string[];
+  arms: LabArm[];
+  maxRuns: number;
+  allowHoldout: boolean;
+  basePort: number;
+  totalRuns: number;
+}
+
+export function validateExperimentConfig(config: unknown): LabExperimentConfig;
+
+export function generateRunId(name: string, armId: string, cell: string, round: number): string;
+
+export interface LabPortBlock {
+  web: number;
+  mcp: number;
+  uta: number;
+  ui: number;
+}
+
+export function derivePortBlock(basePort?: number): LabPortBlock;
+
+export interface LabRunResult {
+  status: 'ok' | 'failed' | 'skipped';
+}
+
+export function deriveExitCode(runs: LabRunResult[]): number;
