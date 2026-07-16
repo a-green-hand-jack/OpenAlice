@@ -282,6 +282,43 @@ describe('StewardLedgerStore', () => {
     expect(raw.trim().split('\n')).toHaveLength(2);
   });
 
+  it('rejects a draft at timestamp in the future beyond the 60s tolerance (issue #255)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-08T14:00:00.000Z'));
+    try {
+      const store = createStewardLedgerStore(dir);
+      await expect(
+        store.append(ledgerEntry({ wakeId: 'wake-future', at: '2026-07-08T14:02:00.000Z' })),
+      ).rejects.toThrow(/draft at is in the future -- set at to the actual current UTC time/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('accepts a draft at timestamp at the current time or slightly in the past (issue #255)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-08T14:00:00.000Z'));
+    try {
+      const store = createStewardLedgerStore(dir);
+      const appended = await store.append(ledgerEntry({ wakeId: 'wake-now', at: '2026-07-08T13:59:55.000Z' }));
+      expect(appended.at).toBe('2026-07-08T13:59:55.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('accepts a draft at timestamp within the 60s future tolerance boundary (issue #255)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-08T14:00:00.000Z'));
+    try {
+      const store = createStewardLedgerStore(dir);
+      const appended = await store.append(ledgerEntry({ wakeId: 'wake-boundary', at: '2026-07-08T14:00:45.000Z' }));
+      expect(appended.at).toBe('2026-07-08T14:00:45.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('requires completion.reason and the full cost field set', async () => {
     const store = createStewardLedgerStore(dir);
 
