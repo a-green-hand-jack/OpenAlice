@@ -77,6 +77,10 @@ export function shouldCleanup(input: { succeeded: boolean; keep: boolean }): boo
 // under the root `tsc --noEmit`.
 export const DEFAULT_LAB_BASE_PORT: number;
 
+// Added for issue #261 so the leading-`--` argv-tolerance regression spec
+// can import `parseLabArgs` under the root `tsc --noEmit`.
+export function parseLabArgs(argv: string[]): { configPath: string };
+
 export interface LabArm {
   id: string;
   agent: string;

@@ -16,8 +16,12 @@ per the steward-plan I6 invariant). Three layers, each reusable on its own:
 ## `lab.mjs` — one-command experiment matrix
 
 ```bash
-pnpm lab -- run experiments/<name>.json
+pnpm lab run experiments/<name>.json
 ```
+
+(A leading `--` — `pnpm lab -- run experiments/<name>.json` — is also
+tolerated: pnpm 11 passes it through to `lab.mjs`'s argv, and `parseLabArgs`
+strips one leading `--` before parsing.)
 
 Runs an unattended `arms × cells × rounds` matrix, serially:
 

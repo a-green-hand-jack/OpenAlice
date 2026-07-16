@@ -428,6 +428,26 @@ export function tokenFromLog(logText) {
 /** Default web port when an experiment.json doesn't set `basePort`. */
 export const DEFAULT_LAB_BASE_PORT = 49631;
 
+/**
+ * Parse `lab.mjs`'s CLI argv into `{ configPath }`. Tolerates ONE leading
+ * literal `--` (issue #261): `pnpm lab -- run <cfg>` and `pnpm lab run <cfg>`
+ * both work — pnpm 11 passes a literal `--` through to the script argv when
+ * the caller writes `pnpm lab -- run <cfg>`, which `parseArgs` used to read
+ * as `cmd === '--'` and reject as a usage error. Only one leading `--` is
+ * stripped, so `-- -- run <cfg>` still fails exactly as before (a genuinely
+ * malformed invocation).
+ *
+ * @param {string[]} argv
+ * @returns {{ configPath: string }}
+ */
+export function parseLabArgs(argv) {
+  const args = argv[0] === '--' ? argv.slice(1) : argv;
+  const [cmd, configPath, ...rest] = args;
+  if (cmd !== 'run' || !configPath) throw new Error('usage: lab.mjs run <experiment.json>');
+  if (rest.length) throw new Error(`unexpected extra argument(s): ${rest.join(' ')}`);
+  return { configPath };
+}
+
 const EXPERIMENT_REQUIRED_FIELDS = ['name', 'weeks', 'rounds', 'cells', 'arms', 'maxRuns'];
 const EXPERIMENT_ALLOWED_FIELDS = new Set([...EXPERIMENT_REQUIRED_FIELDS, 'basePort', 'allowHoldout']);
 const ARM_ALLOWED_FIELDS = new Set(['id', 'agent', 'model', 'overlayDir']);
