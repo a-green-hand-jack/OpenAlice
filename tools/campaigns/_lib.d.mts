@@ -67,3 +67,7 @@ export function buildCampaignAccountCreatePayload(
   runId: string,
   opts?: { maxDdPct?: number; maxPosPct?: number },
 ): CampaignAccountCreatePayload;
+
+// Added for issue #256 so the keep-on-error regression spec can import
+// `shouldCleanup` under the root `tsc --noEmit`.
+export function shouldCleanup(input: { succeeded: boolean; keep: boolean }): boolean;
