@@ -314,6 +314,21 @@ export function buildCampaignAccountCreatePayload(codename, runId, opts = {}) {
   };
 }
 
+// ── cleanup decision (issue #256) ────────────────────────────────────────
+
+/**
+ * Whether run-cell.mjs should delete the workspace + mock account it created
+ * for this run. A run that threw (`succeeded: false`) keeps both for
+ * forensics regardless of `keep`; a run that completed keeps them only when
+ * `--keep` was passed.
+ *
+ * @param {{ succeeded: boolean, keep: boolean }} input
+ * @returns {boolean}
+ */
+export function shouldCleanup({ succeeded, keep }) {
+  return Boolean(succeeded) && !keep;
+}
+
 // ── data sources ─────────────────────────────────────────────────────────
 
 /**

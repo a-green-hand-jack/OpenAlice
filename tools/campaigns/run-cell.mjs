@@ -42,7 +42,7 @@ import { join, resolve } from 'node:path';
 import {
   WEEKS, BARS_PER_WEEK, WINDOW_LEN, START_CASH, HAIKU_PRICE,
   sleep, maxDrawdown, regimeVerdict, maxWeeklyLongReturnUnderExposure, login, makeClient, tokenFromLog,
-  finalizationTrust, buildCampaignAccountCreatePayload,
+  finalizationTrust, buildCampaignAccountCreatePayload, shouldCleanup,
 } from './_lib.mjs';
 
 // Fictional sim-clock epoch: day 0 → 2020-01-01, +1 day per bar. Keeps the
@@ -273,6 +273,7 @@ async function main() {
 
   const weeks = [];
   let wsId, wsDir, acctId;
+  let succeeded = false;
   try {
     // ── mock account + guards ────────────────────────────────────────────
     // NOTE: not `ephemeral` — an ephemeral mock account is purged on the very
@@ -507,11 +508,14 @@ async function main() {
       process.exitCode = 1;
     }
     log(`result → ${join(runDir, 'result.json')}`);
+    succeeded = true;
   } finally {
-    if (!opts.keep) {
+    if (shouldCleanup({ succeeded, keep: opts.keep })) {
       if (wsId) await c.del(`/api/workspaces/${wsId}?purge=true`).catch(() => undefined);
       if (acctId) await c.del(`/api/trading/config/uta/${acctId}`).catch(() => undefined);
       log('cleaned up workspace + account');
+    } else if (!succeeded) {
+      log(`run failed — keeping workspace ${wsId} (${wsDir}) and account ${acctId} for forensics; delete manually when done`);
     } else {
       log(`--keep: left workspace ${wsId} + account ${acctId} for inspection`);
     }
