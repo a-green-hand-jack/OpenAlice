@@ -8,7 +8,7 @@ import {
   resolveWorkspaceToolAuthzLevel,
 } from '@/core/workspace-tool-center.js'
 
-import { buildCampaignRiskEnvelope } from '../tools/campaigns/_lib.mjs'
+import { buildCampaignAccountCreatePayload, buildCampaignRiskEnvelope } from '../tools/campaigns/_lib.mjs'
 
 /**
  * Regression spec for issue #253: `tools/campaigns/run-cell.mjs` created a
@@ -71,5 +71,33 @@ describe('run-cell.mjs risk envelope provisioning (issue #253)', () => {
 
     expect(level).toBe('read_only')
     expect(isTradingToolVisibleAtAuthzLevel('placeOrder', level)).toBe(false)
+  })
+
+  /**
+   * Review follow-up (PR for issue #253): the specs above only exercise the
+   * pure `buildCampaignRiskEnvelope` builder — nothing asserted that
+   * run-cell.mjs actually SENDS the envelope on the account-create POST
+   * body. If someone drops the `riskEnvelope` field from that body (or the
+   * `buildCampaignRiskEnvelope` call feeding it), these specs would stay
+   * green while bug #253 silently returns. `buildCampaignAccountCreatePayload`
+   * is the exact object run-cell.mjs POSTs to `/api/trading/config/uta`, so
+   * asserting on it here pins the create-payload shape, not just the
+   * envelope in isolation.
+   */
+  it('includes a schema-valid riskEnvelope on the account-create payload run-cell.mjs actually sends', () => {
+    const runId = 'chop-20260101-000000'
+    const payload = buildCampaignAccountCreatePayload(codename, runId, { maxDdPct: 10, maxPosPct: 60 })
+
+    expect(payload.riskEnvelope).toBeDefined()
+    const result = riskEnvelopeSchema.safeParse(payload.riskEnvelope)
+    expect(result.success).toBe(true)
+
+    expect(payload.riskEnvelope.autonomyCeiling).toBe('paper')
+    expect(payload.riskEnvelope.scope.kind).toBe('whitelist')
+    expect(payload.riskEnvelope.scope.symbols).toContain(codename)
+
+    // Same object `buildCampaignRiskEnvelope` alone would have produced —
+    // pins that the create payload doesn't drift from the standalone builder.
+    expect(payload.riskEnvelope).toEqual(buildCampaignRiskEnvelope(codename, { maxDdPct: 10, maxPosPct: 60 }))
   })
 })

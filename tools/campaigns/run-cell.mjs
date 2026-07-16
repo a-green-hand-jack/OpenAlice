@@ -42,7 +42,7 @@ import { join, resolve } from 'node:path';
 import {
   WEEKS, BARS_PER_WEEK, WINDOW_LEN, START_CASH, HAIKU_PRICE,
   sleep, maxDrawdown, regimeVerdict, maxWeeklyLongReturnUnderExposure, login, makeClient, tokenFromLog,
-  finalizationTrust, buildCampaignRiskEnvelope,
+  finalizationTrust, buildCampaignAccountCreatePayload,
 } from './_lib.mjs';
 
 // Fictional sim-clock epoch: day 0 → 2020-01-01, +1 day per bar. Keeps the
@@ -284,17 +284,7 @@ async function main() {
     // missing/invalid envelope absorbs effective authz to `read_only` and
     // every mutation tool (placeOrder/tradingCommit/…) stays hidden even
     // after maxAuthzLevel is lifted below.
-    const riskEnvelope = buildCampaignRiskEnvelope(codename, opts);
-    const created = await c.post('/api/trading/config/uta', {
-      presetId: 'mock-simulator',
-      presetConfig: { cash: START_CASH },
-      label: `campaign-${runId}`,
-      guards: [
-        { type: 'max-drawdown', options: { maxDrawdownPct: opts.maxDdPct } },
-        { type: 'max-position-size', options: { maxPercentOfEquity: opts.maxPosPct } },
-      ],
-      riskEnvelope,
-    });
+    const created = await c.post('/api/trading/config/uta', buildCampaignAccountCreatePayload(codename, runId, opts));
     acctId = created.id;
     log(`account ${acctId} created (guards: max-drawdown ${opts.maxDdPct}% + max-position-size ${opts.maxPosPct}%)`);
     log(`risk envelope provisioned (autonomyCeiling=paper, whitelist=[${codename}])`);

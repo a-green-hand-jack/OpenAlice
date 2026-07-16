@@ -50,3 +50,20 @@ export function buildCampaignRiskEnvelope(
   codename: string,
   opts?: { maxDdPct?: number; maxPosPct?: number },
 ): CampaignRiskEnvelope;
+
+// Added for issue #253 (review follow-up) so the regression spec can assert
+// on the exact `POST /api/trading/config/uta` body run-cell.mjs sends,
+// instead of only on `buildCampaignRiskEnvelope` in isolation.
+export interface CampaignAccountCreatePayload {
+  presetId: string;
+  presetConfig: { cash: number };
+  label: string;
+  guards: Array<{ type: string; options: Record<string, unknown> }>;
+  riskEnvelope: CampaignRiskEnvelope;
+}
+
+export function buildCampaignAccountCreatePayload(
+  codename: string,
+  runId: string,
+  opts?: { maxDdPct?: number; maxPosPct?: number },
+): CampaignAccountCreatePayload;

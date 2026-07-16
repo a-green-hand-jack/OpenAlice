@@ -285,6 +285,35 @@ export function buildCampaignRiskEnvelope(codename, opts = {}) {
   };
 }
 
+/**
+ * Build the exact `POST /api/trading/config/uta` body run-cell.mjs sends to
+ * create the campaign's mock-simulator account, including the mandatory
+ * `riskEnvelope` (issue #253 — see `buildCampaignRiskEnvelope` above for why
+ * dropping this field silently absorbs effective authz to `read_only`).
+ * Pulled out as a pure helper so the regression spec can assert on the
+ * actual create-payload shape instead of only on `buildCampaignRiskEnvelope`
+ * in isolation, closing the "field silently dropped from the POST body"
+ * blind spot.
+ *
+ * @param {string} codename the cell's anonymized instrument id (whitelist scope)
+ * @param {string} runId the campaign run id (used to label the account)
+ * @param {{ maxDdPct?: number, maxPosPct?: number }} [opts] guard percentages,
+ *   forwarded verbatim to both the guards array and `buildCampaignRiskEnvelope`
+ *   so the envelope never drifts from the account's own guards.
+ */
+export function buildCampaignAccountCreatePayload(codename, runId, opts = {}) {
+  return {
+    presetId: 'mock-simulator',
+    presetConfig: { cash: START_CASH },
+    label: `campaign-${runId}`,
+    guards: [
+      { type: 'max-drawdown', options: { maxDrawdownPct: opts.maxDdPct } },
+      { type: 'max-position-size', options: { maxPercentOfEquity: opts.maxPosPct } },
+    ],
+    riskEnvelope: buildCampaignRiskEnvelope(codename, opts),
+  };
+}
+
 // ── data sources ─────────────────────────────────────────────────────────
 
 /**
