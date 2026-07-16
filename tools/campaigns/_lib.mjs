@@ -249,6 +249,71 @@ export function maxWeeklyLongReturnUnderExposure(series, maxPositionPct = 60, st
   return best.return === Number.NEGATIVE_INFINITY ? { ...best, return: null } : best;
 }
 
+// ── risk envelope (issue #253) ───────────────────────────────────────────
+
+/**
+ * Build the mandatory Risk Envelope (migration 0012 / v3 admission wire —
+ * `packages/uta-protocol/src/schemas/risk-envelope.ts`) for a campaign's
+ * mock UTA account. Effective steward authz is
+ * `min(account.maxAuthzLevel, workspace authz, envelope.autonomyCeiling)`
+ * (`packages/uta-protocol/src/types/authz.ts` `resolveEffectiveAuthzLevel`);
+ * without a valid, non-revoked, whitelist-scoped envelope the account absorbs
+ * to `read_only` and every mutation tool (placeOrder/modifyOrder/
+ * closePosition/cancelOrder/tradingCommit/tradingReject — all gated at
+ * `paper`, `src/core/workspace-tool-center.ts` `TRADING_TOOL_MIN_AUTHZ_LEVEL`)
+ * stays hidden from the steward workspace.
+ *
+ * @param {string} codename the cell's anonymized instrument id (whitelist scope)
+ * @param {{ maxDdPct?: number, maxPosPct?: number }} [opts] mirrors the same
+ *   guard percentages run-cell.mjs already applies via the account's
+ *   `max-drawdown` / `max-position-size` guards, so the envelope doesn't
+ *   introduce a second, inconsistent limit.
+ */
+export function buildCampaignRiskEnvelope(codename, opts = {}) {
+  const maxPositionPctOfEquity = opts.maxPosPct ?? 60;
+  const maxDrawdownPct = opts.maxDdPct ?? 10;
+  return {
+    version: 1,
+    maxPositionPctOfEquity,
+    maxSingleOrderPctOfEquity: maxPositionPctOfEquity,
+    maxDailyLossPct: maxDrawdownPct,
+    maxDrawdownPct,
+    scope: { kind: 'whitelist', symbols: [codename] },
+    autonomyCeiling: 'paper',
+    revoked: false,
+    revokedReason: null,
+  };
+}
+
+/**
+ * Build the exact `POST /api/trading/config/uta` body run-cell.mjs sends to
+ * create the campaign's mock-simulator account, including the mandatory
+ * `riskEnvelope` (issue #253 — see `buildCampaignRiskEnvelope` above for why
+ * dropping this field silently absorbs effective authz to `read_only`).
+ * Pulled out as a pure helper so the regression spec can assert on the
+ * actual create-payload shape instead of only on `buildCampaignRiskEnvelope`
+ * in isolation, closing the "field silently dropped from the POST body"
+ * blind spot.
+ *
+ * @param {string} codename the cell's anonymized instrument id (whitelist scope)
+ * @param {string} runId the campaign run id (used to label the account)
+ * @param {{ maxDdPct?: number, maxPosPct?: number }} [opts] guard percentages,
+ *   forwarded verbatim to both the guards array and `buildCampaignRiskEnvelope`
+ *   so the envelope never drifts from the account's own guards.
+ */
+export function buildCampaignAccountCreatePayload(codename, runId, opts = {}) {
+  return {
+    presetId: 'mock-simulator',
+    presetConfig: { cash: START_CASH },
+    label: `campaign-${runId}`,
+    guards: [
+      { type: 'max-drawdown', options: { maxDrawdownPct: opts.maxDdPct } },
+      { type: 'max-position-size', options: { maxPercentOfEquity: opts.maxPosPct } },
+    ],
+    riskEnvelope: buildCampaignRiskEnvelope(codename, opts),
+  };
+}
+
 // ── data sources ─────────────────────────────────────────────────────────
 
 /**

@@ -42,7 +42,7 @@ import { join, resolve } from 'node:path';
 import {
   WEEKS, BARS_PER_WEEK, WINDOW_LEN, START_CASH, HAIKU_PRICE,
   sleep, maxDrawdown, regimeVerdict, maxWeeklyLongReturnUnderExposure, login, makeClient, tokenFromLog,
-  finalizationTrust,
+  finalizationTrust, buildCampaignAccountCreatePayload,
 } from './_lib.mjs';
 
 // Fictional sim-clock epoch: day 0 → 2020-01-01, +1 day per bar. Keeps the
@@ -279,17 +279,15 @@ async function main() {
     // UTA restart its own creation triggers (verified: "startup: purging
     // ephemeral UTA …"), so it never comes live. A normal account survives the
     // restart-reload and is cleaned up explicitly in the finally block.
-    const created = await c.post('/api/trading/config/uta', {
-      presetId: 'mock-simulator',
-      presetConfig: { cash: START_CASH },
-      label: `campaign-${runId}`,
-      guards: [
-        { type: 'max-drawdown', options: { maxDrawdownPct: opts.maxDdPct } },
-        { type: 'max-position-size', options: { maxPercentOfEquity: opts.maxPosPct } },
-      ],
-    });
+    // The mandatory Risk Envelope (migration 0012) is provisioned at creation
+    // so effective authz can reach `paper` (issue #253) — without one, a
+    // missing/invalid envelope absorbs effective authz to `read_only` and
+    // every mutation tool (placeOrder/tradingCommit/…) stays hidden even
+    // after maxAuthzLevel is lifted below.
+    const created = await c.post('/api/trading/config/uta', buildCampaignAccountCreatePayload(codename, runId, opts));
     acctId = created.id;
     log(`account ${acctId} created (guards: max-drawdown ${opts.maxDdPct}% + max-position-size ${opts.maxPosPct}%)`);
+    log(`risk envelope provisioned (autonomyCeiling=paper, whitelist=[${codename}])`);
     await waitStable(c, acctId);
 
     // Lift maxAuthzLevel → paper (min(account, workspace) governs auto-push).

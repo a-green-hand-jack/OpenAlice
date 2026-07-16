@@ -31,3 +31,39 @@ export interface FinalizationTrust {
 export function finalizationTrust(input?: FinalizationTrustInput): FinalizationTrust;
 
 export const LEDGER_BACKED_TERMINAL: Set<string>;
+
+// Added for issue #253 so the risk-envelope regression spec can import
+// `buildCampaignRiskEnvelope` under the root `tsc --noEmit`.
+export interface CampaignRiskEnvelope {
+  version: number;
+  maxPositionPctOfEquity: number;
+  maxSingleOrderPctOfEquity: number;
+  maxDailyLossPct: number;
+  maxDrawdownPct: number;
+  scope: { kind: 'whitelist'; symbols: string[] };
+  autonomyCeiling: string;
+  revoked: boolean;
+  revokedReason: string | null;
+}
+
+export function buildCampaignRiskEnvelope(
+  codename: string,
+  opts?: { maxDdPct?: number; maxPosPct?: number },
+): CampaignRiskEnvelope;
+
+// Added for issue #253 (review follow-up) so the regression spec can assert
+// on the exact `POST /api/trading/config/uta` body run-cell.mjs sends,
+// instead of only on `buildCampaignRiskEnvelope` in isolation.
+export interface CampaignAccountCreatePayload {
+  presetId: string;
+  presetConfig: { cash: number };
+  label: string;
+  guards: Array<{ type: string; options: Record<string, unknown> }>;
+  riskEnvelope: CampaignRiskEnvelope;
+}
+
+export function buildCampaignAccountCreatePayload(
+  codename: string,
+  runId: string,
+  opts?: { maxDdPct?: number; maxPosPct?: number },
+): CampaignAccountCreatePayload;
