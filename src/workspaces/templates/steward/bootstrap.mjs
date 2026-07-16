@@ -81,8 +81,7 @@ end with one validated decision recorded for that wake.
   draft again (a successful run removes it) and re-run the validator.
 - finalize/: gitignored per-wake finalization markers. You do not edit these.
 - schemas/decision-ledger.v3.json: launcher-owned protocol schema identity.
-- tmp/: gitignored launcher scratch. It is not a broker-mutation surface for
-  this Decision Intent contract slice.
+- tmp/: gitignored launcher scratch.
 
 ## First action on wake
 
