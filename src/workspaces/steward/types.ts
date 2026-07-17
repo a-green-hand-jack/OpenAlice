@@ -1,4 +1,4 @@
-import { AUTHZ_LEVELS } from '@traderalice/uta-protocol';
+import { AUTHZ_LEVELS, riskEnvelopeSchema } from '@traderalice/uta-protocol';
 import { z } from 'zod';
 
 export const WAKE_SCHEMA_VERSION = 1;
@@ -35,6 +35,9 @@ export const LEDGER_ENTRY_FUTURE_AT_TOLERANCE_MS = 60_000;
  *  writes one per wake AFTER all checks pass; it is the commit point the
  *  supervisor waits for before terminalizing a marker-protocol wake. */
 export const STEWARD_FINALIZE_MARKER_SCHEMA_VERSION = 1;
+/** v1 intentionally supports one operator-approved root mandate bound to one
+ * trading entrusted unit. Parent/child delegation is not a runtime surface. */
+export const ENTRUSTED_UNIT_MANDATE_SCHEMA_VERSION = 1;
 
 export const stewardWakeReasonSchema = z.enum([
   'scheduled_observe',
@@ -116,6 +119,52 @@ const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 const nonEmptyStringSchema = z.string().trim().min(1);
 const isoTimestampSchema = z.iso.datetime({ offset: true });
 
+export const entrustedUnitIntentIdentitySchema = z.object({
+  mandateId: nonEmptyStringSchema,
+  entrustedUnitId: nonEmptyStringSchema,
+}).strict();
+export type EntrustedUnitIntentIdentity = z.infer<typeof entrustedUnitIntentIdentitySchema>;
+
+export const entrustedUnitMandateSchema = z.object({
+  version: z.literal(ENTRUSTED_UNIT_MANDATE_SCHEMA_VERSION),
+  mandateId: nonEmptyStringSchema,
+  entrustedUnitId: nonEmptyStringSchema,
+  parentMandateId: z.null(),
+  accountId: nonEmptyStringSchema,
+  capital: z.object({
+    currency: nonEmptyStringSchema,
+    limit: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/),
+  }).strict(),
+  scope: z.object({
+    kind: z.literal('instrument_whitelist'),
+    instruments: z.array(nonEmptyStringSchema).min(1),
+  }).strict(),
+  validFrom: isoTimestampSchema,
+  validUntil: isoTimestampSchema,
+  heartbeat: z.object({
+    intervalMs: z.number().int().positive(),
+    graceMs: z.number().int().nonnegative(),
+  }).strict(),
+  riskEnvelope: riskEnvelopeSchema,
+}).strict().superRefine((mandate, ctx) => {
+  if (Date.parse(mandate.validUntil) <= Date.parse(mandate.validFrom)) {
+    ctx.addIssue({ code: 'custom', path: ['validUntil'], message: 'validUntil must be after validFrom' });
+  }
+  if (new Set(mandate.scope.instruments).size !== mandate.scope.instruments.length) {
+    ctx.addIssue({ code: 'custom', path: ['scope', 'instruments'], message: 'mandate scope instruments must be unique' });
+  }
+  if (mandate.riskEnvelope.scope.kind !== 'whitelist') {
+    ctx.addIssue({ code: 'custom', path: ['riskEnvelope', 'scope'], message: 'v1 mandate requires a whitelist Risk Envelope' });
+    return;
+  }
+  const mandateScope = [...mandate.scope.instruments].sort();
+  const envelopeScope = [...mandate.riskEnvelope.scope.symbols].sort();
+  if (JSON.stringify(mandateScope) !== JSON.stringify(envelopeScope)) {
+    ctx.addIssue({ code: 'custom', path: ['scope'], message: 'mandate scope must equal the Risk Envelope whitelist' });
+  }
+});
+export type EntrustedUnitMandate = z.infer<typeof entrustedUnitMandateSchema>;
+
 const stewardWakeEnvelopeCommonShape = {
   reason: stewardWakeReasonSchema,
   accountId: z.string().min(1),
@@ -123,6 +172,7 @@ const stewardWakeEnvelopeCommonShape = {
   marketContext: jsonRecordSchema.optional(),
   riskContext: jsonRecordSchema.optional(),
   humanRequest: z.string().optional(),
+  mandate: entrustedUnitMandateSchema.optional(),
 };
 
 /** Deterministic dispatch input before Snapshot M1 is published. */
@@ -389,6 +439,7 @@ const intentTargetShape = {
   invalidation: z.array(stewardIntentInvalidationSchema).min(1),
 };
 const intentCommonShape = {
+  identity: entrustedUnitIntentIdentitySchema.optional(),
   confidence: z.enum(['low', 'medium', 'high']),
   maxAcceptableLossPct: percentageSchema,
   timeHorizon: z.object({

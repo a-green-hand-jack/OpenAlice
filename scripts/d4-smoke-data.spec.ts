@@ -19,6 +19,7 @@ import {
   D4_PROFILES,
 } from '../tools/campaigns/d4-smoke-data.mjs';
 import {
+  D4_SMOKE_BASELINE_COMMIT,
   D4_SMOKE_CANDIDATES,
   D4_SMOKE_CREDENTIAL_SOURCES,
   D4_SMOKE_INSTRUCTION_REF,
@@ -70,11 +71,21 @@ function listRelativeFiles(root: string, prefix: string): string[] {
   });
 }
 
+function frozenInstructionBytes(): Buffer {
+  const result = spawnSync(
+    'git',
+    ['show', `${D4_SMOKE_BASELINE_COMMIT}:${D4_SMOKE_INSTRUCTION_REF}`],
+    { cwd: REPO_ROOT, encoding: 'buffer', maxBuffer: 4 * 1024 * 1024 },
+  );
+  if (result.status !== 0) throw new Error(`cannot read frozen D4 instruction: ${String(result.stderr)}`);
+  return Buffer.from(result.stdout);
+}
+
 function stageContentByRef() {
   const stage = d4SmokeStageManifestSchema.parse(readJson(STAGE_PATH));
   const contentByRef: Record<string, Uint8Array> = {};
   const bind = (ref: string) => { contentByRef[ref] = readFileSync(repoPath(ref)); };
-  bind(stage.content.baseline.instruction.ref);
+  contentByRef[stage.content.baseline.instruction.ref] = frozenInstructionBytes();
   bind(stage.content.baseline.runtimePolicy.ref);
   bind(stage.content.baseline.quotaForecastEvidence.ref);
   const quota = readJson(repoPath(stage.content.baseline.quotaForecastEvidence.ref));
@@ -203,7 +214,7 @@ describe('checked-in D4 Smoke dev package', () => {
 
   it('binds every checked-in file, embedded receipt, and frozen raw/derived byte receipt', () => {
     const stageBytes = readFileSync(STAGE_PATH);
-    expect(sha256(readFileSync(repoPath(content.baseline.instruction.ref))))
+    expect(sha256(frozenInstructionBytes()))
       .toBe(content.baseline.instruction.sha256);
     expect(sha256(readFileSync(repoPath(content.baseline.runtimePolicy.ref))))
       .toBe(content.baseline.runtimePolicy.sha256);
@@ -290,13 +301,14 @@ describe('checked-in D4 Smoke dev package', () => {
     expect(sha256(readFileSync(STAGE_PATH))).toBe(before);
   });
 
-  it('verifies immutable native quota captures and exact calibration turns', () => {
+  it('keeps the historical package verifier retired after platform instruction divergence', () => {
     const result = spawnSync('pnpm', [
       'exec', 'tsx', resolve(REPO_ROOT, 'tools/campaigns/build-d4-smoke-data.mjs'),
       '--verify',
     ], { cwd: REPO_ROOT, encoding: 'utf8' });
-    expect(result.status).toBe(0);
+    expect(result.status).toBe(1);
     expect(result.stderr).toContain('verified immutable native quota captures and 9 calibration probes');
+    expect(result.stderr).toContain('v9-RUNTIME instruction content drift');
   });
 
   it('uses exact half-open decision prefixes and keeps the final cadence outcome-only', () => {

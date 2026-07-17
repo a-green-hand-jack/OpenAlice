@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { Logger } from './logger.js';
-import { TemplateRegistry } from './template-registry.js';
+import { TEMPLATE_POLICY_CONTRACT_VERSION, TemplateRegistry } from './template-registry.js';
 
 const logger: Logger = {
   debug: () => undefined,
@@ -37,16 +37,20 @@ async function writeBase(root: string, name: string, injectPersona = true): Prom
   ]);
 }
 
-async function writeOverlay(root: string, name: string, manifest = { extends: name }): Promise<void> {
+async function writeOverlay(
+  root: string,
+  name: string,
+  manifest: unknown = { extends: name, contractVersion: TEMPLATE_POLICY_CONTRACT_VERSION },
+): Promise<void> {
   const templateDir = join(root, name);
   await mkdir(join(templateDir, 'files'), { recursive: true });
   await Promise.all([
     writeFile(join(templateDir, 'template.json'), JSON.stringify(manifest)),
-    writeFile(join(templateDir, 'files', 'instruction.md'), `${name} overlay instruction\n`),
+    writeFile(join(templateDir, 'files', 'policy.md'), `${name} overlay policy\n`),
   ]);
 }
 
-describe('TemplateRegistry instruction overlays', () => {
+describe('TemplateRegistry policy overlays', () => {
   it('keeps base templates unchanged when no overlay root is configured', async () => {
     const baseRoot = await makeRoot('template-registry-base-');
     await Promise.all(['chat', 'auto-quant', 'steward'].map((name) => writeBase(baseRoot, name)));
@@ -75,8 +79,9 @@ describe('TemplateRegistry instruction overlays', () => {
       bootstrapScript: join(baseRoot, 'steward', 'bootstrap.mjs'),
       templateDir: join(baseRoot, 'steward'),
       filesDir: join(baseRoot, 'steward', 'files'),
-      instructionPath: join(overlayRoot, 'steward', 'files', 'instruction.md'),
-      instructionContent: 'steward overlay instruction\n',
+      instructionPath: join(baseRoot, 'steward', 'files', 'instruction.md'),
+      policyContent: 'steward overlay policy\n',
+      policyContractVersion: TEMPLATE_POLICY_CONTRACT_VERSION,
     });
   });
 
@@ -92,13 +97,15 @@ describe('TemplateRegistry instruction overlays', () => {
   });
 
   it.each([
-    ['has no base registry to extend', 'steward', { extends: 'steward' }, undefined, /requires a readable base template root/i, true],
-    ['references a missing base', 'missing', { extends: 'missing' }, undefined, /base template .*missing.*not registered/i],
-    ['does not match its directory name', 'steward', { extends: 'chat' }, undefined, /must extend same-named base template/i],
-    ['duplicates a base through another directory', 'steward-copy', { extends: 'steward' }, undefined, /must extend same-named base template/i],
-    ['uses a non-minimal manifest', 'steward', { extends: 'steward', injectPersona: true }, undefined, /must contain only an "extends" field/i],
-    ['ships a bootstrap', 'steward', { extends: 'steward' }, 'bootstrap.mjs', /must not ship bootstrap/i],
-    ['omits its instruction', 'steward', { extends: 'steward' }, 'remove-instruction', /missing files\/instruction\.md/i],
+    ['has no base registry to extend', 'steward', { extends: 'steward', contractVersion: 1 }, undefined, /requires a readable base template root/i, true],
+    ['references a missing base', 'missing', { extends: 'missing', contractVersion: 1 }, undefined, /base template .*missing.*not registered/i],
+    ['does not match its directory name', 'steward', { extends: 'chat', contractVersion: 1 }, undefined, /must extend same-named base template/i],
+    ['duplicates a base through another directory', 'steward-copy', { extends: 'steward', contractVersion: 1 }, undefined, /must extend same-named base template/i],
+    ['uses a non-minimal manifest', 'steward', { extends: 'steward', contractVersion: 1, injectPersona: true }, undefined, /must declare contractVersion 1/i],
+    ['omits its contract version', 'steward', { extends: 'steward' }, undefined, /must declare contractVersion 1/i],
+    ['uses an unsupported contract version', 'steward', { extends: 'steward', contractVersion: 2 }, undefined, /must declare contractVersion 1/i],
+    ['ships a bootstrap', 'steward', { extends: 'steward', contractVersion: 1 }, 'bootstrap.mjs', /must not ship bootstrap/i],
+    ['omits its policy', 'steward', { extends: 'steward', contractVersion: 1 }, 'remove-policy', /missing files\/policy\.md/i],
   ])('fails closed when an overlay %s', async (_label, name, manifest, mutation, expected, missingBase = false) => {
     const baseRoot = await makeRoot('template-registry-base-');
     const overlayRoot = await makeRoot('template-registry-overlay-');
@@ -108,8 +115,8 @@ describe('TemplateRegistry instruction overlays', () => {
     if (mutation === 'bootstrap.mjs') {
       await writeFile(join(overlayRoot, name, mutation), 'export {};\n');
     }
-    if (mutation === 'remove-instruction') {
-      await rm(join(overlayRoot, name, 'files', 'instruction.md'));
+    if (mutation === 'remove-policy') {
+      await rm(join(overlayRoot, name, 'files', 'policy.md'));
     }
 
     await expect(TemplateRegistry.load(baseRoot, logger, overlayRoot)).rejects.toThrow(expected);

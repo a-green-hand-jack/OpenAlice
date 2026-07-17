@@ -1,10 +1,15 @@
 # Campaign tooling — steward persistent-wake backtests
 
-Orchestrator-side eval tooling (not product code — lives outside `src/`
-per the steward-plan I6 invariant). Three layers, each reusable on its own:
+Supported, testable, stable first-class evaluation infrastructure and operator
+CLI. It lives under `tools/` to keep campaign orchestration out of the agent
+runtime in `src/`, not because it is ad hoc or non-product. Three layers, each
+reusable on its own:
+
+Canonical lifecycle, safety, configuration, status, artifact, recovery, and
+cleanup instructions: [Trading Agent Operator Guide](../../docs/trading-agent-operator-guide.zh.md).
 
 - **`run-cell.mjs`** — drives ONE cell through ONE arm end-to-end against a
-  running dev stack (mock UTA + blind steward workspace + weekly wake
+  running production Guardian stack (mock UTA + blind steward workspace + weekly wake
   cycles). See `cells/README.md` for the cell catalog and a standalone
   `run-cell.mjs` invocation example.
 - **`report.mjs`** — renders a markdown matrix report from one or more
@@ -12,6 +17,15 @@ per the steward-plan I6 invariant). Three layers, each reusable on its own:
 - **`lab.mjs`** — one-command experiment matrix runner (issue #259). Owns
   the loop and the stack lifecycle; it does not reimplement `run-cell.mjs`
   or `report.mjs`, it shells out to them.
+
+Experiment configs default to `"dispatch":"direct"`, preserving the existing
+manual wake path. `"dispatch":"scheduled"` passes `--scheduled` to the same
+`run-cell.mjs`: it writes one unique, one-shot `.alice/issues/<runId>-w<week>.md`
+declaration per week and waits for the existing `ScheduleScanner` and persistent
+`StewardSupervisorScanner`. That branch never POSTs a steward wake or a manual
+supervisor tick; its result records the issue/wake/status/actions evidence and
+requires every scheduled wake to end terminal with ledger backing and every UTA
+checklist field to match its documented success allowlist.
 
 ## `lab.mjs` — one-command experiment matrix
 
@@ -25,7 +39,7 @@ strips one leading `--` before parsing.)
 
 Runs an unattended `arms × cells × rounds` matrix, serially:
 
-1. **Per arm** (fresh `pnpm dev` sandbox): its own `OPENALICE_HOME` +
+1. **Per arm** (fresh `node scripts/guardian/prod.mjs` sandbox): its own `OPENALICE_HOME` +
    `AQ_LAUNCHER_ROOT` + port block (derived from `basePort`), optional
    `AQ_TEMPLATE_OVERLAY_DIR`, `OPENALICE_TRADING_MODE=pro`. One arm = one
    stack, because template overlays are a startup snapshot
@@ -40,6 +54,28 @@ Runs an unattended `arms × cells × rounds` matrix, serially:
    Failed runs keep everything for forensics; `summary.json` records what
    was left behind.
 4. **Tear down** the stack (see below), then move to the next arm.
+
+### Evaluation Authority
+
+`alice-lab` and `run-cell.mjs` are the current end-to-end campaign path:
+they exercise the isolated Guardian stack, a blind steward workspace, the
+`alice-uta` proposal/commit surface, and UTA's MockBroker state. The pure
+steward evaluator, evaluation-data manifest, and provenance store remain the
+evaluation contracts for each wake.
+
+`src/workspaces/steward/d4-smoke-runner.ts` and its tests are frozen historical
+D4 evidence. The runner is intentionally absent from the steward barrel and is
+not a current campaign, scheduler, operator entry, or production execution path.
+
+An `AQ_TEMPLATE_OVERLAY_DIR` policy overlay must preserve OpenAlice mechanics:
+`steward/template.json` is exactly
+`{"extends":"steward","contractVersion":1}`, and its only policy file is
+`steward/files/policy.md`. The policy is snapshot at stack start, then composed
+before the built-in, authoritative steward instruction. A full external
+`instruction.md`, an unknown contract version, or additional overlay files
+fail startup. Without explicit policy authorization for a wake, the built-in
+steward remains proposal-only; policy never overrides authz, Risk Envelope,
+guards, `alice-uta` policy, or UTA `autoPush`.
 
 A `run-cell.mjs` failure marks that run failed and the arm continues to the
 next round/cell. A stack-boot failure marks the WHOLE arm failed (its
@@ -57,14 +93,10 @@ attempted or mid-experiment.
 
 ### Stack teardown
 
-Every arm's `pnpm dev` sandbox is spawned `detached: true` (its own POSIX
+Every arm's production Guardian is spawned `detached: true` (its own POSIX
 process group) and torn down by signaling that whole group —
 `process.kill(-pid, 'SIGTERM')`, a grace period, then
-`process.kill(-pid, 'SIGKILL')` — not just the top-level `pnpm` pid. This
-matters because pnpm does **not** forward SIGTERM to the `tsx`/Guardian
-process it spawns, so a plain `child.kill()` only killed `pnpm` itself and
-orphaned the whole Guardian/UTA/Alice/Vite tree still holding the port
-block (empirically reproduced against pnpm 11.9.0). "Torn down" is gated on
+`process.kill(-pid, 'SIGKILL')` — not just Alice or UTA. "Torn down" is gated on
 the arm's web port actually freeing (polled up to 30s after the SIGKILL),
 never on a child `exit` event — because every arm in one experiment reuses
 the *same* port block (`derivePortBlock(config.basePort)` is derived once
@@ -99,7 +131,16 @@ exits `1`.
   ],
   "maxRuns": 12,
   "basePort": 49631,
-  "allowHoldout": false
+  "allowHoldout": false,
+  "dispatch": "scheduled",
+  "restartAfterWake": 3,
+  "mandate": {
+    "id": "root-example",
+    "entrustedUnitId": "team-unit-v1",
+    "capital": { "currency": "USD", "limit": "100000" },
+    "validForMs": 86400000,
+    "heartbeat": { "intervalMs": 3600000, "graceMs": 300000 }
+  }
 }
 ```
 
@@ -114,6 +155,10 @@ exits `1`.
   experiment or a manual dev stack.
 - v1 only supports `agent: "codex"` arms — there is no per-workspace write
   surface yet for pinning a Claude model per arm.
+- Scheduled dispatch requires one v1 root `mandate`. `run-cell.mjs` binds its
+  account id, whitelist, and existing UTA Risk Envelope; Trade Intents must copy
+  the mandate/unit identity. `restartAfterWake` requests an acceptance-only UTA
+  restart through the existing production Guardian flag protocol.
 - run-id format: `<name>-<armId>-<cell>-r<round>`.
 
 See `experiments/example-smoke.json` for a runnable 2-arm × 1-cell × 1-round

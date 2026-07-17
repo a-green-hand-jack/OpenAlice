@@ -277,14 +277,14 @@ describe('steward workspace create: scaffold → manifest → commit', () => {
   });
 });
 
-describe('steward instruction overlay: create and both runtime faces', () => {
+describe('steward policy overlay: create and both runtime faces', () => {
   it('uses the startup snapshot for creation and PTY/machine runtime leases', async () => {
     const overlayRoot = join(parent, 'instruction-overlay');
-    const overlayInstruction = join(overlayRoot, 'steward', 'files', 'instruction.md');
+    const overlayPolicy = join(overlayRoot, 'steward', 'files', 'policy.md');
     await mkdir(join(overlayRoot, 'steward', 'files'), { recursive: true });
     await Promise.all([
-      writeFile(join(overlayRoot, 'steward', 'template.json'), JSON.stringify({ extends: 'steward' }), 'utf8'),
-      writeFile(overlayInstruction, '# steward overlay startup snapshot\n', 'utf8'),
+      writeFile(join(overlayRoot, 'steward', 'template.json'), JSON.stringify({ extends: 'steward', contractVersion: 1 }), 'utf8'),
+      writeFile(overlayPolicy, '# steward policy startup snapshot\n', 'utf8'),
     ]);
 
     const templates = await TemplateRegistry.load(join(HERE, 'templates'), logger, overlayRoot);
@@ -305,19 +305,22 @@ describe('steward instruction overlay: create and both runtime faces', () => {
     expect(created.ok).toBe(true);
     if (!created.ok) throw new Error(created.message);
     expect(await readFile(join(created.workspace.dir, 'AGENTS.md'), 'utf8')).toContain(
-      '# steward overlay startup snapshot',
+      '# steward policy startup snapshot',
     );
-    await writeFile(overlayInstruction, '# steward overlay changed on disk\n', 'utf8');
+    expect(await readFile(join(created.workspace.dir, 'AGENTS.md'), 'utf8')).toContain(
+      '## Platform Mechanics (OpenAlice-owned)',
+    );
+    await writeFile(overlayPolicy, '# steward policy changed on disk\n', 'utf8');
 
     const pty = await creator.withStewardRuntimeLease(created.workspace, 'pty', async (runtime) => runtime);
     const machine = await creator.withStewardRuntimeLease(created.workspace, 'machine', async (runtime) => runtime);
     expect(pty.forceFresh).toBe(true);
     expect(machine).toEqual({ desiredDigest: pty.desiredDigest, forceFresh: true });
     expect(await readFile(join(created.workspace.dir, 'AGENTS.md'), 'utf8')).toContain(
-      '# steward overlay startup snapshot',
+      '# steward policy startup snapshot',
     );
     expect(await readFile(join(created.workspace.dir, 'AGENTS.md'), 'utf8')).not.toContain(
-      'changed on disk',
+      'policy changed on disk',
     );
 
     await expect(creator.withStewardRuntimeLease(

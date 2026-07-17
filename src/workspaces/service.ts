@@ -831,6 +831,7 @@ export async function createWorkspaceService(opts: CreateWorkspaceServiceOptions
       authzLevel: wake.authzLevel,
       expectedDecision: wake.expectedDecision,
       humanRequest: wake.humanRequest,
+      ...(wake.mandate !== undefined ? { mandate: wake.mandate } : {}),
       ...(wake.marketContext !== undefined ? { marketContext: wake.marketContext } : {}),
       ...(wake.riskContext !== undefined ? { riskContext: wake.riskContext } : {}),
     };

@@ -285,6 +285,56 @@ export function buildCampaignRiskEnvelope(codename, opts = {}) {
   };
 }
 
+/** Build the v1 root mandate used by scheduled campaign wakes. It binds one
+ * account and one Trading Team entrusted unit to the same UTA Risk Envelope;
+ * there is deliberately no child-delegation field beyond parentMandateId=null. */
+export function buildCampaignMandate({
+  mandateId,
+  entrustedUnitId,
+  accountId,
+  capital,
+  scope,
+  validFrom,
+  validUntil,
+  heartbeat,
+  riskEnvelope,
+}) {
+  for (const [field, value] of Object.entries({ mandateId, entrustedUnitId, accountId })) {
+    if (typeof value !== 'string' || !value.trim()) throw new Error(`mandate ${field} must be a non-empty string`);
+  }
+  if (!capital || typeof capital.currency !== 'string' || !capital.currency.trim() ||
+    typeof capital.limit !== 'string' || !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(capital.limit)) {
+    throw new Error('mandate capital requires a currency and non-negative decimal-string limit');
+  }
+  if (!Array.isArray(scope) || scope.length === 0 || scope.some((value) => typeof value !== 'string' || !value.trim()) || new Set(scope).size !== scope.length) {
+    throw new Error('mandate scope must be a non-empty unique instrument list');
+  }
+  if (!Number.isFinite(Date.parse(validFrom)) || !Number.isFinite(Date.parse(validUntil)) || Date.parse(validUntil) <= Date.parse(validFrom)) {
+    throw new Error('mandate validity must contain ordered ISO timestamps');
+  }
+  if (!heartbeat || !Number.isInteger(heartbeat.intervalMs) || heartbeat.intervalMs <= 0 ||
+    !Number.isInteger(heartbeat.graceMs) || heartbeat.graceMs < 0) {
+    throw new Error('mandate heartbeat requires positive intervalMs and non-negative graceMs');
+  }
+  if (!riskEnvelope || riskEnvelope.scope?.kind !== 'whitelist' ||
+    JSON.stringify([...riskEnvelope.scope.symbols].sort()) !== JSON.stringify([...scope].sort())) {
+    throw new Error('mandate scope must equal the Risk Envelope whitelist');
+  }
+  return {
+    version: 1,
+    mandateId,
+    entrustedUnitId,
+    parentMandateId: null,
+    accountId,
+    capital,
+    scope: { kind: 'instrument_whitelist', instruments: [...scope] },
+    validFrom,
+    validUntil,
+    heartbeat,
+    riskEnvelope,
+  };
+}
+
 /**
  * Build the exact `POST /api/trading/config/uta` body run-cell.mjs sends to
  * create the campaign's mock-simulator account, including the mandatory
@@ -449,8 +499,18 @@ export function parseLabArgs(argv) {
 }
 
 const EXPERIMENT_REQUIRED_FIELDS = ['name', 'weeks', 'rounds', 'cells', 'arms', 'maxRuns'];
-const EXPERIMENT_ALLOWED_FIELDS = new Set([...EXPERIMENT_REQUIRED_FIELDS, 'basePort', 'allowHoldout']);
+const EXPERIMENT_ALLOWED_FIELDS = new Set([...EXPERIMENT_REQUIRED_FIELDS, 'basePort', 'allowHoldout', 'dispatch', 'mandate', 'restartAfterWake']);
 const ARM_ALLOWED_FIELDS = new Set(['id', 'agent', 'model', 'overlayDir']);
+const MANDATE_ALLOWED_FIELDS = new Set(['id', 'entrustedUnitId', 'capital', 'validForMs', 'heartbeat']);
+const RUN_ID_COMPONENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const MAX_RUN_ID_COMPONENT_LENGTH = 64;
+
+function assertSafeRunIdComponent(value, field) {
+  if (typeof value !== 'string' || !value || value.length > MAX_RUN_ID_COMPONENT_LENGTH ||
+    value === '.' || value === '..' || !RUN_ID_COMPONENT_RE.test(value)) {
+    throw new Error(`${field} must be a safe run-id component ([A-Za-z0-9][A-Za-z0-9._-]*, max ${MAX_RUN_ID_COMPONENT_LENGTH})`);
+  }
+}
 
 /**
  * Validate + normalize an experiment.json body (v1 shape — see issue #259).
@@ -461,7 +521,8 @@ const ARM_ALLOWED_FIELDS = new Set(['id', 'agent', 'model', 'overlayDir']);
  * @param {unknown} config
  * @returns {{ name: string, weeks: number, rounds: number, cells: string[],
  *   arms: Array<{ id: string, agent: string, model: string, overlayDir?: string }>,
- *   maxRuns: number, allowHoldout: boolean, basePort: number, totalRuns: number }}
+ *   maxRuns: number, allowHoldout: boolean, basePort: number,
+ *   dispatch: 'direct' | 'scheduled', totalRuns: number }}
  */
 export function validateExperimentConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
@@ -477,6 +538,7 @@ export function validateExperimentConfig(config) {
 
   const { name, weeks, rounds, cells, arms, maxRuns } = config;
   if (typeof name !== 'string' || !name.trim()) throw new Error('experiment.json "name" must be a non-empty string');
+  assertSafeRunIdComponent(name, 'experiment.json "name"');
   if (!Number.isInteger(weeks) || weeks <= 0) throw new Error('experiment.json "weeks" must be a positive integer');
   if (!Number.isInteger(rounds) || rounds <= 0) throw new Error('experiment.json "rounds" must be a positive integer');
   if (!Number.isInteger(maxRuns) || maxRuns <= 0) throw new Error('experiment.json "maxRuns" must be a positive integer');
@@ -484,6 +546,7 @@ export function validateExperimentConfig(config) {
   if (!Array.isArray(cells) || cells.length === 0) throw new Error('experiment.json "cells" must be a non-empty array');
   for (const cell of cells) {
     if (typeof cell !== 'string' || !cell.trim()) throw new Error(`experiment.json "cells" entries must be non-empty strings (got ${JSON.stringify(cell)})`);
+    assertSafeRunIdComponent(cell, `experiment.json "cells" entry ${JSON.stringify(cell)}`);
   }
 
   const allowHoldout = config.allowHoldout ?? false;
@@ -503,6 +566,42 @@ export function validateExperimentConfig(config) {
     throw new Error('experiment.json "basePort" must be an integer port number (<= 65000)');
   }
 
+  const dispatch = config.dispatch ?? 'direct';
+  if (dispatch !== 'direct' && dispatch !== 'scheduled') {
+    throw new Error('experiment.json "dispatch" must be "direct" or "scheduled"');
+  }
+
+  let mandate = null;
+  if (config.mandate !== undefined) {
+    if (!config.mandate || typeof config.mandate !== 'object' || Array.isArray(config.mandate)) {
+      throw new Error('experiment.json "mandate" must be an object');
+    }
+    const unknownMandateFields = Object.keys(config.mandate).filter((key) => !MANDATE_ALLOWED_FIELDS.has(key));
+    if (unknownMandateFields.length) throw new Error(`experiment.json mandate has unknown field(s): ${unknownMandateFields.join(', ')}`);
+    const { id, entrustedUnitId, capital, validForMs, heartbeat } = config.mandate;
+    assertSafeRunIdComponent(id, 'experiment.json mandate.id');
+    assertSafeRunIdComponent(entrustedUnitId, 'experiment.json mandate.entrustedUnitId');
+    if (!capital || typeof capital !== 'object' || Array.isArray(capital) ||
+      typeof capital.currency !== 'string' || !capital.currency.trim() ||
+      typeof capital.limit !== 'string' || !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(capital.limit)) {
+      throw new Error('experiment.json mandate.capital requires currency and non-negative decimal-string limit');
+    }
+    if (!Number.isInteger(validForMs) || validForMs <= 0) throw new Error('experiment.json mandate.validForMs must be a positive integer');
+    if (!heartbeat || typeof heartbeat !== 'object' || Array.isArray(heartbeat) ||
+      !Number.isInteger(heartbeat.intervalMs) || heartbeat.intervalMs <= 0 ||
+      !Number.isInteger(heartbeat.graceMs) || heartbeat.graceMs < 0) {
+      throw new Error('experiment.json mandate.heartbeat requires positive intervalMs and non-negative graceMs');
+    }
+    mandate = { id, entrustedUnitId, capital: { currency: capital.currency, limit: capital.limit }, validForMs, heartbeat: { intervalMs: heartbeat.intervalMs, graceMs: heartbeat.graceMs } };
+  }
+  if (dispatch === 'scheduled' && mandate === null) {
+    throw new Error('experiment.json scheduled dispatch requires a v1 "mandate"');
+  }
+  const restartAfterWake = config.restartAfterWake ?? null;
+  if (restartAfterWake !== null && (!Number.isInteger(restartAfterWake) || restartAfterWake < 1 || restartAfterWake >= weeks)) {
+    throw new Error('experiment.json "restartAfterWake" must be an integer from 1 through weeks-1');
+  }
+
   if (!Array.isArray(arms) || arms.length === 0) throw new Error('experiment.json "arms" must be a non-empty array');
   const seenArmIds = new Set();
   const normalizedArms = arms.map((arm, i) => {
@@ -510,6 +609,7 @@ export function validateExperimentConfig(config) {
     const unknownArmFields = Object.keys(arm).filter((k) => !ARM_ALLOWED_FIELDS.has(k));
     if (unknownArmFields.length) throw new Error(`experiment.json arms[${i}] has unknown field(s): ${unknownArmFields.join(', ')}`);
     if (typeof arm.id !== 'string' || !arm.id.trim()) throw new Error(`experiment.json arms[${i}] missing required field: id`);
+    assertSafeRunIdComponent(arm.id, `experiment.json arms[${i}] id`);
     if (seenArmIds.has(arm.id)) throw new Error(`experiment.json has duplicate arm id: "${arm.id}"`);
     seenArmIds.add(arm.id);
     if (arm.agent !== 'codex') {
@@ -533,7 +633,86 @@ export function validateExperimentConfig(config) {
     );
   }
 
-  return { name, weeks, rounds, cells: [...cells], arms: normalizedArms, maxRuns, allowHoldout, basePort, totalRuns };
+  return { name, weeks, rounds, cells: [...cells], arms: normalizedArms, maxRuns, allowHoldout, basePort, dispatch, mandate, restartAfterWake, totalRuns };
+}
+
+/** The only dispatch-mode flag lab passes to the existing run-cell runner. */
+export function runCellDispatchArgs(dispatch = 'direct') {
+  if (dispatch === 'direct') return [];
+  if (dispatch === 'scheduled') return ['--scheduled'];
+  throw new Error(`unsupported campaign dispatch: ${dispatch}`);
+}
+
+const UTA_CHECKLIST_SUCCESS_VALUES = Object.freeze({
+  account: new Set(['ok']),
+  positions: new Set(['ok']),
+  orders: new Set(['ok']),
+  risk: new Set(['ok', 'normal']),
+  market: new Set(['ok', 'open', 'closed']),
+  history: new Set(['ok', 'checked']),
+});
+
+/** A campaign wake is infrastructure-valid only when every mandatory UTA read
+ * produced a non-failure checklist value. A ledger-backed `blocked` decision
+ * remains valid for risk/authz reasons, but cannot conceal a broken CLI path. */
+export function utaChecklistVerified(weeks) {
+  return Array.isArray(weeks) && weeks.length > 0 && weeks.every((week) =>
+    week?.checklist && Object.entries(UTA_CHECKLIST_SUCCESS_VALUES).every(([field, allowed]) => {
+      const value = week.checklist[field];
+      return typeof value === 'string'
+        && allowed.has(value.toLowerCase());
+    }));
+}
+
+/** Extract identity only from the persisted wake envelope returned by Alice. */
+export function wakeEnvelopeIdentity(wake) {
+  const mandate = wake?.envelope?.mandate;
+  if (typeof mandate?.mandateId !== 'string' || mandate.mandateId.length === 0
+    || typeof mandate?.entrustedUnitId !== 'string' || mandate.entrustedUnitId.length === 0) {
+    return { mandateId: null, entrustedUnitId: null };
+  }
+  return { mandateId: mandate.mandateId, entrustedUnitId: mandate.entrustedUnitId };
+}
+
+export function wakeEnvelopeIdentityVerified(wake, expectedMandate) {
+  const identity = wakeEnvelopeIdentity(wake);
+  return identity.mandateId === expectedMandate?.mandateId
+    && identity.entrustedUnitId === expectedMandate?.entrustedUnitId;
+}
+
+/**
+ * Serialize one scanner-owned, one-shot steward wake declaration. JSON flow
+ * values are valid YAML and keep arbitrary market context Bash-free.
+ */
+export function buildScheduledStewardIssue({
+  issueId,
+  at,
+  accountId,
+  deadlineMs,
+  agent,
+  marketContext,
+  riskContext,
+  mandate,
+}) {
+  assertSafeRunIdComponent(issueId, 'scheduled issue id');
+  const frontmatter = {
+    title: `Scheduled campaign wake ${issueId}`,
+    status: 'todo',
+    priority: 'high',
+    when: { kind: 'at', at },
+    what: 'Perform this scheduled market observation using the declared context and complete the steward ledger.',
+    kind: 'steward-wake',
+    accountId,
+    authzLevel: 'paper',
+    expectedDecision: 'no_trade',
+    wakeReason: 'scheduled_observe',
+    deadlineMs,
+    marketContext,
+    riskContext,
+    mandate,
+    agent,
+  };
+  return `---\n${Object.entries(frontmatter).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join('\n')}\n---\n`;
 }
 
 /** Deterministic run-id for one (arm, cell, round) cell of the matrix. */
@@ -542,10 +721,10 @@ export function generateRunId(name, armId, cell, round) {
 }
 
 /**
- * Derive the four dev-stack ports for one arm's sandboxed `pnpm dev` from a
+ * Derive the four production-Guardian ports for one isolated arm from a
  * single base port, matching `scripts/guardian/shared.ts` port roles
  * (web/mcp/uta/ui). Leaves a gap at +3 (mirrors the checked-in default
- * 49631/49632/49633/49635) so an adjacent manual dev stack on +3 doesn't
+ * 49631/49632/49633/49635) so an adjacent local stack on +3 doesn't
  * collide.
  */
 export function derivePortBlock(basePort = DEFAULT_LAB_BASE_PORT) {

@@ -235,7 +235,7 @@ function validateTarget(target, where) {
 }
 function validateIntent(intent) {
   if (!isObject(intent) || !['single', 'portfolio'].includes(intent.kind)) fail('draft intent has invalid kind')
-  const common = ['kind', 'confidence', 'maxAcceptableLossPct', 'timeHorizon', 'evidence', 'snapshotId', 'snapshotSha256']
+  const common = ['kind', 'identity', 'confidence', 'maxAcceptableLossPct', 'timeHorizon', 'evidence', 'snapshotId', 'snapshotSha256']
   if (intent.kind === 'single') {
     exactKeys(intent, common.concat(['direction', 'instrument', 'targetExposure', 'invalidation']), 'draft intent')
     validateTarget({ direction: intent.direction, instrument: intent.instrument, targetExposure: intent.targetExposure, invalidation: intent.invalidation }, 'draft intent')
@@ -249,6 +249,10 @@ function validateIntent(intent) {
       if (instruments.has(instrumentIdentity)) fail('draft portfolio target instruments must be unique')
       instruments.add(instrumentIdentity)
     }
+  }
+  if ('identity' in intent) {
+    exactKeys(intent.identity, ['mandateId', 'entrustedUnitId'], 'draft intent.identity')
+    if (!isNonEmpty(intent.identity.mandateId) || !isNonEmpty(intent.identity.entrustedUnitId)) fail('draft intent.identity requires mandateId and entrustedUnitId')
   }
   if (!['low', 'medium', 'high'].includes(intent.confidence)) fail('draft intent has invalid confidence')
   if (!isPercentage(intent.maxAcceptableLossPct)) fail('draft intent.maxAcceptableLossPct must be 0..100')
@@ -422,6 +426,14 @@ if (actualSnapshotHash !== snapshotBinding.sha256) fail('bound snapshot hash mis
 if (snapshot.snapshotId !== snapshotBinding.snapshotId || snapshot.asOf !== snapshotBinding.asOf || snapshot.wakeId !== wakeId || snapshot.accountId !== wakeRecord.envelope.accountId) fail('bound snapshot identity does not match the wake')
 if (entry.wakeId !== snapshot.wakeId || entry.accountId !== snapshot.accountId) fail('draft wake/account does not match the bound snapshot')
 if (entry.intent && (entry.intent.snapshotId !== snapshot.snapshotId || entry.intent.snapshotSha256 !== actualSnapshotHash)) fail('draft intent snapshot id/hash does not match the bound snapshot')
+const mandate = wakeRecord.envelope.mandate
+if (mandate !== undefined) {
+  if (!isObject(mandate) || mandate.version !== 1 || !isNonEmpty(mandate.mandateId) || !isNonEmpty(mandate.entrustedUnitId) || mandate.parentMandateId !== null) fail('wake root mandate is invalid')
+  if (mandate.accountId !== wakeRecord.envelope.accountId || mandate.accountId !== entry.accountId) fail('wake mandate account identity does not match the wake/ledger account')
+  if (!isIsoTimestamp(mandate.validFrom) || !isIsoTimestamp(mandate.validUntil) || Date.parse(entry.at) < Date.parse(mandate.validFrom) || Date.parse(entry.at) > Date.parse(mandate.validUntil)) fail('draft completion is outside the mandate validity window')
+  if (!isObject(mandate.riskEnvelope) || mandate.riskEnvelope.revoked === true) fail('wake mandate Risk Envelope is missing or revoked')
+  if (entry.intent !== null && (!isObject(entry.intent.identity) || entry.intent.identity.mandateId !== mandate.mandateId || entry.intent.identity.entrustedUnitId !== mandate.entrustedUnitId)) fail('draft Trade Intent identity does not match the wake mandate and entrusted unit')
+}
 
 const touchedInstruments = new Set((entry.intent === null
   ? []

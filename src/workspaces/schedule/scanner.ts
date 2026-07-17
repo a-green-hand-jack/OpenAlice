@@ -31,7 +31,7 @@ import type { WorkspaceMeta, WorkspaceRegistry } from '../workspace-registry.js'
 
 import { isFireable, issueFirePrompt, readWorkspaceIssues } from '../issues/declaration.js'
 import type { IssueRecord } from '../issues/declaration.js'
-import type { StewardExpectedDecision, StewardWakeEnvelope, StewardWakeReason } from '../steward/types.js'
+import type { EntrustedUnitMandate, StewardExpectedDecision, StewardWakeEnvelope, StewardWakeReason } from '../steward/types.js'
 
 import {
   fireBase,
@@ -90,6 +90,7 @@ export interface ScheduleStewardWakeInput {
   readonly marketContext?: Record<string, unknown>
   readonly riskContext?: Record<string, unknown>
   readonly agent?: string
+  readonly mandate?: EntrustedUnitMandate
   readonly nowMs: number
 }
 
@@ -265,8 +266,16 @@ export class ScheduleScanner {
       this.deps.logger.warn('schedule.steward_wake_unavailable', { wsId: ws.id, taskId: issue.id })
       return
     }
-    if (!issue.accountId || !issue.authzLevel || !issue.expectedDecision) {
+    if (!issue.accountId || !issue.authzLevel || !issue.expectedDecision || !issue.mandate) {
       this.deps.logger.warn('schedule.steward_wake_invalid', { wsId: ws.id, taskId: issue.id })
+      return
+    }
+    if (
+      issue.mandate.riskEnvelope.revoked
+      || nowMs < Date.parse(issue.mandate.validFrom)
+      || nowMs > Date.parse(issue.mandate.validUntil)
+    ) {
+      this.deps.logger.warn('schedule.steward_mandate_inactive', { wsId: ws.id, taskId: issue.id })
       return
     }
     const wakeId = `${new Date(nowMs).toISOString()}:${issue.id}`
@@ -283,6 +292,7 @@ export class ScheduleScanner {
         ...(issue.marketContext !== undefined ? { marketContext: issue.marketContext } : {}),
         ...(issue.riskContext !== undefined ? { riskContext: issue.riskContext } : {}),
         ...(issue.agent !== undefined ? { agent: issue.agent } : {}),
+        mandate: issue.mandate,
         nowMs,
       })
       await this.deps.markers.set(ws.id, issue.id, nowMs)

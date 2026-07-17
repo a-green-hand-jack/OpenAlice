@@ -1,8 +1,11 @@
 # Steward Prompt Anatomy — 提示词解剖与管理登记
 
-> 状态：当前 prompt registry 与历史实验索引。本文记录已落地的 runtime/ledger prompt contract
-> 和未启用候选，但**不授权**继续 performance tuning 或激活 candidate。活动方向与授权只看
-> [steward-plan.zh.md](steward-plan.zh.md)。
+> **历史冻结 / 已被 #264 取代。** 本文只保存旧 v1-v9/D4 prompt 实验、hash 与授权记录，
+> 不再是当前 runtime、策略、prompt 或授权入口；下文冻结内容不改写。当前边界以
+> [issue #264](https://github.com/a-green-hand-jack/OpenAlice/issues/264)、
+> [Operator Guide](trading-agent-operator-guide.zh.md)、
+> [Capability Reuse Audit](trading-agent-capability-reuse-audit.zh.md) 和
+> [v0.5 Behavior Contract](steward-workspace-behavior-contract.zh.md) 为准。
 
 > 提示词是 agent「工作风格」的载体，是一等实验变量。本文件把 prompt 纳入
 > ANATOMY 系统统一管理：登记每一版、逐组件标注意图/所控行为/版本变更，并规定

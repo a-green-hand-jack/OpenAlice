@@ -9,6 +9,7 @@
  * - Execute wrapper (try/catch + toolCallId generation)
  */
 
+import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type { Tool } from 'ai'
 
@@ -116,7 +117,7 @@ export function wrapToolExecute(tool: Tool): (args: any) => Promise<McpToolResul
   return async (args: any) => {
     try {
       const result = await tool.execute!(args, {
-        toolCallId: crypto.randomUUID(),
+        toolCallId: randomUUID(),
         messages: [],
       })
       return { content: toMcpContent(result) }
