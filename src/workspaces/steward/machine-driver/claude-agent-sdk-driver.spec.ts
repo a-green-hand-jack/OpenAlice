@@ -161,6 +161,21 @@ describe('ClaudeAgentSdkDriver', () => {
     // Unattended permission surface: same auto-trust settings, dontAsk (not bypass).
     expect(opts.settings).toBe(AUTOTRUST_SETTINGS_OBJECT);
     expect(opts.permissionMode).toBe('dontAsk');
+    expect(opts.canUseTool).toBeDefined();
+    await expect(opts.canUseTool!('Bash', {
+      command: 'node .alice/steward/validate-ledger.mjs "wake-1"',
+    }, {
+      signal: new AbortController().signal,
+      toolUseID: 'tool-validator',
+      requestId: 'request-validator',
+    })).resolves.toMatchObject({ behavior: 'allow' });
+    await expect(opts.canUseTool!('Bash', {
+      command: 'rm -rf .',
+    }, {
+      signal: new AbortController().signal,
+      toolUseID: 'tool-dangerous',
+      requestId: 'request-dangerous',
+    })).resolves.toMatchObject({ behavior: 'deny' });
     expect((opts.settings as { permissions?: { allow?: string[] } }).permissions?.allow).toEqual(
       expect.arrayContaining([
         'Bash(node .alice/steward/validate-ledger.mjs *)',

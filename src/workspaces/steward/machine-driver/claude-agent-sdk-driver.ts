@@ -72,6 +72,33 @@ const EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
  */
 export type ClaudeQueryFn = (params: { prompt: string; options: Options }) => AsyncIterable<SDKMessage>;
 
+/**
+ * Permission fallback for nested Agent-tool sessions.
+ *
+ * Claude Code applies the inline `settings` allow list to the top-level query,
+ * but a nested Agent session can still ask for its own permission decision.
+ * Keep that decision surface identical to the steward autotrust settings rather
+ * than widening it to all Bash commands.
+ */
+const inheritedAutotrustPermissions: NonNullable<Options['canUseTool']> = async (
+  toolName,
+  input,
+) => {
+  if (toolName === 'Write' || toolName === 'Edit') return { behavior: 'allow' };
+
+  if (toolName === 'Bash') {
+    const command = typeof input.command === 'string' ? input.command.trim() : '';
+    const isAliceCli = /^(?:alice|alice-analysis|alice-uta|alice-workspace|traderhub)(?:\s|$)/.test(command);
+    const isValidator = /^(?:cd\s+.+\s+&&\s+)?node\s+\.alice\/steward\/validate-ledger\.mjs(?:\s|$)/.test(command);
+    if (isAliceCli || isValidator) return { behavior: 'allow' };
+  }
+
+  return {
+    behavior: 'deny',
+    message: 'Command is outside the steward autotrust permission surface.',
+  };
+};
+
 export interface ClaudeAgentSdkDriverOptions {
   readonly cwd: string;
   readonly env?: Record<string, string>;
@@ -173,7 +200,7 @@ export class ClaudeAgentSdkDriver implements StewardMachineDriver {
     this.tools = options.tools;
     this.skills = options.skills;
     this.systemPrompt = options.systemPrompt;
-    this.canUseTool = options.canUseTool;
+    this.canUseTool = options.canUseTool ?? inheritedAutotrustPermissions;
   }
 
   async ensureThread(opts: EnsureThreadOptions): Promise<{ threadId: string; resumed: boolean }> {
