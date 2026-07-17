@@ -37,7 +37,7 @@ describe('claudeAdapter AI-config', () => {
   // see `claude-permission-preseed.spec.ts` for the dedicated coverage.
   const SETTINGS_FLAG = [
     '--settings',
-    '{"enableAllProjectMcpServers":true,"permissions":{"allow":["Bash(alice *)","Bash(alice-analysis *)","Bash(alice-uta *)","Bash(alice-workspace *)","Bash(traderhub *)","Write","Edit"]}}',
+    '{"enableAllProjectMcpServers":true,"permissions":{"allow":["Bash(alice *)","Bash(alice-analysis *)","Bash(alice-uta *)","Bash(alice-workspace *)","Bash(traderhub *)","Bash(node .alice/steward/validate-ledger.mjs *)","Bash(cd * && node .alice/steward/validate-ledger.mjs *)","Write","Edit"]}}',
   ];
 
   it('composeCommand: fresh spawn injects the MCP auto-trust settings', () => {
@@ -462,7 +462,7 @@ describe('composeHeadlessCommand (one-shot headless argv, prompt placed per-CLI)
     expect(claudeAdapter.composeHeadlessCommand!(['claude'], ctx(), 'do x')).toEqual([
       'claude',
       '--settings',
-      '{"enableAllProjectMcpServers":true,"permissions":{"allow":["Bash(alice *)","Bash(alice-analysis *)","Bash(alice-uta *)","Bash(alice-workspace *)","Bash(traderhub *)","Write","Edit"]}}',
+      '{"enableAllProjectMcpServers":true,"permissions":{"allow":["Bash(alice *)","Bash(alice-analysis *)","Bash(alice-uta *)","Bash(alice-workspace *)","Bash(traderhub *)","Bash(node .alice/steward/validate-ledger.mjs *)","Bash(cd * && node .alice/steward/validate-ledger.mjs *)","Write","Edit"]}}',
       '-p',
       '--output-format',
       'stream-json',

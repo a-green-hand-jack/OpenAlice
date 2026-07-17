@@ -46,7 +46,7 @@ import {
   sleep, maxDrawdown, regimeVerdict, maxWeeklyLongReturnUnderExposure, login, makeClient, tokenFromLog,
   finalizationTrust, buildCampaignAccountCreatePayload, shouldCleanup,
   buildCampaignMandate, buildScheduledStewardIssue, utaChecklistVerified, wakeEnvelopeIdentity,
-  wakeEnvelopeIdentityVerified,
+  wakeEnvelopeIdentityVerified, campaignAgentModelSetup,
 } from './_lib.mjs';
 
 // Fictional sim-clock epoch: day 0 → 2020-01-01, +1 day per bar. Keeps the
@@ -402,19 +402,14 @@ async function main() {
     wsId = wsRes.workspace.id;
     wsDir = wsRes.workspace.dir;
     log(`blind workspace ${wsId} (${opts.agent}) dir=${wsDir}`);
-    if (opts.agent === 'codex' && opts.model) {
-      const modelPath = join(wsDir, '.alice', 'steward', 'core-agent-model.txt');
-      writeFileSync(modelPath, `${opts.model}\n`);
-      log(`codex model override → ${opts.model}`);
+    const modelSetup = campaignAgentModelSetup(opts.agent, opts.model);
+    if (modelSetup?.kind === 'file') {
+      writeFileSync(join(wsDir, modelSetup.relativePath), modelSetup.content);
+      log(`${opts.agent} model override → ${opts.model}`);
+    } else if (modelSetup?.kind === 'workspace-agent-config') {
+      await c.put(`/api/workspaces/${wsId}/agent-config/${modelSetup.agent}`, modelSetup.body);
+      log(`${opts.agent} model override → ${opts.model}`);
     }
-    // NOTE: on `--agent claude`, an unattended steward wake can stall when the
-    // agent writes its ledger entry via a brace-quoted shell heredoc (Claude
-    // Code's "expansion obfuscation" classifier forces an interactive approval —
-    // see adapters/claude.ts). The harness does NOT relax the permission model
-    // for the spawned agent; resolving that gate (an authorized Claude Code
-    // permission mode, or a classifier-safe ledger-write in the steward skill —
-    // issue #98) is out of scope here. `--agent codex` (the steward default) is
-    // not affected.
     await c.patch(`/api/workspaces/${wsId}/authz-level`, { authzLevel: 'paper' });
     log(`workspace authz → paper`);
 

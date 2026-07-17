@@ -46,6 +46,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import {
   validateExperimentConfig, generateRunId, derivePortBlock, deriveExitCode, tokenFromLog, login, makeClient, sleep,
   isPortFreeError, deriveTeardownOutcome, deriveBootOutcome, lastLogLines, parseLabArgs, runCellDispatchArgs,
+  parseCodexSubscriptionAuthStatus, parseClaudeSubscriptionAuthStatus,
 } from './_lib.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -164,16 +165,45 @@ function loadConfig(configPath) {
   return config;
 }
 
-function verifyCodexSubscriptionOAuth() {
-  if (process.env.OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY must be unset: alice-lab requires Codex ChatGPT subscription OAuth');
+function verifySubscriptionOAuth(arms) {
+  const agents = [...new Set(arms.map((arm) => arm.agent))];
+  const providers = {};
+
+  if (agents.includes('codex')) {
+    if (process.env.OPENAI_API_KEY !== undefined) {
+      throw new Error('OPENAI_API_KEY must be unset: Codex lab arms require ChatGPT subscription OAuth');
+    }
+    const probe = spawnSync('codex', ['login', 'status'], { encoding: 'utf8', env: process.env });
+    const output = `${probe.stdout ?? ''}\n${probe.stderr ?? ''}`;
+    if (probe.status !== 0) throw new Error(`Codex subscription OAuth probe exited ${String(probe.status)}`);
+    providers.codex = {
+      ...parseCodexSubscriptionAuthStatus(output),
+      openAiApiKeyPresent: false,
+    };
   }
-  const probe = spawnSync('codex', ['login', 'status'], { encoding: 'utf8', env: process.env });
-  const output = `${probe.stdout ?? ''}\n${probe.stderr ?? ''}`;
-  if (probe.status !== 0 || !output.includes('Logged in using ChatGPT')) {
-    throw new Error('Codex subscription OAuth preflight failed; run "codex login" and verify "codex login status"');
+
+  if (agents.includes('claude')) {
+    if (process.env.ANTHROPIC_API_KEY !== undefined || process.env.ANTHROPIC_AUTH_TOKEN !== undefined) {
+      throw new Error('ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN must be unset: Claude lab arms require claude.ai subscription OAuth');
+    }
+    const probe = spawnSync('claude', ['auth', 'status'], { encoding: 'utf8', env: process.env });
+    if (probe.status !== 0) throw new Error(`Claude subscription OAuth probe exited ${String(probe.status)}`);
+    providers.claude = {
+      ...parseClaudeSubscriptionAuthStatus(probe.stdout ?? ''),
+      anthropicApiKeyPresent: false,
+      anthropicAuthTokenPresent: false,
+    };
   }
-  return { provider: 'codex', auth: 'chatgpt-subscription-oauth', openAiApiKeyPresent: false };
+
+  const provider = agents.length === 1 ? agents[0] : 'mixed';
+  const auth = agents.length === 1 ? providers[agents[0]].auth : 'subscription-oauth';
+  return {
+    ...(providers.codex ?? {}),
+    ...(providers.claude ?? {}),
+    provider,
+    auth,
+    providers,
+  };
 }
 
 // ── per-arm sandboxed stack lifecycle ────────────────────────────────────
@@ -557,10 +587,9 @@ function writeSummary({ config, startedAt, armSummaries, runsList, reportPath, e
 
 async function main() {
   installSignalHandlers();
-  const oauth = verifyCodexSubscriptionOAuth();
-
   const { configPath } = parseLabArgs(process.argv.slice(2));
   const config = loadConfig(configPath);
+  const oauth = verifySubscriptionOAuth(config.arms);
   const startedAt = new Date().toISOString();
   log(`experiment "${config.name}": ${config.arms.length} arms × ${config.cells.length} cells × ${config.rounds} rounds = ${config.totalRuns} runs (maxRuns ${config.maxRuns})`);
 

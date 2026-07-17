@@ -161,6 +161,12 @@ describe('ClaudeAgentSdkDriver', () => {
     // Unattended permission surface: same auto-trust settings, dontAsk (not bypass).
     expect(opts.settings).toBe(AUTOTRUST_SETTINGS_OBJECT);
     expect(opts.permissionMode).toBe('dontAsk');
+    expect((opts.settings as { permissions?: { allow?: string[] } }).permissions?.allow).toEqual(
+      expect.arrayContaining([
+        'Bash(node .alice/steward/validate-ledger.mjs *)',
+        'Bash(cd * && node .alice/steward/validate-ledger.mjs *)',
+      ]),
+    );
     expect(opts.sandbox).toBeUndefined();
     expect(opts.settingSources).toBeUndefined();
     expect(opts.strictMcpConfig).toBeUndefined();

@@ -97,9 +97,27 @@ export const DEFAULT_LAB_BASE_PORT: number;
 // can import `parseLabArgs` under the root `tsc --noEmit`.
 export function parseLabArgs(argv: string[]): { configPath: string };
 
+export function parseCodexSubscriptionAuthStatus(output: string): {
+  auth: 'chatgpt-subscription-oauth';
+};
+
+export function parseClaudeSubscriptionAuthStatus(output: string): {
+  auth: 'claude-ai-subscription-oauth';
+  subscriptionType: string;
+};
+
+export type CampaignAgentModelSetup =
+  | { kind: 'file'; relativePath: string; content: string }
+  | { kind: 'workspace-agent-config'; agent: 'claude'; body: { model: string } };
+
+export function campaignAgentModelSetup(
+  agent: 'codex' | 'claude',
+  model: string | null | undefined,
+): CampaignAgentModelSetup | null;
+
 export interface LabArm {
   id: string;
-  agent: string;
+  agent: 'codex' | 'claude';
   model: string;
   overlayDir?: string;
 }
