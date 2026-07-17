@@ -59,6 +59,19 @@ describe('claude adapter — permission pre-seed (issue #92)', () => {
     expect(permissions.allow).toEqual(expect.arrayContaining(['Bash(alice-uta *)']));
   });
 
+  it('pre-approves only the platform ledger validator command shapes', () => {
+    const settings = settingsArg(claudeAdapter.composeCommand(['claude'], ctx()));
+    const permissions = settings['permissions'] as { allow: string[] };
+    expect(permissions.allow).toEqual(expect.arrayContaining([
+      'Bash(node .alice/steward/validate-ledger.mjs *)',
+      'Bash(cd * && node .alice/steward/validate-ledger.mjs *)',
+    ]));
+    expect(permissions.allow).not.toEqual(expect.arrayContaining([
+      'Bash(node *)',
+      'Bash(cd *)',
+    ]));
+  });
+
   it('still carries the pre-existing MCP auto-trust flag (no regression)', () => {
     const settings = settingsArg(claudeAdapter.composeCommand(['claude'], ctx()));
     expect(settings['enableAllProjectMcpServers']).toBe(true);

@@ -9,6 +9,9 @@ import {
   isPortFreeError,
   lastLogLines,
   parseLabArgs,
+  parseCodexSubscriptionAuthStatus,
+  parseClaudeSubscriptionAuthStatus,
+  campaignAgentModelSetup,
   runCellDispatchArgs,
   utaChecklistVerified,
   validateExperimentConfig,
@@ -144,9 +147,22 @@ describe('validateExperimentConfig (issue #259)', () => {
     expect(() => validateExperimentConfig(config)).toThrow(/budget exceeded/)
   })
 
-  it('refuses a non-codex arm agent (v1 supports codex only)', () => {
-    const config = baseConfig({ arms: [{ id: 'a1', agent: 'claude', model: 'haiku' }] })
-    expect(() => validateExperimentConfig(config)).toThrow(/v1 only supports "codex" arms/)
+  it('accepts Claude and mixed-provider arms through the same matrix path', () => {
+    const result = validateExperimentConfig(baseConfig({
+      arms: [
+        { id: 'c1', agent: 'codex', model: 'gpt-5.5' },
+        { id: 'a1', agent: 'claude', model: 'claude-sonnet-5' },
+      ],
+    }))
+    expect(result.arms).toEqual([
+      { id: 'c1', agent: 'codex', model: 'gpt-5.5' },
+      { id: 'a1', agent: 'claude', model: 'claude-sonnet-5' },
+    ])
+  })
+
+  it('refuses agents outside the two existing subscription-native control faces', () => {
+    const config = baseConfig({ arms: [{ id: 'a1', agent: 'opencode', model: 'm' }] })
+    expect(() => validateExperimentConfig(config)).toThrow(/expected "codex" or "claude"/)
   })
 
   it('refuses a holdout cell without allowHoldout: true', () => {
@@ -159,6 +175,49 @@ describe('validateExperimentConfig (issue #259)', () => {
     const result = validateExperimentConfig(config)
     expect(result.cells).toEqual(['holdout-bull-amd'])
   })
+})
+
+describe('subscription OAuth and model setup (issue #266)', () => {
+  it('accepts native Codex ChatGPT subscription evidence only', () => {
+    expect(parseCodexSubscriptionAuthStatus('Logged in using ChatGPT')).toEqual({
+      auth: 'chatgpt-subscription-oauth',
+    })
+    expect(() => parseCodexSubscriptionAuthStatus('Logged in using an API key')).toThrow(/subscription OAuth/)
+  })
+
+  it('accepts claude.ai subscription status without retaining account identity', () => {
+    expect(parseClaudeSubscriptionAuthStatus(JSON.stringify({
+      loggedIn: true,
+      authMethod: 'claude.ai',
+      subscriptionType: 'max',
+      email: 'must-not-survive@example.invalid',
+      orgId: 'private-org',
+    }))).toEqual({ auth: 'claude-ai-subscription-oauth', subscriptionType: 'max' })
+  })
+
+  it.each([
+    ['invalid json', 'not-json'],
+    ['logged out', JSON.stringify({ loggedIn: false, authMethod: 'claude.ai', subscriptionType: 'max' })],
+    ['api key auth', JSON.stringify({ loggedIn: true, authMethod: 'apiKey', subscriptionType: 'max' })],
+    ['missing subscription', JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' })],
+  ])('rejects Claude %s evidence', (_label, output) => {
+    expect(() => parseClaudeSubscriptionAuthStatus(output)).toThrow(/subscription OAuth|subscription type|invalid JSON/)
+  })
+
+  it('reuses the existing per-provider workspace model surfaces', () => {
+    expect(campaignAgentModelSetup('codex', 'gpt-5.5')).toEqual({
+      kind: 'file',
+      relativePath: '.alice/steward/core-agent-model.txt',
+      content: 'gpt-5.5\n',
+    })
+    expect(campaignAgentModelSetup('claude', 'claude-sonnet-5')).toEqual({
+      kind: 'workspace-agent-config',
+      agent: 'claude',
+      body: { model: 'claude-sonnet-5' },
+    })
+    expect(campaignAgentModelSetup('claude', null)).toBeNull()
+  })
+
 })
 
 describe('generateRunId (issue #259)', () => {

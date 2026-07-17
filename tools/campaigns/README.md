@@ -127,7 +127,7 @@ exits `1`.
   "cells": ["bull-cx", "chop-cx"],
   "arms": [
     { "id": "v1", "agent": "codex", "model": "gpt-5.6-sol", "overlayDir": "/abs/path/openalice-template-overlays" },
-    { "id": "v2", "agent": "codex", "model": "gpt-5.6-sol", "overlayDir": "/abs/path/overlays-v2" }
+    { "id": "claude-parity", "agent": "claude", "model": "claude-sonnet-5", "overlayDir": "/abs/path/openalice-template-overlays" }
   ],
   "maxRuns": 12,
   "basePort": 49631,
@@ -153,8 +153,12 @@ exits `1`.
   basePort`, `mcp = basePort + 1`, `uta = basePort + 2`, `ui = basePort +
   4`. Change it to avoid colliding with another concurrently-running lab
   experiment or a manual dev stack.
-- v1 only supports `agent: "codex"` arms — there is no per-workspace write
-  surface yet for pinning a Claude model per arm.
+- Arms support the two existing subscription-native control faces: `codex` and
+  `claude`. Codex reuses `.alice/steward/core-agent-model.txt`; Claude reuses
+  the existing workspace agent-config endpoint, which writes
+  `.claude/settings.local.json`. Before boot, lab requires the matching native
+  subscription OAuth (`codex login status` or `claude auth status`) and rejects
+  API-key/token fallback.
 - Scheduled dispatch requires one v1 root `mandate`. `run-cell.mjs` binds its
   account id, whitelist, and existing UTA Risk Envelope; Trade Intents must copy
   the mandate/unit identity. `restartAfterWake` requests an acceptance-only UTA

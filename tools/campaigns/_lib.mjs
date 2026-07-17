@@ -498,6 +498,51 @@ export function parseLabArgs(argv) {
   return { configPath };
 }
 
+/** Parse the native Codex login probe without accepting API-key auth. */
+export function parseCodexSubscriptionAuthStatus(output) {
+  if (typeof output !== 'string' || !output.includes('Logged in using ChatGPT')) {
+    throw new Error('Codex subscription OAuth preflight failed; run "codex login" and verify "codex login status"');
+  }
+  return { auth: 'chatgpt-subscription-oauth' };
+}
+
+/** Parse `claude auth status` while discarding account-identifying fields. */
+export function parseClaudeSubscriptionAuthStatus(output) {
+  let status;
+  try {
+    status = JSON.parse(output);
+  } catch {
+    throw new Error('Claude subscription OAuth preflight returned invalid JSON');
+  }
+  if (!status || typeof status !== 'object' || status.loggedIn !== true || status.authMethod !== 'claude.ai') {
+    throw new Error('Claude subscription OAuth preflight failed; run "claude login" and verify "claude auth status"');
+  }
+  if (typeof status.subscriptionType !== 'string' || !status.subscriptionType.trim()) {
+    throw new Error('Claude subscription OAuth preflight did not report a subscription type');
+  }
+  return { auth: 'claude-ai-subscription-oauth', subscriptionType: status.subscriptionType };
+}
+
+/** Existing provider-specific workspace model surfaces used by run-cell. */
+export function campaignAgentModelSetup(agent, model) {
+  if (model === null || model === undefined || model === '') return null;
+  if (agent === 'codex') {
+    return {
+      kind: 'file',
+      relativePath: '.alice/steward/core-agent-model.txt',
+      content: `${model}\n`,
+    };
+  }
+  if (agent === 'claude') {
+    return {
+      kind: 'workspace-agent-config',
+      agent: 'claude',
+      body: { model },
+    };
+  }
+  throw new Error(`unsupported campaign agent: ${String(agent)}`);
+}
+
 const EXPERIMENT_REQUIRED_FIELDS = ['name', 'weeks', 'rounds', 'cells', 'arms', 'maxRuns'];
 const EXPERIMENT_ALLOWED_FIELDS = new Set([...EXPERIMENT_REQUIRED_FIELDS, 'basePort', 'allowHoldout', 'dispatch', 'mandate', 'restartAfterWake']);
 const ARM_ALLOWED_FIELDS = new Set(['id', 'agent', 'model', 'overlayDir']);
@@ -612,10 +657,10 @@ export function validateExperimentConfig(config) {
     assertSafeRunIdComponent(arm.id, `experiment.json arms[${i}] id`);
     if (seenArmIds.has(arm.id)) throw new Error(`experiment.json has duplicate arm id: "${arm.id}"`);
     seenArmIds.add(arm.id);
-    if (arm.agent !== 'codex') {
+    if (arm.agent !== 'codex' && arm.agent !== 'claude') {
       throw new Error(
-        `experiment.json arms[${i}] ("${arm.id}") has agent "${arm.agent}" — v1 only supports "codex" arms ` +
-        '(per-arm claude model pinning has no per-workspace write surface yet; see issue #259 audit §7)',
+        `experiment.json arms[${i}] ("${arm.id}") has unsupported agent "${arm.agent}" — ` +
+        'expected "codex" or "claude"',
       );
     }
     if (typeof arm.model !== 'string' || !arm.model.trim()) throw new Error(`experiment.json arms[${i}] ("${arm.id}") missing required field: model`);

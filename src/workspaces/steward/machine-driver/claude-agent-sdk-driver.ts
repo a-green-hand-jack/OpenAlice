@@ -22,7 +22,8 @@
  * semantic holds here by construction.
  *
  * PERMISSIONS. Unattended turns reuse the PTY adapter's `AUTOTRUST_SETTINGS`
- * (pre-approves `Bash(alice* *)`, `Write`, `Edit`) via `Options.settings`, plus
+ * (pre-approves `Bash(alice* *)`, the exact steward validator command, `Write`,
+ * `Edit`) via `Options.settings`, plus
  * `permissionMode: 'dontAsk'` — deny-if-not-pre-approved, the parity of codex's
  * `approvalPolicy: 'never'`. `bypassPermissions` is deliberately NOT used (it is
  * broader than the established trust surface). Filesystem `settingSources` are

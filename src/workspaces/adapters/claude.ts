@@ -68,6 +68,11 @@ const CLAUDE_SETTINGS_PATH = '.claude/settings.local.json';
  * `steward` template's `instruction.md`, issue #98) must actually tell the
  * agent to use the Write/Edit tool for this step rather than a Bash
  * heredoc, or the permission grant sits unused.
+ *
+ * The generated steward validator is the one intentional non-`alice*` Bash
+ * command in the current mechanics contract. Its two exact invocation shapes
+ * (directly from the workspace root, or after Claude's customary `cd`) are
+ * pre-approved separately; no general `node`, `cd`, or shell grant is added.
  */
 /**
  * Claude Code can park project-scoped MCP servers at "⏸ Pending approval" when
