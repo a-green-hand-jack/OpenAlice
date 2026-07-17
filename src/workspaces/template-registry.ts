@@ -4,6 +4,11 @@ import { join, resolve } from 'node:path';
 
 import type { Logger } from './logger.js';
 
+/** External template policies use this composition contract. A new version is
+ * intentionally a startup failure until OpenAlice and the policy owner agree
+ * on its semantics. */
+export const TEMPLATE_POLICY_CONTRACT_VERSION = 1;
+
 /**
  * A template's declaration that an enabled agent should be seeded, at
  * workspace-create time, from a named credential in Alice's central store.
@@ -50,8 +55,10 @@ export interface TemplateMeta {
   readonly filesDir: string;
   /** Absolute source of launcher-injected instructions. */
   readonly instructionPath: string;
-  /** Startup snapshot of an external overlay instruction, when configured. */
-  readonly instructionContent?: string;
+  /** Startup snapshot of an external policy, composed with platform mechanics. */
+  readonly policyContent?: string;
+  /** Version checked while loading `policyContent`. */
+  readonly policyContractVersion?: typeof TEMPLATE_POLICY_CONTRACT_VERSION;
   /** Absolute path to the template root (parent of `files/`). */
   readonly templateDir: string;
   /**
@@ -169,19 +176,19 @@ export class TemplateRegistry {
     }
     logger.info('templates.loaded', { dir: absDir, names: Array.from(reg.byName.keys()) });
     if (overlayDir !== undefined && overlayDir !== null) {
-      await reg.applyInstructionOverlay(overlayDir);
+      await reg.applyPolicyOverlay(overlayDir);
       logger.info('templates.overlay_loaded', { dir: resolve(overlayDir), names: Array.from(reg.byName.keys()) });
     }
     return reg;
   }
 
   /**
-   * Applies one startup-only, instruction-only overlay root to already-loaded
-   * base templates. This intentionally is not a generic inheritance mechanism:
-   * an overlay must be named after its one base and may replace only the
-   * authoritative instruction source.
+   * Applies one startup-only policy overlay root to already-loaded base
+   * templates. This intentionally is not a generic inheritance mechanism:
+   * an overlay may add a policy, but never replace the platform-owned
+   * instruction source or runtime mechanics.
    */
-  private async applyInstructionOverlay(dir: string): Promise<void> {
+  private async applyPolicyOverlay(dir: string): Promise<void> {
     const absDir = resolve(dir);
     if (!existsSync(absDir)) {
       throw new Error(`template overlay root does not exist: ${absDir}`);
@@ -203,11 +210,11 @@ export class TemplateRegistry {
         candidate.name !== 'template.json' && candidate.name !== 'files',
       );
       if (extraEntries.length > 0) {
-        throw new Error(`template overlay "${name}" may contain only template.json and files/instruction.md`);
+        throw new Error(`template overlay "${name}" may contain only template.json and files/policy.md`);
       }
 
-      const extendsName = await readOverlayExtends(join(overlayDir, 'template.json'), name);
-      if (extendsName !== name) {
+      const overlay = await readOverlayManifest(join(overlayDir, 'template.json'), name);
+      if (overlay.extendsName !== name) {
         throw new Error(
           `template overlay "${name}" must extend same-named base template "${name}"; recursive inheritance is unsupported`,
         );
@@ -223,16 +230,20 @@ export class TemplateRegistry {
       }
 
       const filesDir = join(overlayDir, 'files');
-      const instructionPath = join(filesDir, 'instruction.md');
-      if (!existsSync(instructionPath)) {
-        throw new Error(`template overlay "${name}" is missing files/instruction.md`);
+      const policyPath = join(filesDir, 'policy.md');
+      if (!existsSync(policyPath)) {
+        throw new Error(`template overlay "${name}" is missing files/policy.md`);
       }
       const filesEntries = await readdir(filesDir, { withFileTypes: true });
-      if (filesEntries.length !== 1 || filesEntries[0]?.name !== 'instruction.md' || !filesEntries[0].isFile()) {
-        throw new Error(`template overlay "${name}" files directory may contain only instruction.md`);
+      if (filesEntries.length !== 1 || filesEntries[0]?.name !== 'policy.md' || !filesEntries[0].isFile()) {
+        throw new Error(`template overlay "${name}" files directory may contain only policy.md`);
       }
-      const instructionContent = await readFile(instructionPath, 'utf8');
-      this.byName.set(name, { ...base, instructionPath, instructionContent });
+      const policyContent = await readFile(policyPath, 'utf8');
+      this.byName.set(name, {
+        ...base,
+        policyContent,
+        policyContractVersion: overlay.contractVersion,
+      });
     }
   }
 
@@ -279,7 +290,10 @@ interface ParsedTemplateMeta {
   readonly agentCredentials?: Readonly<Record<string, AgentCredentialDecl>>;
 }
 
-async function readOverlayExtends(path: string, name: string): Promise<string> {
+async function readOverlayManifest(path: string, name: string): Promise<{
+  readonly extendsName: string;
+  readonly contractVersion: typeof TEMPLATE_POLICY_CONTRACT_VERSION;
+}> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(path, 'utf8'));
@@ -289,13 +303,25 @@ async function readOverlayExtends(path: string, name: string): Promise<string> {
     );
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`template overlay "${name}" template.json must contain only an "extends" field`);
+    throw new Error(`template overlay "${name}" template.json must contain only "extends" and "contractVersion" fields`);
   }
-  const fields = Object.keys(parsed);
-  if (fields.length !== 1 || fields[0] !== 'extends' || typeof (parsed as Record<string, unknown>)['extends'] !== 'string') {
-    throw new Error(`template overlay "${name}" template.json must contain only an "extends" field`);
+  const record = parsed as Record<string, unknown>;
+  const fields = Object.keys(record).sort();
+  if (
+    fields.length !== 2
+    || fields[0] !== 'contractVersion'
+    || fields[1] !== 'extends'
+    || typeof record['extends'] !== 'string'
+    || record['contractVersion'] !== TEMPLATE_POLICY_CONTRACT_VERSION
+  ) {
+    throw new Error(
+      `template overlay "${name}" must declare contractVersion ${TEMPLATE_POLICY_CONTRACT_VERSION} and an "extends" field`,
+    );
   }
-  return (parsed as { extends: string }).extends;
+  return {
+    extendsName: record['extends'],
+    contractVersion: TEMPLATE_POLICY_CONTRACT_VERSION,
+  };
 }
 
 /**

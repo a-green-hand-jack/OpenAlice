@@ -12,6 +12,29 @@ import type { WorkspaceMeta, WorkspaceRegistry } from '../workspace-registry.js'
 import { ScheduleScanner, type MarkerStore } from './scanner.js'
 
 const NOW = 1_700_000_000_000 // realistic epoch ms — `every` is relative-from-0, so first-sight needs a large clock
+const MANDATE = {
+  version: 1 as const,
+  mandateId: 'root-test',
+  entrustedUnitId: 'team-unit-test',
+  parentMandateId: null,
+  accountId: 'mock-simulator-1',
+  capital: { currency: 'USD', limit: '100000' },
+  scope: { kind: 'instrument_whitelist' as const, instruments: ['ASSET-A'] },
+  validFrom: '2023-01-01T00:00:00.000Z',
+  validUntil: '2025-01-01T00:00:00.000Z',
+  heartbeat: { intervalMs: 900_000, graceMs: 120_000 },
+  riskEnvelope: {
+    version: 3,
+    maxPositionPctOfEquity: 60,
+    maxSingleOrderPctOfEquity: 60,
+    maxDailyLossPct: 10,
+    maxDrawdownPct: 10,
+    scope: { kind: 'whitelist' as const, symbols: ['ASSET-A'] },
+    autonomyCeiling: 'paper' as const,
+    revoked: false,
+    revokedReason: null,
+  },
+}
 
 const noopLogger = {
   info() {},
@@ -75,6 +98,9 @@ interface IssueSpec {
   expectedDecision?: string
   wakeReason?: string
   deadlineMs?: number
+  marketContext?: Record<string, unknown>
+  riskContext?: Record<string, unknown>
+  mandate?: typeof MANDATE
   body?: string
 }
 
@@ -91,6 +117,9 @@ function issueMd(spec: IssueSpec): string {
   if (spec.expectedDecision) lines.push(`expectedDecision: ${spec.expectedDecision}`)
   if (spec.wakeReason) lines.push(`wakeReason: ${spec.wakeReason}`)
   if (spec.deadlineMs) lines.push(`deadlineMs: ${spec.deadlineMs}`)
+  if (spec.marketContext) lines.push(`marketContext: ${JSON.stringify(spec.marketContext)}`)
+  if (spec.riskContext) lines.push(`riskContext: ${JSON.stringify(spec.riskContext)}`)
+  if (spec.mandate) lines.push(`mandate: ${JSON.stringify(spec.mandate)}`)
   if (spec.when) {
     const w = spec.when
     const inner =
@@ -190,6 +219,9 @@ describe('ScheduleScanner', () => {
       expectedDecision: 'no_trade',
       wakeReason: 'scheduled_observe',
       deadlineMs: 120000,
+      marketContext: { instrument: 'ASSET-A' },
+      riskContext: { note: 'scheduled' },
+      mandate: MANDATE,
     }])
     const dispatchStewardWake = vi.fn(async () => ({ wakeId: 'wake-1' }))
     const { scanner, dispatch, markers } = scannerFor([ws], { dispatchStewardWake })
@@ -206,13 +238,16 @@ describe('ScheduleScanner', () => {
       expectedDecision: 'no_trade',
       humanRequest: 'observe AAPL',
       deadlineMs: 120000,
+      marketContext: { instrument: 'ASSET-A' },
+      riskContext: { note: 'scheduled' },
+      mandate: MANDATE,
       agent: 'codex',
       nowMs: NOW,
     }))
     expect(markers.get('w1', 'steward-aapl')).toBe(NOW)
   })
 
-  it('wide-reads legacy propose_trade frontmatter as propose_change without rewriting the issue file', async () => {
+  it('fails closed on a legacy scheduled steward issue with no root mandate without rewriting it', async () => {
     const ws = await makeWs('w1', [{
       id: 'legacy-steward',
       title: 'legacy steward observe',
@@ -229,9 +264,7 @@ describe('ScheduleScanner', () => {
 
     await scanner.scan()
 
-    expect(dispatchStewardWake).toHaveBeenCalledWith(ws, expect.objectContaining({
-      expectedDecision: 'propose_change',
-    }))
+    expect(dispatchStewardWake).not.toHaveBeenCalled()
     expect(await readFile(path, 'utf8')).toBe(before)
     expect(before).toContain('expectedDecision: propose_trade')
   })

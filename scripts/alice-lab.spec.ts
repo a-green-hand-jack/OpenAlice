@@ -9,7 +9,11 @@ import {
   isPortFreeError,
   lastLogLines,
   parseLabArgs,
+  runCellDispatchArgs,
+  utaChecklistVerified,
   validateExperimentConfig,
+  wakeEnvelopeIdentity,
+  wakeEnvelopeIdentityVerified,
 } from '../tools/campaigns/_lib.mjs'
 
 /**
@@ -35,12 +39,21 @@ function baseConfig(overrides: Record<string, unknown> = {}) {
   }
 }
 
+const mandateConfig = {
+  id: 'root-264',
+  entrustedUnitId: 'trading-team-v1',
+  capital: { currency: 'USD', limit: '100000' },
+  validForMs: 86_400_000,
+  heartbeat: { intervalMs: 900_000, graceMs: 120_000 },
+}
+
 describe('validateExperimentConfig (issue #259)', () => {
   it('accepts a minimal valid config and fills in defaults', () => {
     const result = validateExperimentConfig(baseConfig())
     expect(result.name).toBe('e-test')
     expect(result.basePort).toBe(49631)
     expect(result.allowHoldout).toBe(false)
+    expect(result.dispatch).toBe('direct')
     expect(result.totalRuns).toBe(1)
     expect(result.arms).toEqual([{ id: 'a1', agent: 'codex', model: 'gpt-5.3-codex-spark' }])
   })
@@ -61,6 +74,21 @@ describe('validateExperimentConfig (issue #259)', () => {
     expect(result.basePort).toBe(49700)
     expect(result.arms[0].overlayDir).toBe('/abs/overlay-v1')
     expect(result.arms[1].overlayDir).toBeUndefined()
+  })
+
+  it('accepts scheduled dispatch and forwards only --scheduled to run-cell', () => {
+    const result = validateExperimentConfig(baseConfig({ dispatch: 'scheduled', mandate: mandateConfig }))
+    expect(result.dispatch).toBe('scheduled')
+    expect(runCellDispatchArgs(result.dispatch)).toEqual(['--scheduled'])
+    expect(runCellDispatchArgs('direct')).toEqual([])
+  })
+
+  it('rejects an unknown dispatch mode', () => {
+    expect(() => validateExperimentConfig(baseConfig({ dispatch: 'external-supervisor' }))).toThrow(/dispatch/)
+  })
+
+  it('fails closed when scheduled dispatch has no root mandate', () => {
+    expect(() => validateExperimentConfig(baseConfig({ dispatch: 'scheduled' }))).toThrow(/requires a v1 "mandate"/)
   })
 
   it('rejects an unknown top-level field', () => {
@@ -86,6 +114,29 @@ describe('validateExperimentConfig (issue #259)', () => {
       ],
     })
     expect(() => validateExperimentConfig(config)).toThrow(/duplicate arm id/)
+  })
+
+  it('accepts conservative run-id components used by scheduled issue filenames', () => {
+    const result = validateExperimentConfig(baseConfig({
+      name: 'e.test-1',
+      cells: ['bull.cx_1'],
+      arms: [{ id: 'arm_1.test', agent: 'codex', model: 'm' }],
+    }))
+    expect(generateRunId(result.name, result.arms[0].id, result.cells[0], 1)).toBe('e.test-1-arm_1.test-bull.cx_1-r1')
+  })
+
+  it.each([
+    ['name', { name: '../escape' }],
+    ['name', { name: 'name/with-slash' }],
+    ['name', { name: 'has space' }],
+    ['cell', { cells: ['../escape'] }],
+    ['cell', { cells: ['cell/with-slash'] }],
+    ['cell', { cells: ['has space'] }],
+    ['arm', { arms: [{ id: '../escape', agent: 'codex', model: 'm' }] }],
+    ['arm', { arms: [{ id: 'arm/with-slash', agent: 'codex', model: 'm' }] }],
+    ['arm', { arms: [{ id: 'has space', agent: 'codex', model: 'm' }] }],
+  ])('rejects unsafe scheduled run-id %s component', (_field, overrides) => {
+    expect(() => validateExperimentConfig(baseConfig(overrides))).toThrow(/safe run-id component/)
   })
 
   it('refuses to start when arms x cells x rounds exceeds maxRuns', () => {
@@ -141,6 +192,65 @@ describe('deriveExitCode (issue #259)', () => {
 
   it('returns 2 for an empty result set', () => {
     expect(deriveExitCode([])).toBe(2)
+  })
+})
+
+describe('utaChecklistVerified (issue #264)', () => {
+  const ok = { account: 'ok', positions: 'ok', orders: 'ok', risk: 'normal', market: 'open', history: 'checked' }
+
+  it('accepts only the documented per-field UTA success values', () => {
+    expect(utaChecklistVerified([{ checklist: ok }])).toBe(true)
+    expect(utaChecklistVerified([{ checklist: { ...ok, risk: 'ok', market: 'ok', history: 'ok' } }])).toBe(true)
+    expect(utaChecklistVerified([{ checklist: { ...ok, risk: 'NORMAL', market: 'closed' } }])).toBe(true)
+  })
+
+  it.each(['skipped', 'blocked', 'arbitrary', 'error', 'failed', 'unknown', 'unavailable'])(
+    'rejects hostile non-success value %s in every checklist field',
+    (hostile) => {
+      for (const field of Object.keys(ok)) {
+        expect(utaChecklistVerified([{ checklist: { ...ok, [field]: hostile } }])).toBe(false)
+      }
+    },
+  )
+
+  it('rejects missing, extra-whitespace, and partially successful checklist evidence', () => {
+    expect(utaChecklistVerified([{ checklist: null }])).toBe(false)
+    expect(utaChecklistVerified([{ checklist: { ...ok, account: ' ok ' } }])).toBe(false)
+    expect(utaChecklistVerified([{ checklist: { account: 'ok' } }])).toBe(false)
+  })
+})
+
+describe('scheduled wake identity evidence (issue #264)', () => {
+  it('derives identity from the persisted wake envelope', () => {
+    const wake = {
+      envelope: { mandate: { mandateId: 'root-264', entrustedUnitId: 'team-v1' } },
+    }
+    expect(wakeEnvelopeIdentity(wake)).toEqual({ mandateId: 'root-264', entrustedUnitId: 'team-v1' })
+    expect(wakeEnvelopeIdentityVerified(wake, {
+      mandateId: 'root-264', entrustedUnitId: 'team-v1',
+    })).toBe(true)
+  })
+
+  it.each([
+    ['missing envelope', {}],
+    ['local config projection', { mandateId: 'root-264', entrustedUnitId: 'team-v1' }],
+    ['missing mandate id', { envelope: { mandate: { entrustedUnitId: 'team-v1' } } }],
+    ['missing entrusted unit id', { envelope: { mandate: { mandateId: 'root-264' } } }],
+    ['hostile nested shape', { envelope: { mandate: { mandateId: 264, entrustedUnitId: ['team-v1'] } } }],
+  ])('rejects %s as wake-envelope identity evidence', (_label, wake) => {
+    expect(wakeEnvelopeIdentity(wake)).toEqual({ mandateId: null, entrustedUnitId: null })
+    expect(wakeEnvelopeIdentityVerified(wake, {
+      mandateId: 'root-264', entrustedUnitId: 'team-v1',
+    })).toBe(false)
+  })
+
+  it('rejects a well-shaped persisted envelope with hostile mismatched identity', () => {
+    const wake = {
+      envelope: { mandate: { mandateId: 'root-264-other', entrustedUnitId: 'team-v1-other' } },
+    }
+    expect(wakeEnvelopeIdentityVerified(wake, {
+      mandateId: 'root-264', entrustedUnitId: 'team-v1',
+    })).toBe(false)
   })
 })
 

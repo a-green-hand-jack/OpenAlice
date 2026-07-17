@@ -233,7 +233,9 @@ describe('WorkspaceCreator.refreshStewardRuntime (issue #140 merge gate)', () =>
   const stewardTemplate = {
     bootstrapScript: '/tpl/steward/bootstrap.mjs',
     filesDir: '/tpl/steward/files',
-    instructionPath: '/overlay/steward/files/instruction.md',
+    instructionPath: '/tpl/steward/files/instruction.md',
+    policyContent: '# overlay policy\n',
+    policyContractVersion: 1,
     templateDir: '/tpl/steward',
   };
 
@@ -290,7 +292,7 @@ describe('WorkspaceCreator.refreshStewardRuntime (issue #140 merge gate)', () =>
     }
   });
 
-  it.each(['pty', 'machine'] as const)('refreshes the overlay instructions before a %s wake', async (face) => {
+  it.each(['pty', 'machine'] as const)('refreshes composed policy and mechanics before a %s wake', async (face) => {
     const dir = await mkdtemp(join(tmpdir(), `workspace-creator-runtime-${face}-overlay-`));
     try {
       await prepareRuntimeArtifacts(dir);
@@ -306,7 +308,10 @@ describe('WorkspaceCreator.refreshStewardRuntime (issue #140 merge gate)', () =>
       child.emit('close', 0);
       await expect(pending).resolves.toBeUndefined();
       expect(vi.mocked(refreshWorkspaceInstructions)).toHaveBeenLastCalledWith({
-        template: expect.objectContaining({ instructionPath: '/overlay/steward/files/instruction.md' }),
+        template: expect.objectContaining({
+          instructionPath: '/tpl/steward/files/instruction.md',
+          policyContent: '# overlay policy\n',
+        }),
         dir,
       });
     } finally {

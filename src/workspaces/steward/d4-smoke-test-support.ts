@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 import {
   D4_SMOKE_CANDIDATES,
+  D4_SMOKE_BASELINE_COMMIT,
   D4_SMOKE_CREDENTIAL_SOURCES,
   D4_SMOKE_INSTRUCTION_REF,
   D4_SMOKE_MARKETS,
@@ -46,6 +49,16 @@ const SYMBOLS: Readonly<Record<typeof D4_SMOKE_MARKETS[number], string>> = {
 
 const D4_TEST_REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const D4_TEST_RUNTIME_TREE = computeD4SmokeRuntimeTreeIdentity({ repoRoot: D4_TEST_REPO_ROOT });
+const execFileAsync = promisify(execFile);
+
+async function readFrozenInstruction(): Promise<string> {
+  const result = await execFileAsync(
+    'git',
+    ['show', `${D4_SMOKE_BASELINE_COMMIT}:${D4_SMOKE_INSTRUCTION_REF}`],
+    { cwd: D4_TEST_REPO_ROOT, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
+  );
+  return result.stdout;
+}
 
 function quotaCodexSnapshot(general: number, spark: number): unknown {
   const bucket = (limitId: string, usedPercent: number) => ({
@@ -103,10 +116,7 @@ export interface D4SmokeFixture {
 
 export async function createD4SmokeTestFixture(): Promise<D4SmokeFixture> {
   const contentByRef: Record<string, string> = {
-    [D4_SMOKE_INSTRUCTION_REF]: await readFile(
-      new URL('../templates/steward/files/instruction.md', import.meta.url),
-      'utf8',
-    ),
+    [D4_SMOKE_INSTRUCTION_REF]: await readFrozenInstruction(),
     [D4_SMOKE_RUNTIME_POLICY_REF]: await readFile(
       new URL('../templates/steward/files/d4-smoke-runtime-policy.md', import.meta.url),
       'utf8',

@@ -280,6 +280,29 @@ describe('D3 scheduled Steward to UTA process boundary', () => {
 })
 
 function scheduledIssue(): string {
+  const mandate = {
+    version: 1,
+    mandateId: 'root-scheduler-uta',
+    entrustedUnitId: 'deterministic-reducer',
+    parentMandateId: null,
+    accountId: ACCOUNT_ID,
+    capital: { currency: 'USD', limit: '100000' },
+    scope: { kind: 'instrument_whitelist', instruments: ['ASSET-A'] },
+    validFrom: '2020-01-01T00:00:00.000Z',
+    validUntil: '2035-01-01T00:00:00.000Z',
+    heartbeat: { intervalMs: 1_800_000, graceMs: 120_000 },
+    riskEnvelope: {
+      version: 3,
+      maxPositionPctOfEquity: 25,
+      maxSingleOrderPctOfEquity: 20,
+      maxDailyLossPct: 5,
+      maxDrawdownPct: 10,
+      scope: { kind: 'whitelist', symbols: ['ASSET-A'] },
+      autonomyCeiling: 'paper',
+      revoked: false,
+      revokedReason: null,
+    },
+  }
   return `---
 title: Bounded reduce-only integration
 status: todo
@@ -290,6 +313,7 @@ accountId: ${ACCOUNT_ID}
 authzLevel: paper
 expectedDecision: reduce_risk
 wakeReason: risk_event
+mandate: ${JSON.stringify(mandate)}
 ---
 `
 }
@@ -297,6 +321,7 @@ wakeReason: risk_event
 function reduceOnlyIntent(wakeId: string) {
   return {
     kind: 'single' as const,
+    identity: { mandateId: 'root-scheduler-uta', entrustedUnitId: 'deterministic-reducer' },
     direction: 'flat' as const,
     instrument: `${ACCOUNT_ID}/ASSET-A`,
     targetExposure: { minPct: 0, maxPct: 0 },

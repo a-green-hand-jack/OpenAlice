@@ -79,6 +79,20 @@ describe('CLI gateway — data export', () => {
     expect(text).toContain('4')
   })
 
+  it('invoke does not depend on a global WebCrypto binding', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto')
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: undefined })
+    try {
+      const res = await post('/cli/ws1/data/invoke', { tool: 'calculate', args: { expression: '3 + 4' } })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { content: Array<{ type: string; text?: string }> }
+      expect(body.content.map((block) => block.text ?? '').join('')).toContain('7')
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, 'crypto', descriptor)
+      else Reflect.deleteProperty(globalThis, 'crypto')
+    }
+  })
+
   it('invoke rejects a tool name not on the CLI map (e.g. trading)', async () => {
     const res = await post('/cli/ws1/data/invoke', { tool: 'placeOrder', args: {} })
     expect(res.status).toBe(404)

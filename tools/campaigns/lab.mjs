@@ -10,7 +10,7 @@
  * pass is a child-process invocation of the existing scripts.
  *
  * For each arm, SERIALLY:
- *   1. boot a fresh sandboxed `pnpm dev` stack (own OPENALICE_HOME +
+ *   1. boot a fresh sandboxed production Guardian stack (own OPENALICE_HOME +
  *      AQ_LAUNCHER_ROOT + port block + optional AQ_TEMPLATE_OVERLAY_DIR —
  *      overlays are a startup snapshot, so an overlay variant arm needs its
  *      own stack, see issue #259 audit §7);
@@ -38,14 +38,14 @@
  * before any run was attempted.
  */
 
-import { mkdirSync, existsSync, readFileSync, writeFileSync, createWriteStream } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, createWriteStream, renameSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 import {
   validateExperimentConfig, generateRunId, derivePortBlock, deriveExitCode, tokenFromLog, login, makeClient, sleep,
-  isPortFreeError, deriveTeardownOutcome, deriveBootOutcome, lastLogLines, parseLabArgs,
+  isPortFreeError, deriveTeardownOutcome, deriveBootOutcome, lastLogLines, parseLabArgs, runCellDispatchArgs,
 } from './_lib.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -72,14 +72,43 @@ function log(msg) {
 // reflects the latest state without extra plumbing.
 const runState = {
   activeStack: null, // { child, ports, armId }
+  activeRunChild: null,
   config: null,
   experimentRoot: null,
   startedAt: null,
+  oauth: null,
   runsList: [],
   armSummaries: [],
 };
 
 let shuttingDown = false;
+
+async function yieldToSignalHandler() {
+  if (shuttingDown) await new Promise(() => {});
+}
+
+function writeRuntimeState(patch) {
+  if (!runState.experimentRoot) return;
+  const path = join(runState.experimentRoot, 'runtime.json');
+  const temporary = `${path}.${process.pid}.tmp`;
+  let current = {};
+  try { current = JSON.parse(readFileSync(path, 'utf8')); } catch { /* first publication */ }
+  writeFileSync(temporary, `${JSON.stringify({ schema: 'alice-lab-runtime/1', ...current, ...patch }, null, 2)}\n`);
+  renameSync(temporary, path);
+}
+
+async function stopActiveRunChild() {
+  const child = runState.activeRunChild;
+  if (!child || child.exitCode !== null) return;
+  const exited = new Promise((resolveExit) => child.once('exit', resolveExit));
+  try { child.kill('SIGTERM'); } catch { /* already gone */ }
+  await Promise.race([exited, sleep(5_000)]);
+  if (child.exitCode === null) {
+    try { child.kill('SIGKILL'); } catch { /* already gone */ }
+    await exited;
+  }
+  runState.activeRunChild = null;
+}
 
 function installSignalHandlers() {
   const onSignal = (sig) => {
@@ -87,6 +116,7 @@ function installSignalHandlers() {
     shuttingDown = true;
     log(`received ${sig} — tearing down active stack and writing partial summary`);
     (async () => {
+      await stopActiveRunChild();
       if (runState.activeStack) {
         const { child, ports, armId } = runState.activeStack;
         try {
@@ -105,6 +135,7 @@ function installSignalHandlers() {
           experimentRoot: runState.experimentRoot,
           interrupted: sig,
         });
+        writeRuntimeState({ status: 'interrupted', labPid: null, guardianPid: null, stoppedAt: new Date().toISOString(), signal: sig });
       }
       process.exit(1);
     })().catch((err) => {
@@ -133,6 +164,18 @@ function loadConfig(configPath) {
   return config;
 }
 
+function verifyCodexSubscriptionOAuth() {
+  if (process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY must be unset: alice-lab requires Codex ChatGPT subscription OAuth');
+  }
+  const probe = spawnSync('codex', ['login', 'status'], { encoding: 'utf8', env: process.env });
+  const output = `${probe.stdout ?? ''}\n${probe.stderr ?? ''}`;
+  if (probe.status !== 0 || !output.includes('Logged in using ChatGPT')) {
+    throw new Error('Codex subscription OAuth preflight failed; run "codex login" and verify "codex login status"');
+  }
+  return { provider: 'codex', auth: 'chatgpt-subscription-oauth', openAiApiKeyPresent: false };
+}
+
 // ── per-arm sandboxed stack lifecycle ────────────────────────────────────
 
 function bootStack(arm, ports, armDir) {
@@ -143,6 +186,7 @@ function bootStack(arm, ports, armDir) {
   const logPath = join(armDir, 'stack.log');
   const logStream = createWriteStream(logPath, { flags: 'a' });
   const buf = { text: '' };
+  const overlayDir = arm.overlayDir ?? process.env.AQ_TEMPLATE_OVERLAY_DIR;
   const env = {
     ...process.env,
     OPENALICE_HOME: home,
@@ -152,16 +196,24 @@ function bootStack(arm, ports, armDir) {
     OPENALICE_MCP_PORT: String(ports.mcp),
     OPENALICE_UTA_PORT: String(ports.uta),
     OPENALICE_UI_PORT: String(ports.ui),
-    ...(arm.overlayDir ? { AQ_TEMPLATE_OVERLAY_DIR: arm.overlayDir } : {}),
+    ...(overlayDir ? { AQ_TEMPLATE_OVERLAY_DIR: overlayDir } : {}),
   };
-  // detached: true makes `child` the leader of a NEW process group (POSIX
+  // detached: true makes production Guardian the leader of a NEW process group
+  // (POSIX
   // pgid == child.pid), so `process.kill(-child.pid, sig)` below reaches
-  // every descendant directly instead of relying on pnpm to forward the
-  // signal to tsx/Guardian — pnpm does NOT do that on SIGTERM (issue #259
-  // review CRITICAL, empirically reproduced against pnpm 11.9.0), so a
-  // plain `child.kill()` only killed pnpm itself and orphaned the whole
-  // Guardian/UTA/Alice/Vite tree holding the port block.
-  const child = spawn('pnpm', ['dev'], { cwd: REPO_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  // every Alice/UTA descendant directly. This retains the proven group teardown
+  // from issue #259 while removing pnpm/tsx/Vite from the production path.
+  for (const artifact of ['dist/main.js', 'services/uta/dist/uta.js']) {
+    if (!existsSync(join(REPO_ROOT, artifact))) {
+      throw new Error(`production artifact missing: ${artifact}; run "pnpm build" before alice-lab`);
+    }
+  }
+  const child = spawn(process.execPath, ['scripts/guardian/prod.mjs'], {
+    cwd: REPO_ROOT,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
+  });
   const onData = (chunk) => {
     buf.text += chunk.toString('utf8');
     logStream.write(chunk);
@@ -187,7 +239,7 @@ async function waitStackReady(child, webPort, buf, timeoutMs) {
   try {
     while (Date.now() < deadline) {
       if (exit) return deriveBootOutcome({ ready: false, exited: true, exitCode: exit.code, exitSignal: exit.signal, timeoutMs });
-      if (buf.text.includes('Alice ready') && buf.text.includes('UTA ready')) {
+      if (buf.text.includes('[guardian/prod] starting') && buf.text.includes('UTA ready') && buf.text.includes('engine: started')) {
         try {
           const res = await fetch(`http://127.0.0.1:${webPort}/api/version`, { signal: AbortSignal.timeout(3_000) });
           if (res.ok) return deriveBootOutcome({ ready: true });
@@ -257,10 +309,19 @@ function runChildToLog(args, logPath) {
   return new Promise((resolveRun) => {
     const logStream = createWriteStream(logPath, { flags: 'w' });
     const child = spawn(process.execPath, args, { cwd: REPO_ROOT, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    runState.activeRunChild = child;
+    let settled = false;
+    const settle = (exitCode) => {
+      if (settled) return;
+      settled = true;
+      if (runState.activeRunChild === child) runState.activeRunChild = null;
+      logStream.end();
+      resolveRun({ exitCode });
+    };
     child.stdout.pipe(logStream, { end: false });
     child.stderr.pipe(logStream, { end: false });
-    child.on('exit', (code) => { logStream.end(); resolveRun({ exitCode: code ?? 1 }); });
-    child.on('error', (err) => { logStream.write(`\n[lab] spawn error: ${err.message}\n`); logStream.end(); resolveRun({ exitCode: 1 }); });
+    child.on('exit', (code) => settle(code ?? 1));
+    child.on('error', (err) => { logStream.write(`\n[lab] spawn error: ${err.message}\n`); settle(1); });
   });
 }
 
@@ -333,9 +394,10 @@ async function runArm(arm, config, experimentRoot, runsList) {
   const ports = derivePortBlock(config.basePort);
   const baseUrl = `http://127.0.0.1:${ports.web}`;
 
-  log(`arm ${arm.id}: booting sandboxed stack on port ${ports.web} (overlay=${arm.overlayDir ?? 'none'})`);
+  log(`arm ${arm.id}: booting sandboxed production Guardian on port ${ports.web} (overlay=${arm.overlayDir ?? process.env.AQ_TEMPLATE_OVERLAY_DIR ?? 'none'})`);
   const stack = bootStack(arm, ports, armDir);
   runState.activeStack = { child: stack.child, ports, armId: arm.id };
+  writeRuntimeState({ status: 'running', guardianPid: stack.child.pid, armId: arm.id, ports, stackLog: stack.logPath });
 
   const plannedRuns = () => {
     const out = [];
@@ -346,6 +408,7 @@ async function runArm(arm, config, experimentRoot, runsList) {
   };
 
   const readiness = await waitStackReady(stack.child, ports.web, stack.buf, STACK_READY_TIMEOUT_MS);
+  await yieldToSignalHandler();
   if (!readiness.ok) {
     let reason = readiness.reason;
     if (readiness.status === 'exited') {
@@ -354,6 +417,7 @@ async function runArm(arm, config, experimentRoot, runsList) {
     log(`arm ${arm.id}: ${readiness.reason} — failing arm, skipping its runs`);
     await stopStack(stack.child, ports, arm.id);
     runState.activeStack = null;
+    writeRuntimeState({ guardianPid: null, armId: null });
     stack.logStream.end();
     for (const { cell, round } of plannedRuns()) {
       runsList.push({ runId: generateRunId(config.name, arm.id, cell, round), arm: arm.id, cell, round, status: 'skipped', exitCode: null, resultPath: null, reason });
@@ -367,6 +431,7 @@ async function runArm(arm, config, experimentRoot, runsList) {
     log(`arm ${arm.id}: could not scrape first-run admin token from stack.log — failing arm, skipping its runs`);
     await stopStack(stack.child, ports, arm.id);
     runState.activeStack = null;
+    writeRuntimeState({ guardianPid: null, armId: null });
     stack.logStream.end();
     for (const { cell, round } of plannedRuns()) {
       runsList.push({ runId: generateRunId(config.name, arm.id, cell, round), arm: arm.id, cell, round, status: 'skipped', exitCode: null, resultPath: null, reason: 'no admin token found in stack.log' });
@@ -390,8 +455,15 @@ async function runArm(arm, config, experimentRoot, runsList) {
       '--weeks', String(config.weeks),
       '--run-id', runId,
       '--keep',
+      ...runCellDispatchArgs(config.dispatch),
+      ...(config.mandate ? ['--mandate-config', JSON.stringify({
+        ...config.mandate,
+        mandateId: `${config.mandate.id}-${runId}`,
+      })] : []),
+      ...(config.restartAfterWake ? ['--restart-after-wake', String(config.restartAfterWake)] : []),
     ];
     const { exitCode } = await runChildToLog(args, runLogPath);
+    await yieldToSignalHandler();
     const status = exitCode === 0 ? 'ok' : 'failed';
     const resultRelPath = join('tools', 'campaigns', 'runs', runId, 'result.json');
     const resultPath = existsSync(join(REPO_ROOT, resultRelPath)) ? resultRelPath : null;
@@ -405,6 +477,7 @@ async function runArm(arm, config, experimentRoot, runsList) {
 
   await stopStack(stack.child, ports, arm.id);
   runState.activeStack = null;
+  writeRuntimeState({ guardianPid: null, armId: null });
   stack.logStream.end();
 
   return { id: arm.id, status: 'ok', dir: armDir };
@@ -457,7 +530,11 @@ function writeSummary({ config, startedAt, armSummaries, runsList, reportPath, e
       maxRuns: config.maxRuns,
       basePort: config.basePort,
       allowHoldout: config.allowHoldout,
+      dispatch: config.dispatch,
+      mandate: config.mandate,
+      restartAfterWake: config.restartAfterWake,
     },
+    oauth: runState.oauth,
     arms: armSummaries,
     runs: runsList,
     totals,
@@ -466,6 +543,13 @@ function writeSummary({ config, startedAt, armSummaries, runsList, reportPath, e
   };
   const summaryPath = join(experimentRoot, 'summary.json');
   writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
+  writeRuntimeState({
+    status: interrupted ? 'interrupted' : exitCode === 0 ? 'completed' : 'failed',
+    labPid: null,
+    guardianPid: null,
+    stoppedAt: finishedAt,
+    exitCode,
+  });
   log(`summary → ${summaryPath}`);
   log(`totals: ${totals.ok} ok / ${totals.failed} failed / ${totals.skipped} skipped (of ${totals.total})`);
   return exitCode;
@@ -473,6 +557,7 @@ function writeSummary({ config, startedAt, armSummaries, runsList, reportPath, e
 
 async function main() {
   installSignalHandlers();
+  const oauth = verifyCodexSubscriptionOAuth();
 
   const { configPath } = parseLabArgs(process.argv.slice(2));
   const config = loadConfig(configPath);
@@ -483,8 +568,22 @@ async function main() {
   mkdirSync(experimentRoot, { recursive: true });
 
   runState.config = config;
+  runState.oauth = oauth;
   runState.experimentRoot = experimentRoot;
   runState.startedAt = startedAt;
+  writeRuntimeState({
+    status: 'starting',
+    labPid: process.pid,
+    guardianPid: null,
+    armId: null,
+    ports: null,
+    stackLog: null,
+    startedAt,
+    stoppedAt: null,
+    exitCode: null,
+    signal: null,
+    configPath: resolve(configPath),
+  });
   const runsList = runState.runsList;
   const armSummaries = runState.armSummaries;
 
@@ -498,7 +597,25 @@ async function main() {
   process.exit(exitCode);
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   process.stderr.write(`[lab] FATAL: ${err.stack ?? err.message}\n`);
+  await stopActiveRunChild();
+  if (runState.activeStack) {
+    const { child, ports, armId } = runState.activeStack;
+    try { await stopStack(child, ports, armId); }
+    catch (teardownError) { process.stderr.write(`[lab] FATAL teardown failed: ${teardownError.message}\n`); }
+    runState.activeStack = null;
+  }
+  if (runState.config && runState.experimentRoot) {
+    writeSummary({
+      config: runState.config,
+      startedAt: runState.startedAt,
+      armSummaries: runState.armSummaries,
+      runsList: runState.runsList,
+      reportPath: null,
+      experimentRoot: runState.experimentRoot,
+      interrupted: 'fatal',
+    });
+  }
   process.exit(1);
 });

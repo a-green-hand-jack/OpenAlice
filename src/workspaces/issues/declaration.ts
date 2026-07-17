@@ -39,6 +39,7 @@ import { z } from 'zod'
 
 import type { Schedule } from '../../core/schedule-expr.js'
 import {
+  entrustedUnitMandateSchema,
   stewardAuthzLevelSchema,
   stewardExpectedDecisionSchema,
   stewardWakeReasonSchema,
@@ -110,9 +111,12 @@ export const issueFrontmatterSchema = z.object({
   deadlineMs: z.number().int().positive().max(60 * 60 * 1000).optional(),
   marketContext: z.record(z.string(), z.unknown()).optional(),
   riskContext: z.record(z.string(), z.unknown()).optional(),
+  /** Required for scheduled trading wakes. This is the v1 root mandate; it is
+   * data, not a prompt and not a delegation runtime. */
+  mandate: entrustedUnitMandateSchema.optional(),
 }).superRefine((issue, ctx) => {
   if (issue.kind !== 'steward-wake') return
-  for (const field of ['accountId', 'authzLevel', 'expectedDecision'] as const) {
+  for (const field of ['accountId', 'authzLevel', 'expectedDecision', 'mandate'] as const) {
     if (issue[field] === undefined) {
       ctx.addIssue({
         code: 'custom',
@@ -120,6 +124,9 @@ export const issueFrontmatterSchema = z.object({
         message: `${field} is required when kind is steward-wake`,
       })
     }
+  }
+  if (issue.accountId && issue.mandate && issue.accountId !== issue.mandate.accountId) {
+    ctx.addIssue({ code: 'custom', path: ['mandate', 'accountId'], message: 'mandate accountId must match the steward wake accountId' })
   }
 })
 export type IssueFrontmatter = z.infer<typeof issueFrontmatterSchema>

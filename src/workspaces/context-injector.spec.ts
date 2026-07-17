@@ -17,9 +17,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { dataPath, defaultPath } from '@/core/paths.js';
 
-import { injectWorkspaceContext, refreshWorkspaceInstructions } from './context-injector.js';
+import {
+  composeWorkspaceInstruction,
+  injectWorkspaceContext,
+  refreshWorkspaceInstructions,
+} from './context-injector.js';
 import type { Logger } from './logger.js';
-import { TemplateRegistry } from './template-registry.js';
+import { TEMPLATE_POLICY_CONTRACT_VERSION, TemplateRegistry } from './template-registry.js';
 import type { TemplateMeta } from './template-registry.js';
 
 // src/workspaces/ — this spec's directory.
@@ -125,40 +129,92 @@ describe('injectWorkspaceContext — persona', () => {
     await expect(refreshWorkspaceInstructions({ template, dir })).resolves.toEqual({ changed: false });
   });
 
-  it('uses a registry snapshot until a new registry load adopts changed overlay bytes', async () => {
+  it('keeps the built-in steward proposal-only while retaining platform execution mechanics for an explicit policy', async () => {
+    const mechanics = await readFile(join(STEWARD_FILES, 'instruction.md'), 'utf8');
+    const withoutPolicy = composeWorkspaceInstruction(mechanics);
+    const withPolicy = composeWorkspaceInstruction(
+      mechanics,
+      '# Team policy\n\nAction is explicitly authorized for this wake.\n',
+      TEMPLATE_POLICY_CONTRACT_VERSION,
+    );
+
+    expect(withoutPolicy).toContain('remains proposal-only unless a separately composed Team policy');
+    expect(withoutPolicy).toMatch(
+      /Absent that\s+explicit policy authorization, record the intent with `actions: \[\]`/,
+    );
+    expect(withoutPolicy).toContain('`pendingHash: null`');
+    expect(withPolicy).toContain('`autoPush.status: "skipped"` with reason `paper_policy_denied`');
+    expect(withPolicy).toContain('alice-uta git reject');
+    expect(withPolicy).toContain('For `autoPush.status: "failed"`, record `failed`');
+    expect(withPolicy).toContain('record `awaiting_approval`');
+    expect(withPolicy).toContain('using the Write or Edit tool, not a shell heredoc');
+    expect(withPolicy.indexOf('Action is explicitly authorized for this wake.')).toBeLessThan(
+      withPolicy.indexOf('## Controlled alice-uta mechanics'),
+    );
+  });
+
+  it('keeps Team-owned trading policy out of the built-in steward mechanics', async () => {
+    const mechanics = await readFile(join(STEWARD_FILES, 'instruction.md'), 'utf8');
+    for (const teamPolicyTerm of [
+      ['25', '-45'].join(''),
+      ['50', '-55'].join(''),
+      ['Participation', 'Bias'].join(' '),
+      ['under', '-participating'].join(''),
+      ['benchmark', '-aware'].join(''),
+      ['Evidence-First', 'Reasoning'].join(' '),
+      ['Risk', 'Discipline'].join(' '),
+    ]) {
+      expect(mechanics).not.toContain(teamPolicyTerm);
+    }
+    expect(mechanics).toMatch(/Discretionary trading policy is supplied separately by the\s+Team/);
+    expect(mechanics).toMatch(/OpenAlice validates\s+and transports these bindings; it does not supply trading strategy, sizing, or\s+participation rules/);
+  });
+
+  it('composes a policy snapshot with platform mechanics until a registry reload adopts new policy bytes', async () => {
     const baseRoot = join(dir, 'base-templates');
     const overlayRoot = join(dir, 'instruction-overlay');
     const baseTemplateDir = join(baseRoot, 'chat');
     const overlayTemplateDir = join(overlayRoot, 'chat');
-    const overlayInstruction = join(overlayTemplateDir, 'files', 'instruction.md');
+    const overlayPolicy = join(overlayTemplateDir, 'files', 'policy.md');
     await mkdir(join(baseTemplateDir, 'files'), { recursive: true });
     await mkdir(join(overlayTemplateDir, 'files'), { recursive: true });
     await Promise.all([
       writeFile(join(baseTemplateDir, 'bootstrap.mjs'), 'export {};\n', 'utf8'),
       writeFile(join(baseTemplateDir, 'files', 'instruction.md'), '# base instruction\n', 'utf8'),
       writeFile(join(baseTemplateDir, 'template.json'), JSON.stringify({ injectPersona: true }), 'utf8'),
-      writeFile(join(overlayTemplateDir, 'template.json'), JSON.stringify({ extends: 'chat' }), 'utf8'),
-      writeFile(overlayInstruction, '# external overlay\n', 'utf8'),
+      writeFile(join(overlayTemplateDir, 'template.json'), JSON.stringify({ extends: 'chat', contractVersion: 1 }), 'utf8'),
+      writeFile(overlayPolicy, '# external policy\n', 'utf8'),
     ]);
 
     const registry = await TemplateRegistry.load(baseRoot, testLogger, overlayRoot);
     const template = registry.get('chat');
-    if (!template) throw new Error('expected overlay template');
+    if (!template) throw new Error('expected policy template');
     await injectWorkspaceContext({ template, wsId: 'ws-overlay-create', dir });
-    expect(await read('AGENTS.md')).toContain('# external overlay');
-    expect(await read('CLAUDE.md')).toContain('# external overlay');
+    expect(await read('AGENTS.md')).toContain('# external policy');
+    expect(await read('AGENTS.md')).toContain('# base instruction');
+    expect((await read('AGENTS.md')).indexOf('# external policy')).toBeLessThan(
+      (await read('AGENTS.md')).indexOf('# base instruction'),
+    );
+    expect(await read('CLAUDE.md')).toContain('# external policy');
 
-    await writeFile(overlayInstruction, '# external overlay changed on disk\n', 'utf8');
+    await writeFile(overlayPolicy, '# external policy changed on disk\n', 'utf8');
     await expect(refreshWorkspaceInstructions({ template, dir })).resolves.toEqual({ changed: false });
-    expect(await read('AGENTS.md')).toContain('# external overlay');
+    expect(await read('AGENTS.md')).toContain('# external policy');
     expect(await read('AGENTS.md')).not.toContain('changed on disk');
 
     const reloaded = await TemplateRegistry.load(baseRoot, testLogger, overlayRoot);
     const reloadedTemplate = reloaded.get('chat');
-    if (!reloadedTemplate) throw new Error('expected reloaded overlay template');
+    if (!reloadedTemplate) throw new Error('expected reloaded policy template');
     await expect(refreshWorkspaceInstructions({ template: reloadedTemplate, dir })).resolves.toEqual({ changed: true });
-    expect(await read('AGENTS.md')).toContain('# external overlay changed on disk');
-    expect(await read('CLAUDE.md')).toContain('# external overlay changed on disk');
+    expect(await read('AGENTS.md')).toContain('# external policy changed on disk');
+    expect(await read('AGENTS.md')).toContain('# base instruction');
+    expect(await read('CLAUDE.md')).toContain('# external policy changed on disk');
+  });
+
+  it('fails closed when a policy reaches composition without its supported contract version', () => {
+    expect(() => composeWorkspaceInstruction('# mechanics\n', '# policy\n')).toThrow(
+      /unsupported template policy contract version/i,
+    );
   });
 });
 

@@ -22,4 +22,3 @@ export * from './evaluation-provenance-store.js';
 export * from './evaluation-harness.js';
 export * from './model-cost-scheduler.js';
 export * from './d4-smoke-stage-manifest.js';
-export * from './d4-smoke-runner.js';

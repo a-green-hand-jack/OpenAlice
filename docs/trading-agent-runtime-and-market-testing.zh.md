@@ -1,6 +1,13 @@
 # Trading Agent Runtime 与市场测试设计
 
-> 状态：运行与评测方法真源（2026-07-11，Steward Plan v2）。本文件解释 trading-agent 在
+> **#264 当前边界。** 受任单元是实现无关的委任契约；当前 v1 实例使用 Codex，但本文旧
+> Codex steward 描述不是 universal definition。Trading Team policy 独占策略，OpenAlice
+> instruction 只定义 mechanics，UTA 独占 Risk Envelope/执行/broker。有限 isolated evaluation
+> 的当前路径是 `lab -> run-cell`；D4/v9 与 performance 内容是历史测试资料。当前行为和操作
+> 入口见 [v0.5 Behavior Contract](steward-workspace-behavior-contract.zh.md) 与
+> [Operator Guide](trading-agent-operator-guide.zh.md)。
+>
+> 状态：历史运行与评测方法参考（2026-07-11，Steward Plan v2）。本文件解释 trading-agent 在
 > OpenAlice workspace 里的结构、信息流、输出流，并把 protocol reliability、decision quality、
 > execution fidelity 三类证据分开。它不授权继续 prompt tuning、campaign、holdout、真实
 > paper 或 live。2026-07-10 的 v7 Spark baseline 见 §8 和
@@ -11,10 +18,10 @@
 
 ## 1. 一句话
 
-OpenAlice 里的 trading-agent 不是一个直接跑在源码仓库上的 coding agent。它是一个
-长期存在的 **persistent steward workspace**：Codex 作为 core-agent，在 steward
-模板、workspace 文件、wake envelope、UTA 工具和 supervisor 的约束下工作。它看到的是
-一个小型交易台，而不是 OpenAlice 的实现细节。
+OpenAlice 里的受任单元不是一个直接跑在源码仓库上的 coding agent。当前 v1 使用 Codex
+实现交易受任单元：它在 persistent steward workspace 中消费受限 wake/观察，遵守 Team
+policy，并由 OpenAlice mechanics 和 UTA 权威边界约束。有限评测则通过现有
+`lab -> run-cell` 路径驱动同一契约。
 
 ```mermaid
 flowchart LR
@@ -53,7 +60,8 @@ trading-agent 的输入分为五类。关键原则是：稳定背景写入 works
 
 | 输入类别           | 形式                                         | 谁写入                  | Agent 怎么使用                                                               | 例子                                                             |
 | ------------------ | -------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| 身份和行为规则     | workspace instruction / `AGENTS.md` / skills | workspace template      | 定义它是 steward，不是 code-agent；定义 UTA checklist、ledger 契约、风控纪律 | `src/workspaces/templates/steward/files/instruction.md`          |
+| 平台 mechanics     | workspace instruction / `AGENTS.md` / skills | OpenAlice workspace template | 定义 world boundary、mandate/intent、UTA checklist、ledger、recovery 与 safety；不含策略 | `src/workspaces/templates/steward/files/instruction.md`          |
+| Team policy        | overlay `steward/files/policy.md`             | Trading Team            | 定义交易策略、角色与行为偏好；不得覆盖 UTA authz、Risk Envelope 或 guards             | Team 提供的 policy overlay                                      |
 | 持久交易状态       | `.alice/steward/*.json` 和 ledger            | OpenAlice + agent       | 读取账户绑定、行为输入版本、历史决策、成本状态                               | `config.json`、`context-manifest.json`、`ledger/decisions.jsonl` |
 | 本次任务边界       | wake envelope JSON                           | selector / supervisor   | 知道本轮为什么醒来、看哪个账户、deadline 是什么、有哪些市场上下文            | `wakeId`、`accountId`、`marketContext.bars`                      |
 | 实时账户和市场事实 | `alice*` CLI 工具结果                        | UTA / market-data layer | 跑 checklist，查账户、持仓、订单、risk、quote、bar source                    | account info、positions、riskState、market clock                 |
@@ -140,7 +148,8 @@ sequenceDiagram
   S->>S: mark wake done / blocked / timeout; record cost
 ```
 
-行为上，当前 steward prompt 的核心纪律是：
+以下仅是 2026-07-10 实验使用的**历史 Trading Team policy 示例**，不是 OpenAlice 当前
+platform instruction，也不构成现行策略或授权：
 
 - 清晰、证据充分的上升趋势应参与；长期空仓跑输牛市也是失败。
 - 证据不清、走弱、下行时默认 `no_trade`；震荡噪音不是“试一笔”的理由。
@@ -296,9 +305,12 @@ guard 拒掉才没有执行，因此不能外推到无 max-position guard 的账
 实验与架构证据合入 `jieke/dev`，不激活 #126 participation candidate；holdout 继续封存。完整证据见
 [appendix/steward-v8-candidate-20260711.md](appendix/steward-v8-candidate-20260711.md)。
 
-## 9. Plan v2 决定
+## 9. 历史冻结：Plan v2 决定（已被 #264 取代）
 
-当前不继续 performance prompt tuning，也不打开 holdout。下一轮工作首先是**设计评测契约**，
+> 本节保留当时的评测设计与停止条件，不授权继续 prompt tuning、holdout、mock autonomy、
+> paper/live 或新增 runtime。现行边界以 issue #264、v0.5 行为契约和 operator guide 为准。
+
+当时决定不继续 performance prompt tuning，也不打开 holdout；下一轮首先**设计评测契约**，
 不是运行更多 cell：
 
 1. 定义可复现的 as-of Information Snapshot；行情、账户、风险、事件和 freshness 各自有身份。

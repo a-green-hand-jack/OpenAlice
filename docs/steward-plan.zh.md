@@ -1,5 +1,12 @@
 # Steward 方向与实施计划
 
+> **历史冻结 / 已被 #264 取代。** 本文保留旧 Wave、D4、v9 token 与阶段证据；其中“当前”、
+> “唯一活动”和后续 sizing/runtime 规划均只描述当时状态，不再授权实现或运行。当前边界以
+> [issue #264](https://github.com/a-green-hand-jack/OpenAlice/issues/264)、
+> [Operator Guide](trading-agent-operator-guide.zh.md)、
+> [Capability Reuse Audit](trading-agent-capability-reuse-audit.zh.md) 和
+> [v0.5 Behavior Contract](steward-workspace-behavior-contract.zh.md) 为准。下文冻结内容不改写。
+>
 > 版本：v2.8（2026-07-13）
 >
 > 地位：**唯一活动路线与授权真源**。Wave 0.5 的 `AUTH-CP-D2` / `AUTH-CP-D3` 与 §5.2 的

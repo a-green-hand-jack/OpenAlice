@@ -154,6 +154,14 @@
       "type": "object",
       "required": ["confidence", "maxAcceptableLossPct", "timeHorizon", "evidence", "snapshotId", "snapshotSha256"],
       "properties": {
+        "identity": {
+          "type": "object", "additionalProperties": false,
+          "required": ["mandateId", "entrustedUnitId"],
+          "properties": {
+            "mandateId": { "$ref": "#/$defs/nonEmpty" },
+            "entrustedUnitId": { "$ref": "#/$defs/nonEmpty" }
+          }
+        },
         "confidence": { "enum": ["low", "medium", "high"] },
         "maxAcceptableLossPct": { "$ref": "#/$defs/percentage" },
         "timeHorizon": {

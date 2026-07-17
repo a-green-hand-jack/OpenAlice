@@ -15,7 +15,9 @@
  *   4. runs WEEKS weekly decision cycles: step the sim clock day-by-day through
  *      the week (firing any pending protective legs), then POST a steward wake
  *      whose marketContext carries the visible-so-far anonymized OHLCV, poll the
- *      supervisor until the wake reaches a terminal state, and snapshot equity;
+ *      supervisor until the wake reaches a terminal state, and snapshot equity.
+ *      `--scheduled` instead writes one-shot workspace issue declarations and
+ *      waits for ScheduleScanner + the persistent supervisor to do that work;
  *   5. writes every artifact (ledger, wake records, supervisor state, per-week
  *      snapshots, computed metrics) to tools/campaigns/runs/<runId>/ (gitignored).
  *
@@ -43,6 +45,8 @@ import {
   WEEKS, BARS_PER_WEEK, WINDOW_LEN, START_CASH, HAIKU_PRICE,
   sleep, maxDrawdown, regimeVerdict, maxWeeklyLongReturnUnderExposure, login, makeClient, tokenFromLog,
   finalizationTrust, buildCampaignAccountCreatePayload, shouldCleanup,
+  buildCampaignMandate, buildScheduledStewardIssue, utaChecklistVerified, wakeEnvelopeIdentity,
+  wakeEnvelopeIdentityVerified,
 } from './_lib.mjs';
 
 // Fictional sim-clock epoch: day 0 → 2020-01-01, +1 day per bar. Keeps the
@@ -64,6 +68,9 @@ function parseArgs(argv) {
     pollMs: 8_000,
     wakeTimeoutMs: 720_000,
     keep: false,
+    scheduled: false,
+    mandateConfig: null,
+    restartAfterWake: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -83,10 +90,15 @@ function parseArgs(argv) {
     else if (a === '--poll-ms') out.pollMs = Number(next());
     else if (a === '--wake-timeout-ms') out.wakeTimeoutMs = Number(next());
     else if (a === '--keep') out.keep = true;
+    else if (a === '--scheduled') out.scheduled = true;
+    else if (a === '--mandate-config') out.mandateConfig = JSON.parse(next());
+    else if (a === '--restart-after-wake') out.restartAfterWake = Number(next());
     else if (a === '--help' || a === '-h') { console.log('see file header for usage'); process.exit(0); }
     else throw new Error(`unknown arg: ${a}`);
   }
   if (!out.cell) throw new Error('--cell required');
+  if (out.scheduled && !out.mandateConfig) throw new Error('--scheduled requires --mandate-config');
+  if (out.restartAfterWake !== null && (!Number.isInteger(out.restartAfterWake) || out.restartAfterWake < 1 || out.restartAfterWake >= out.weeks)) throw new Error('--restart-after-wake must be in 1..weeks-1');
   out.wakeTimeoutMs = Math.max(out.wakeTimeoutMs, out.deadlineMs + (out.pollMs * 2));
   return out;
 }
@@ -102,6 +114,54 @@ function workspaceTag(runId) {
     .slice(0, 26)
     .replace(/[-_]+$/, '') || 'campaign';
   return `${stem}-${hash}`;
+}
+
+const TERMINAL_WAKE_STATUSES = new Set(['done', 'blocked', 'error', 'timeout', 'stuck']);
+const SCHEDULED_ISSUE_DELAY_MS = 1_000;
+
+function findScheduledWakeId(wsDir, issueId) {
+  const wakesDir = join(wsDir, '.alice', 'steward', 'wakes');
+  try {
+    for (const entry of readdirSync(wakesDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      try {
+        const wakeId = JSON.parse(readFileSync(join(wakesDir, entry.name), 'utf8'))?.wakeId;
+        if (typeof wakeId === 'string' && wakeId.endsWith(`:${issueId}`)) return wakeId;
+      } catch { /* a concurrent atomic write is retried on the next poll */ }
+    }
+  } catch { /* ScheduleScanner has not dispatched this issue yet */ }
+  return null;
+}
+
+async function waitForScheduledWakeId(wsDir, issueId, timeoutMs, pollMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const wakeId = findScheduledWakeId(wsDir, issueId);
+    if (wakeId) return wakeId;
+    await sleep(pollMs);
+  }
+  throw new Error(`ScheduleScanner did not dispatch issue ${issueId} before ${timeoutMs}ms`);
+}
+
+async function waitForTerminalWake(c, wsId, wakeId, opts, { tickSupervisor }) {
+  const startedAt = Date.now();
+  let wake;
+  let ledgerEntry = null;
+  let status = 'queued';
+  while (!TERMINAL_WAKE_STATUSES.has(status) && Date.now() - startedAt < opts.wakeTimeoutMs) {
+    if (wake) await sleep(opts.pollMs);
+    if (tickSupervisor) {
+      await c.post(`/api/workspaces/${wsId}/steward/supervisor/tick`, {}).catch(() => undefined);
+    }
+    const got = await c.get(`/api/workspaces/${wsId}/steward/wakes/${encodeURIComponent(wakeId)}`);
+    wake = got.wake;
+    ledgerEntry = got.ledgerEntry ?? ledgerEntry;
+    status = wake.status;
+  }
+  if (!TERMINAL_WAKE_STATUSES.has(status)) {
+    throw new Error(`wake ${wakeId} did not reach a terminal state before ${opts.wakeTimeoutMs}ms (last status: ${status})`);
+  }
+  return { wake, ledgerEntry, status, elapsedMs: Date.now() - startedAt };
 }
 
 async function resolveCookie(opts) {
@@ -273,6 +333,8 @@ async function main() {
 
   const weeks = [];
   let wsId, wsDir, acctId;
+  let mandate = null;
+  let restartRecovery = null;
   let succeeded = false;
   try {
     // ── mock account + guards ────────────────────────────────────────────
@@ -285,7 +347,8 @@ async function main() {
     // missing/invalid envelope absorbs effective authz to `read_only` and
     // every mutation tool (placeOrder/tradingCommit/…) stays hidden even
     // after maxAuthzLevel is lifted below.
-    const created = await c.post('/api/trading/config/uta', buildCampaignAccountCreatePayload(codename, runId, opts));
+    const accountPayload = buildCampaignAccountCreatePayload(codename, runId, opts);
+    const created = await c.post('/api/trading/config/uta', accountPayload);
     acctId = created.id;
     log(`account ${acctId} created (guards: max-drawdown ${opts.maxDdPct}% + max-position-size ${opts.maxPosPct}%)`);
     log(`risk envelope provisioned (autonomyCeiling=paper, whitelist=[${codename}])`);
@@ -303,6 +366,22 @@ async function main() {
     await c.put(`/api/trading/config/uta/${acctId}`, { ...mine, maxAuthzLevel: 'paper' });
     await waitStable(c, acctId);
     log(`account maxAuthzLevel → paper (UTA stable)`);
+
+    if (opts.mandateConfig) {
+      const validFrom = new Date().toISOString();
+      mandate = buildCampaignMandate({
+        mandateId: opts.mandateConfig.mandateId,
+        entrustedUnitId: opts.mandateConfig.entrustedUnitId,
+        accountId: acctId,
+        capital: opts.mandateConfig.capital,
+        scope: [codename],
+        validFrom,
+        validUntil: new Date(Date.parse(validFrom) + opts.mandateConfig.validForMs).toISOString(),
+        heartbeat: opts.mandateConfig.heartbeat,
+        riskEnvelope: accountPayload.riskEnvelope,
+      });
+      log(`mandate ${mandate.mandateId} bound to entrusted unit ${mandate.entrustedUnitId}`);
+    }
 
     // ── inject anonymized series into the (now-final) MockBroker instance ──
     await c.post(`/api/simulator/uta/${acctId}/inject-bars`, {
@@ -362,42 +441,71 @@ async function main() {
         currentDay: lastDay.day,
         currentClose: lastDay.close,
         weeklyCadence: `week ${week} of ${totalWeeks} (one decision per simulated week)`,
-        note: 'You manage a prudent, benchmark-aware paper portfolio. Below is the full daily OHLCV visible so far. No other identifying information exists — judge from price/volume alone. The only tradable contract for this wake is tradeableAliceId; do not use default/example contracts returned by blank search.',
+        note: 'This wake exposes only the anonymized daily OHLCV below and the declared tradeableAliceId. No other instrument identity or market context is available. Discretionary trading criteria come only from separately composed policy. Do not use default/example contracts returned by blank search.',
         bars: visible,
       };
 
-      log(`week ${week}: sim day ${lastDay.day} close=${lastDay.close} — posting wake…`);
-      const wakeRes = await c.post(`/api/workspaces/${wsId}/steward/wakes`, {
-        reason: 'scheduled_observe',
-        accountId: acctId,
-        authzLevel: 'paper',
-        expectedDecision: 'no_trade',
-        deadlineMs: opts.deadlineMs,
-        marketContext,
-        riskContext: { note: 'weekly scheduled observation; protective legs run between wakes' },
-        session: { agent: opts.agent },
-      });
-      const wakeId = wakeRes.wake?.wakeId;
-      if (!wakeId) throw new Error(`wake POST returned no wakeId: ${JSON.stringify(wakeRes).slice(0, 300)}`);
-
-      // Poll the supervisor until the wake reaches a terminal state.
+      const riskContext = {
+        envelopeVersion: accountPayload.riskEnvelope.version,
+        note: 'weekly scheduled observation; protective legs run between wakes',
+      };
       const start = Date.now();
-      let wake = wakeRes.wake, ledgerEntry = wakeRes.ledgerEntry ?? null, status = wake.status;
-      const terminal = new Set(['done', 'blocked', 'error', 'timeout', 'stuck']);
-      while (!terminal.has(status) && Date.now() - start < opts.wakeTimeoutMs) {
-        await sleep(opts.pollMs);
-        await c.post(`/api/workspaces/${wsId}/steward/supervisor/tick`, {}).catch(() => undefined);
-        const got = await c.get(`/api/workspaces/${wsId}/steward/wakes/${encodeURIComponent(wakeId)}`);
-        wake = got.wake; ledgerEntry = got.ledgerEntry ?? ledgerEntry; status = wake.status;
+      let issueId;
+      let wakeId;
+      if (opts.scheduled) {
+        issueId = `${runId}-w${week}`;
+        const issuePath = join(wsDir, '.alice', 'issues', `${issueId}.md`);
+        mkdirSync(join(wsDir, '.alice', 'issues'), { recursive: true });
+        writeFileSync(issuePath, buildScheduledStewardIssue({
+          issueId,
+          at: new Date(Date.now() + SCHEDULED_ISSUE_DELAY_MS).toISOString(),
+          accountId: acctId,
+          deadlineMs: opts.deadlineMs,
+          agent: opts.agent,
+          marketContext,
+          riskContext,
+          mandate,
+        }));
+        log(`week ${week}: sim day ${lastDay.day} close=${lastDay.close} — declared scheduled issue ${issueId}; waiting ScheduleScanner…`);
+        wakeId = await waitForScheduledWakeId(wsDir, issueId, opts.wakeTimeoutMs, opts.pollMs);
+      } else {
+        log(`week ${week}: sim day ${lastDay.day} close=${lastDay.close} — posting wake…`);
+        const wakeRes = await c.post(`/api/workspaces/${wsId}/steward/wakes`, {
+          reason: 'scheduled_observe',
+          accountId: acctId,
+          authzLevel: 'paper',
+          expectedDecision: 'no_trade',
+          deadlineMs: opts.deadlineMs,
+          marketContext,
+          riskContext,
+          session: { agent: opts.agent },
+        });
+        wakeId = wakeRes.wake?.wakeId;
+        if (!wakeId) throw new Error(`wake POST returned no wakeId: ${JSON.stringify(wakeRes).slice(0, 300)}`);
       }
-      if (!terminal.has(status)) {
-        throw new Error(`wake ${wakeId} did not reach a terminal state before ${opts.wakeTimeoutMs}ms (last status: ${status})`);
+      const { wake, ledgerEntry, status } = await waitForTerminalWake(c, wsId, wakeId, opts, {
+        tickSupervisor: !opts.scheduled,
+      });
+      const wakeIdentity = wakeEnvelopeIdentity(wake);
+      if (opts.scheduled && !wakeEnvelopeIdentityVerified(wake, mandate)) {
+        throw new Error(`wake ${wakeId} persisted envelope is missing or has mismatched mandate/entrusted-unit identity`);
+      }
+      const intentIdentity = ledgerEntry?.intent?.identity ?? null;
+      if (opts.scheduled && ledgerEntry?.intent !== null && (
+        intentIdentity?.mandateId !== mandate.mandateId ||
+        intentIdentity?.entrustedUnitId !== mandate.entrustedUnitId
+      )) {
+        throw new Error(`wake ${wakeId} Trade Intent is missing or has mismatched mandate/entrusted-unit identity`);
       }
 
       const equity = await netLiquidation(c, acctId);
       const qty = await positionQty(c, acctId);
       const rec = {
-        week, wakeId, status,
+        week, ...(issueId ? { issueId } : {}), wakeId, status,
+        mandateId: wakeIdentity.mandateId,
+        entrustedUnitId: wakeIdentity.entrustedUnitId,
+        heartbeatAt: wake.completedAt ?? wake.updatedAt ?? wake.createdAt,
+        intentIdentity,
         decision: ledgerEntry?.decision ?? null,
         ledgerStatus: ledgerEntry?.status ?? null,
         thesis: ledgerEntry?.thesis ?? null,
@@ -408,10 +516,32 @@ async function main() {
       };
       weeks.push(rec);
       log(`  week ${week}: status=${status} decision=${rec.decision ?? '—'} equity=${Number.isFinite(equity) ? equity.toFixed(0) : 'n/a'} qty=${qty ?? '?'} (${(rec.elapsedMs / 1000).toFixed(0)}s)`);
+
+      if (week === opts.restartAfterWake) {
+        const marker = '[guardian/prod] restart-uta.flag triggered';
+        const before = existsSync(opts.log) ? readFileSync(opts.log, 'utf8').split(marker).length - 1 : 0;
+        const current = await c.get('/api/trading/config');
+        const accounts = Array.isArray(current) ? current : current.utas ?? [];
+        const account = accounts.find((item) => item.id === acctId);
+        if (!account) throw new Error(`restart recovery account ${acctId} disappeared from config`);
+        await c.put(`/api/trading/config/uta/${acctId}`, { ...account, label: `${account.label}-recovery` });
+        await waitStable(c, acctId);
+        const deadline = Date.now() + 90_000;
+        let after = before;
+        while (Date.now() < deadline && after <= before) {
+          await sleep(1_000);
+          after = existsSync(opts.log) ? readFileSync(opts.log, 'utf8').split(marker).length - 1 : 0;
+        }
+        if (after <= before) throw new Error('production Guardian restart marker was not observed after the recovery trigger');
+        restartRecovery = { afterWake: week, guardianMarkerBefore: before, guardianMarkerAfter: after, recoveredAt: new Date().toISOString() };
+        log(`  recovery: production Guardian restarted UTA after wake ${week}; account ${acctId} is live`);
+      }
     }
 
     // ── finalize ──────────────────────────────────────────────────────────
-    await c.post(`/api/workspaces/${wsId}/steward/supervisor/tick`, {}).catch(() => undefined);
+    if (!opts.scheduled) {
+      await c.post(`/api/workspaces/${wsId}/steward/supervisor/tick`, {}).catch(() => undefined);
+    }
     const finalEquity = await netLiquidation(c, acctId);
     const ledgerAll = await c.get(`/api/workspaces/${wsId}/steward/ledger?limit=100`).then((r) => r.entries ?? []).catch(() => []);
 
@@ -434,6 +564,47 @@ async function main() {
       } catch { /* ignore */ }
     }
     const { trustworthy, audit } = finalizationTrust({ weeks, ledgerEntries: ledgerAll, integrityViolations });
+    const scheduledVerification = opts.scheduled ? (() => {
+      const heartbeatTimes = weeks.map((week) => Date.parse(week.heartbeatAt));
+      const heartbeatDeadlineMs = mandate.heartbeat.intervalMs + mandate.heartbeat.graceMs;
+      const heartbeatGapsMs = heartbeatTimes.map((heartbeatAt, index) =>
+        heartbeatAt - (index === 0 ? Date.parse(mandate.validFrom) : heartbeatTimes[index - 1]));
+      const heartbeatVerified = heartbeatTimes.every(Number.isFinite)
+        && heartbeatTimes.every((heartbeatAt) => heartbeatAt >= Date.parse(mandate.validFrom)
+          && heartbeatAt <= Date.parse(mandate.validUntil))
+        && heartbeatGapsMs.every((gap) => gap >= 0 && gap <= heartbeatDeadlineMs);
+      const intentIdentityVerified = weeks.every((week) => week.intentIdentity === null || (
+        week.intentIdentity.mandateId === mandate.mandateId
+        && week.intentIdentity.entrustedUnitId === mandate.entrustedUnitId
+      ));
+      const wakeIdentityVerified = weeks.every((week) => (
+        week.mandateId === mandate.mandateId
+        && week.entrustedUnitId === mandate.entrustedUnitId
+      ));
+      const utaChecklistPassed = utaChecklistVerified(weeks);
+      const recoveryVerified = opts.restartAfterWake === null || restartRecovery?.afterWake === opts.restartAfterWake;
+      return {
+        productionGuardian: 'scripts/guardian/prod.mjs',
+        scheduleScanner: 'real',
+        persistentSteward: true,
+        expectedWakes: totalWeeks,
+        terminalLedgerBackedWakes: audit.terminalLedgerBackedWakes,
+        heartbeatDeadlineMs,
+        heartbeatGapsMs,
+        heartbeatVerified,
+        wakeIdentityVerified,
+        intentIdentityVerified,
+        utaChecklistVerified: utaChecklistPassed,
+        recoveryVerified,
+        verified: audit.terminalLedgerBackedWakes === totalWeeks
+          && audit.valid
+          && heartbeatVerified
+          && wakeIdentityVerified
+          && intentIdentityVerified
+          && utaChecklistPassed
+          && recoveryVerified,
+      };
+    })() : null;
 
     // Supervisor cost state (written to .alice/steward/state.json).
     let stewardState = null;
@@ -456,6 +627,10 @@ async function main() {
     const result = {
       schema: 'steward-campaign-result/1',
       runId, finishedAt: new Date().toISOString(), weeksRun: totalWeeks,
+      dispatch: opts.scheduled ? 'scheduled' : 'direct',
+      ...(scheduledVerification ? { scheduledVerification } : {}),
+      mandate,
+      restartRecovery,
       cell: { codename, regime, weeks: WEEKS, buyHold },
       workspace: { id: wsId, dir: wsDir, agent: opts.agent, blind: true, model: opts.model ?? process.env.ANTHROPIC_MODEL ?? '(default)' },
       account: { id: acctId, startCash: START_CASH, guards: { maxDrawdownPct: opts.maxDdPct, maxPositionPct: opts.maxPosPct } },
@@ -506,6 +681,15 @@ async function main() {
         `${integrityViolations.length ? ` integrityViolations=${integrityViolations.length}` : ''}. ` +
         `result.trustworthy=false — written for evidence but NOT a valid pass.`);
       process.exitCode = 1;
+    }
+    if (scheduledVerification && !scheduledVerification.verified) {
+      throw new Error(
+        `scheduled verification failed: expected ${totalWeeks} ledger-backed terminal wakes, got ` +
+        `${scheduledVerification.terminalLedgerBackedWakes}; heartbeat=${scheduledVerification.heartbeatVerified}; ` +
+        `wakeIdentity=${scheduledVerification.wakeIdentityVerified}; intentIdentity=${scheduledVerification.intentIdentityVerified}; ` +
+        `utaChecklist=${scheduledVerification.utaChecklistVerified}; ` +
+        `recovery=${scheduledVerification.recoveryVerified}`,
+      );
     }
     log(`result → ${join(runDir, 'result.json')}`);
     succeeded = true;
